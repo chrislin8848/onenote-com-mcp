@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from onenote_mcp.errors import (
+from onenote_com_mcp.errors import (
     RPC_E_CALL_REJECTED,
     RPC_E_SERVERCALL_RETRYLATER,
     is_retryable_hresult,

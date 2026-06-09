@@ -11,16 +11,16 @@ import sys
 
 
 def test_package_imports():
-    import onenote_mcp  # noqa: F401
-    import onenote_mcp.enums  # noqa: F401
-    import onenote_mcp.errors  # noqa: F401
-    import onenote_mcp.server  # noqa: F401
-    from onenote_mcp.backend import FixtureBackend, OneNoteBackend, get_backend  # noqa: F401
+    import onenote_com_mcp  # noqa: F401
+    import onenote_com_mcp.enums  # noqa: F401
+    import onenote_com_mcp.errors  # noqa: F401
+    import onenote_com_mcp.server  # noqa: F401
+    from onenote_com_mcp.backend import FixtureBackend, OneNoteBackend, get_backend  # noqa: F401
 
 
 def test_win32_backend_module_imports_without_pywin32():
     # Importing the module must be safe on Linux...
-    import onenote_mcp.backend.win32com_backend as w  # noqa: F401
+    import onenote_com_mcp.backend.win32com_backend as w  # noqa: F401
 
     # ...and must not have imported any pywin32 component at module load time.
     for mod in ("win32com", "win32com.client", "pywintypes", "pythoncom"):
@@ -31,7 +31,7 @@ def test_full_tool_catalog_registered():
     # The MCP surface should expose all 17 SPEC §4 tools even while bodies are stubbed.
     import asyncio
 
-    from onenote_mcp.server import mcp
+    from onenote_com_mcp.server import mcp
 
     tools = asyncio.run(mcp.list_tools())
     names = {t.name for t in tools}

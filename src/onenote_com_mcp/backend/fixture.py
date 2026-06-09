@@ -24,15 +24,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from onenote_mcp.backend.base import OneNoteBackend
-from onenote_mcp.enums import (
+from onenote_com_mcp.backend.base import OneNoteBackend
+from onenote_com_mcp.enums import (
     CreateFileType,
     HierarchyScope,
     NewPageStyle,
     PageInfo,
     SpecialLocation,
 )
-from onenote_mcp.errors import NodeNotFoundError
+from onenote_com_mcp.errors import NodeNotFoundError
 
 
 def _sanitize(token: str) -> str:

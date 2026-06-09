@@ -3,7 +3,7 @@
 This module wires every tool's *name, signature, and description* (the MCP contract the LLM
 sees) up front. Bodies raise ``NotImplementedError`` tagged with the phase that fills them in,
 so the surface is reviewable now and lights up phase by phase. The shared write core and the
-copy core live in ``onenote_mcp.service`` — these tools stay thin facades (SPEC §4).
+copy core live in ``onenote_com_mcp.service`` — these tools stay thin facades (SPEC §4).
 
 stdio transport: nothing but MCP protocol may go to stdout. Logs go to stderr (SPEC §8).
 """

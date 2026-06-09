@@ -10,7 +10,7 @@ Goal: cover the formatting cases the parse/build layer must preserve —
   * a page containing an image (dump both piBasic and piBinaryData variants),
 so Phase 1 can be TDD'd on Linux against ground truth (not synthetic XML).
 
-Filenames follow the convention in src/onenote_mcp/backend/fixture.py so FixtureBackend can
+Filenames follow the convention in src/onenote_com_mcp/backend/fixture.py so FixtureBackend can
 replay them directly. Scrub personal content before committing (raw/ is gitignored).
 """
 
@@ -19,9 +19,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from onenote_mcp.backend.fixture import _sanitize
-from onenote_mcp.backend.win32com_backend import Win32ComBackend
-from onenote_mcp.enums import HierarchyScope, PageInfo
+from onenote_com_mcp.backend.fixture import _sanitize
+from onenote_com_mcp.backend.win32com_backend import Win32ComBackend
+from onenote_com_mcp.enums import HierarchyScope, PageInfo
 
 OUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 

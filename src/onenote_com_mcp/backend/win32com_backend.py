@@ -18,8 +18,8 @@ from __future__ import annotations
 import datetime as _dt
 import time
 
-from onenote_mcp.backend.base import OneNoteBackend
-from onenote_mcp.enums import (
+from onenote_com_mcp.backend.base import OneNoteBackend
+from onenote_com_mcp.enums import (
     CreateFileType,
     HierarchyScope,
     NewPageStyle,
@@ -27,7 +27,7 @@ from onenote_mcp.enums import (
     SpecialLocation,
     XMLSchema,
 )
-from onenote_mcp.errors import (
+from onenote_com_mcp.errors import (
     BackendUnavailableError,
     OneNoteComError,
     is_retryable_hresult,

@@ -10,10 +10,10 @@ import inspect
 
 import pytest
 
-from onenote_mcp.backend import FixtureBackend, OneNoteBackend, get_backend
-from onenote_mcp.backend.base import OneNoteBackend as ABCBackend
-from onenote_mcp.enums import CreateFileType, HierarchyScope
-from onenote_mcp.errors import NodeNotFoundError
+from onenote_com_mcp.backend import FixtureBackend, OneNoteBackend, get_backend
+from onenote_com_mcp.backend.base import OneNoteBackend as ABCBackend
+from onenote_com_mcp.enums import CreateFileType, HierarchyScope
+from onenote_com_mcp.errors import NodeNotFoundError
 
 
 def test_backend_is_abstract():
@@ -57,7 +57,7 @@ def test_get_backend_prefers_fixtures_env(tmp_path, monkeypatch):
 
 def test_get_backend_errors_without_com_or_fixtures(monkeypatch):
     monkeypatch.delenv("ONENOTE_FIXTURES_DIR", raising=False)
-    monkeypatch.setattr("onenote_mcp.backend.sys.platform", "linux")
+    monkeypatch.setattr("onenote_com_mcp.backend.sys.platform", "linux")
     with pytest.raises(RuntimeError):
         get_backend()
 

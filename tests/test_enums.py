@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from onenote_mcp.enums import (
+from onenote_com_mcp.enums import (
     CreateFileType,
     HierarchyScope,
     NewPageStyle,

@@ -1,6 +1,6 @@
 # OneNote 2013 page/hierarchy XML — schema notes for the parse/build layer
 
-Grounding for Phase 1 (`onenote_mcp.xmllayer`). The **format-preservation requirement
+Grounding for Phase 1 (`onenote_com_mcp.xmllayer`). The **format-preservation requirement
 (SPEC §5)** is the single hardest constraint, so this doc is written around it.
 
 > ⚠ **Fixtures are not synthetic in this project.** Per the decision on 2026-06-10, the

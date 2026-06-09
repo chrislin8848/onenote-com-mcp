@@ -13,7 +13,7 @@ python scripts/dump_fixtures.py
 
 `dump_fixtures.py` calls live COM (`GetHierarchy` + a handful of `GetPageContent`, covering
 plain text, mixed inline styles, a table, and an image) and writes files here using the
-filename convention documented in `src/onenote_mcp/backend/fixture.py`.
+filename convention documented in `src/onenote_com_mcp/backend/fixture.py`.
 
 `FixtureBackend` then replays them on Linux so the host loop needs no COM.
 

@@ -9,8 +9,8 @@ from __future__ import annotations
 import os
 import sys
 
-from onenote_mcp.backend.base import OneNoteBackend
-from onenote_mcp.backend.fixture import FixtureBackend
+from onenote_com_mcp.backend.base import OneNoteBackend
+from onenote_com_mcp.backend.fixture import FixtureBackend
 
 __all__ = ["OneNoteBackend", "FixtureBackend", "get_backend"]
 
@@ -27,7 +27,7 @@ def get_backend() -> OneNoteBackend:
         return FixtureBackend(fixtures_dir)
 
     if sys.platform == "win32":
-        from onenote_mcp.backend.win32com_backend import Win32ComBackend  # noqa: PLC0415
+        from onenote_com_mcp.backend.win32com_backend import Win32ComBackend  # noqa: PLC0415
 
         return Win32ComBackend()
 

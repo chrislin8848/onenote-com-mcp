@@ -4,7 +4,7 @@ Every method maps 1:1 to a OneNote Application COM method (see docs/com-api-refe
 Higher layers (xml, service, MCP) depend only on this interface, so they are fully testable
 on Linux via ``FixtureBackend``. The real ``Win32ComBackend`` lives behind a guarded import.
 
-XML in/out is passed as raw strings; parsing/building belongs to ``onenote_mcp.xmllayer``,
+XML in/out is passed as raw strings; parsing/building belongs to ``onenote_com_mcp.xmllayer``,
 not here. This keeps the backend a thin, faithful COM mirror.
 """
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 import datetime as _dt
 from abc import ABC, abstractmethod
 
-from onenote_mcp.enums import (
+from onenote_com_mcp.enums import (
     CreateFileType,
     HierarchyScope,
     NewPageStyle,

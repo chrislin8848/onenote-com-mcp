@@ -41,7 +41,7 @@ uv run ruff check . && uv run ruff format --check .
 ## Run (against fixtures, Linux)
 
 ```bash
-ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_mcp
+ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_com_mcp
 ```
 
 On Windows with OneNote installed, omit the env var to use live COM.
@@ -49,7 +49,7 @@ On Windows with OneNote installed, omit the env var to use live COM.
 ## Layout
 
 ```
-src/onenote_mcp/    backend/ (OneNoteBackend + Fixture + Win32Com)  xmllayer/  service/  server.py
+src/onenote_com_mcp/    backend/ (OneNoteBackend + Fixture + Win32Com)  xmllayer/  service/  server.py
 docs/               com-api-reference.md   onenote-xml-schema.md
 scripts/            remote_test.sh   dump_fixtures.py        (VM bridge — Phase 0b/3)
 tests/              Tier 1 unit tests + fixtures/

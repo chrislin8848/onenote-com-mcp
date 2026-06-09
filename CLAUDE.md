@@ -13,10 +13,10 @@ PowerShell subprocess (those are the reference repo's approach, which we reject 
 
 ## Architecture (SPEC §3) — dependencies point downward
 ```
-MCP layer      src/onenote_mcp/server.py      FastMCP tool catalog (thin facades)
-Service layer  src/onenote_mcp/service/       orchestration; shared write core + copy core
-XML layer      src/onenote_mcp/xmllayer/      pure parse/build over one: XML  ← core, TDD
-Backend layer  src/onenote_mcp/backend/       OneNoteBackend ABC
+MCP layer      src/onenote_com_mcp/server.py      FastMCP tool catalog (thin facades)
+Service layer  src/onenote_com_mcp/service/       orchestration; shared write core + copy core
+XML layer      src/onenote_com_mcp/xmllayer/      pure parse/build over one: XML  ← core, TDD
+Backend layer  src/onenote_com_mcp/backend/       OneNoteBackend ABC
                  ├ fixture.py        FixtureBackend  (Linux, replays VM dumps)
                  └ win32com_backend  Win32ComBackend (Windows, guarded import)
 ```
@@ -51,7 +51,7 @@ writes/deletes; default `force=False`. Surface conflicts as `ConcurrencyError`. 
 uv sync                         # install deps + dev group
 uv run pytest                   # Tier 1 (windows-marked tests auto-skip here)
 uv run ruff check . && uv run ruff format --check .
-ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_mcp   # run server on fixtures
+ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_com_mcp   # run server on fixtures
 ```
 
 ## Testing tiers (SPEC §2, §6)

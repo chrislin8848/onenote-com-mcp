@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from onenote_mcp.xmllayer.namespaces import ONE_NS, local_name, qn
+from onenote_com_mcp.xmllayer.namespaces import ONE_NS, local_name, qn
 
 
 def test_one_ns_is_2013():
