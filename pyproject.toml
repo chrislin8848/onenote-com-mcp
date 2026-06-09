@@ -1,0 +1,45 @@
+[project]
+name = "onenote-com-mcp"
+version = "0.0.1"
+description = "COM-only OneNote MCP server (live OneNote desktop CRUD, no Azure/Graph/token)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+dependencies = [
+    "mcp[cli]>=1.26.0",
+    "lxml>=5.2",
+    # pywin32 is the COM bridge — Windows only. Guarded import keeps Linux green.
+    "pywin32>=306; sys_platform == 'win32'",
+]
+
+[project.scripts]
+onenote-com-mcp = "onenote_mcp.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/onenote_mcp"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py312"
+extend-exclude = ["refs"]  # reference clone — not our code
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "windows: integration test requiring live OneNote COM on Windows (auto-skipped elsewhere)",
+]
+addopts = "-ra"

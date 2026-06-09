@@ -1,0 +1,32 @@
+name: CI (Tier 1 — host)
+
+# Tier 1 only: pure logic + fixtures, runs on Linux. Tier 2 (live OneNote COM) is
+# @pytest.mark.windows and runs on the VM via scripts/remote_test.sh, not in this workflow.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tier1:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync (deps + dev group)
+        run: uv sync --frozen
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Pytest (Tier 1; windows-marked auto-skip)
+        run: uv run pytest -ra

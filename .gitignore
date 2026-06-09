@@ -1,0 +1,32 @@
+# Reference clones (grounding only — never sourced from)
+/refs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# uv
+# (uv.lock IS committed)
+
+# Build / packaging (produced on the Windows VM)
+/build/
+/dist/
+*.spec.bak
+
+# Real fixtures dumped from OneNote may contain personal note content.
+# Commit only sanitized fixtures explicitly; ignore raw dumps by default.
+/tests/fixtures/raw/
+
+# Test output
+/test-results/
+*.junit.xml
+
+# OS / editor
+.DS_Store
+*.swp
