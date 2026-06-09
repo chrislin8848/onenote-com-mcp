@@ -36,6 +36,13 @@ Backend layer  src/onenote_com_mcp/backend/       OneNoteBackend ABC
   structured/`get_page` representation. "Copy then modify" = copy faithfully, then edit the
   copy via the editing path.
 
+**Enforced, not just documented:** the single edit path is `apply_page_edit()` in
+`service/page_edit.py` — the ONLY `update_page_content` call site; `edit_page_content`/`add_table`/
+`insert_image` delegate to it. Copy is `transfer_page()` in `service/copy.py` (reads
+`piBinaryData`, must not import the parse layer). Guard tests `tests/test_write_core.py` +
+`tests/test_copy_path.py` fail if either invariant breaks — keep them green; build the Phase 4/5
+content logic *inside* these seams, never around them.
+
 ## Format preservation = self-consistency, not byte-identity
 OneNote re-normalizes spans / renumbers `QuickStyleDef` on redraw. Verify the user-visible
 font/size/color of *untouched* paragraphs is unchanged — not raw-XML equality. Highlight is
@@ -60,11 +67,19 @@ ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_com_mcp   # run ser
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
 ## Status (2026-06-10)
-Phase 0a (host scaffold) done. **Blocked on the Windows VM** for fixtures → Phase 1
-(parse/build TDD) and everything COM. See README "Status".
+Phase 0a (host scaffold) done; write-core convergence + copy direct-path seams in place and
+guard-tested (29 Tier-1 tests green); all pushed to GitHub (`chrislin8848/onenote-com-mcp`,
+private). **Blocked on the Windows VM** for fixtures → Phase 1 (parse/build TDD) and everything
+COM. Phase 0b build guide: `docs/vm-setup.md`.
+
+**Tomorrow's handoff (after the VM is up):** Chris brings (a) the COM smoke result — which pywin32
+binding worked + how `GetHierarchy` returns its `[out]` value, (b) 2–3 real page IDs (mixed
+styling / table / image). Then: finalize `Win32ComBackend` out-param handling, complete
+`scripts/dump_fixtures.py`, dump real fixtures, start Phase 1 parse/build TDD. See README "Status".
 
 ## Grounding
 - `docs/com-api-reference.md` — COM signatures + enums (from Microsoft Learn).
 - `docs/onenote-xml-schema.md` — `one:` page/hierarchy XML + format-preservation rules.
+- `docs/vm-setup.md` — Phase 0b Windows VM build (autologon, desktop OneNote, COM smoke, Tier-2).
 - `refs/mhzarem-onenote-mcp/` — reference clone (gitignored). Payload shapes only; its
   backup-parse + PowerShell model is rejected.
