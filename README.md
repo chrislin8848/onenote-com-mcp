@@ -26,9 +26,9 @@ any employee with synced OneNote and needs no admin setup.
 | 5 | Copy/transfer (raw-XML faithful copy) | ⛔ blocked |
 | 6 | Delete + retry hardening + **PyInstaller/Inno installer** | ⛔ blocked |
 
-**Next bottleneck: build the Windows VM (Phase 0b).** Per the 2026-06-10 decision, fixtures
-come from real OneNote (not synthetic), so Phase 1 onward needs the VM up and
-`scripts/dump_fixtures.py` run once.
+**Next bottleneck: build the Windows VM (Phase 0b)** — step-by-step guide in
+[docs/vm-setup.md](docs/vm-setup.md). Per the 2026-06-10 decision, fixtures come from real
+OneNote (not synthetic), so Phase 1 onward needs the VM up and `scripts/dump_fixtures.py` run once.
 
 ## Develop (Linux host)
 
