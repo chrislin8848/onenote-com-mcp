@@ -14,6 +14,9 @@ import sys
 
 from mcp.server.fastmcp import FastMCP
 
+from onenote_com_mcp.backend import get_backend
+from onenote_com_mcp.service import copy, page_edit
+
 mcp = FastMCP("onenote")
 
 # --- Read (Phase 2: wired to FixtureBackend on Linux) -----------------------
@@ -84,19 +87,22 @@ def create_page(section_id: str, title: str, content: str = "", page_level: int 
 def update_page_content(page_id: str, content: str, mode: str = "append") -> str:
     """Modify page content. mode = append | insert | replace. Preserves untouched
     formatting (in-place tree edit). Concurrency-guarded; will not force-overwrite."""
-    raise NotImplementedError("Phase 4")
+    page_edit.edit_page_content(get_backend(), page_id, content, mode)
+    return f"updated {page_id}"
 
 
 @mcp.tool()
 def create_table(page_id: str, rows: list[list[str]]) -> str:
     """Add a table (rows = list of rows of cell text) to a page."""
-    raise NotImplementedError("Phase 4")
+    page_edit.add_table(get_backend(), page_id, rows)
+    return f"table added to {page_id}"
 
 
 @mcp.tool()
 def insert_image(page_id: str, image_base64: str, media_type: str) -> str:
     """Insert an image (base64) into a page."""
-    raise NotImplementedError("Phase 4")
+    page_edit.insert_image(get_backend(), page_id, image_base64, media_type)
+    return f"image inserted into {page_id}"
 
 
 # --- Copy (Phase 5: raw-XML faithful transfer) ------------------------------
@@ -105,19 +111,19 @@ def insert_image(page_id: str, image_base64: str, media_type: str) -> str:
 @mcp.tool()
 def copy_page(page_id: str, target_section_id: str) -> str:
     """Faithfully copy a page (formatting, tables, inline images, pageLevel) to a section."""
-    raise NotImplementedError("Phase 5")
+    return copy.transfer_page(get_backend(), page_id, target_section_id)
 
 
 @mcp.tool()
 def copy_section(section_id: str, target_notebook_id: str) -> str:
     """Faithfully copy a whole section into a notebook."""
-    raise NotImplementedError("Phase 5")
+    return copy.transfer_section(get_backend(), section_id, target_notebook_id)
 
 
 @mcp.tool()
 def copy_notebook(notebook_id: str, name: str, path: str) -> str:
     """Faithfully copy a whole notebook (subject to create_notebook sync constraints)."""
-    raise NotImplementedError("Phase 5")
+    return copy.transfer_notebook(get_backend(), notebook_id, name, path)
 
 
 # --- Delete (Phase 6: destructive — conservative) ---------------------------
