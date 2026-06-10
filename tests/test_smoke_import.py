@@ -28,7 +28,7 @@ def test_win32_backend_module_imports_without_pywin32():
 
 
 def test_full_tool_catalog_registered():
-    # The MCP surface should expose all 17 SPEC §4 tools even while bodies are stubbed.
+    # The MCP surface should expose all 21 SPEC §4 tools even while bodies are stubbed.
     import asyncio
 
     from onenote_com_mcp.server import mcp
@@ -51,6 +51,10 @@ def test_full_tool_catalog_registered():
         "copy_page",
         "copy_section",
         "copy_notebook",
+        "restructure_section",
+        "reorder_sections",
+        "rename_node",
+        "move_page",
         "delete_node",
         "delete_page_content",
     }

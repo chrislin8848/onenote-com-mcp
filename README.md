@@ -22,7 +22,7 @@ any employee with synced OneNote and needs no admin setup.
 | 1 | XML parse/build (lxml) + format preservation, TDD against **real VM fixtures** | ⛔ blocked on 0b (fixtures) |
 | 2 | Read tools on `FixtureBackend` (Linux green) | ⛔ blocked on 0b (fixtures) |
 | 3 | `Win32ComBackend` live + `dump_fixtures.py` | ⛔ blocked on 0b |
-| 4 | Write tools + concurrency guard + format-preservation regression | ⛔ blocked |
+| 4 | Write tools + hierarchy restructure tools (whole-batch UpdateHierarchy; move_page VM-gated) + concurrency guard + format-preservation regression | ⛔ blocked |
 | 5 | Copy/transfer (raw-XML faithful copy) | ⛔ blocked |
 | 6 | Delete + retry hardening + **PyInstaller/Inno installer** | ⛔ blocked |
 

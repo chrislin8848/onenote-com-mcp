@@ -43,6 +43,16 @@ Backend layer  src/onenote_com_mcp/backend/       OneNoteBackend ABC
 `tests/test_copy_path.py` fail if either invariant breaks — keep them green; build the Phase 4/5
 content logic *inside* these seams, never around them.
 
+## Third discipline: hierarchy restructure = whole batch (SPEC §5)
+`UpdateHierarchy` order = child-element order of the submitted XML; a *partial* child list makes
+OneNote "infer" omitted siblings' placement unpredictably. So structural changes
+(`restructure_section`/`reorder_sections`/`rename_node`/`move_page`) submit the scope's
+**complete child list, target order, one batch** — enforced by `apply_hierarchy_restructure()`
+in `service/hierarchy_edit.py`: the ONLY `update_hierarchy` call site for restructures, with
+node-ID conservation (drop/invent ⇒ `ValueError`). Guard tests `tests/test_hierarchy_core.py`.
+`move_page` is EXPERIMENTAL until VM-validated; notebook-level ordering is out of scope.
+Structure tools are propose-then-confirm + suggest clone backup first.
+
 ## Format preservation = self-consistency, not byte-identity
 OneNote re-normalizes spans / renumbers `QuickStyleDef` on redraw. Verify the user-visible
 font/size/color of *untouched* paragraphs is unchanged — not raw-XML equality. Highlight is
@@ -78,6 +88,7 @@ styling / table / image). Then: finalize `Win32ComBackend` out-param handling, c
 `scripts/dump_fixtures.py`, dump real fixtures, start Phase 1 parse/build TDD. See README "Status".
 
 ## Grounding
+- `docs/SPEC.md` — the spec itself (v0610: adds 整理 capability, 4 hierarchy tools, §5 discipline).
 - `docs/com-api-reference.md` — COM signatures + enums (from Microsoft Learn).
 - `docs/onenote-xml-schema.md` — `one:` page/hierarchy XML + format-preservation rules.
 - `docs/vm-setup.md` — Phase 0b Windows VM build (autologon, desktop OneNote, COM smoke, Tier-2).

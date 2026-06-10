@@ -15,7 +15,7 @@ import sys
 from mcp.server.fastmcp import FastMCP
 
 from onenote_com_mcp.backend import get_backend
-from onenote_com_mcp.service import copy, page_edit
+from onenote_com_mcp.service import copy, hierarchy_edit, page_edit
 
 mcp = FastMCP("onenote")
 
@@ -124,6 +124,47 @@ def copy_section(section_id: str, target_notebook_id: str) -> str:
 def copy_notebook(notebook_id: str, name: str, path: str) -> str:
     """Faithfully copy a whole notebook (subject to create_notebook sync constraints)."""
     return copy.transfer_notebook(get_backend(), notebook_id, name, path)
+
+
+# --- Restructure (Phase 4: whole-batch UpdateHierarchy — SPEC §5 discipline) -
+# Structural changes are propose-then-confirm: suggest a clone backup (copy_section /
+# copy_notebook) first, and present the target order for user confirmation before applying.
+
+
+@mcp.tool()
+def restructure_section(section_id: str, ordered_pages: list[dict]) -> str:
+    """STRUCTURAL. Reorder ALL pages of a section in one batch and adjust subpage levels.
+    ordered_pages = the section's complete page list in target order, each entry
+    {"page_id": str, "page_level": 1|2|3}. Back up first (copy_section) and confirm the
+    target order with the user before applying."""
+    hierarchy_edit.restructure_section(get_backend(), section_id, ordered_pages)
+    return f"section {section_id} restructured"
+
+
+@mcp.tool()
+def reorder_sections(notebook_id: str, ordered_section_ids: list[str]) -> str:
+    """STRUCTURAL. Reorder ALL sections of a notebook in one batch (complete list, target
+    order). Notebook-level ordering itself is not supported. Back up first (copy_notebook)
+    and confirm with the user before applying."""
+    hierarchy_edit.reorder_sections(get_backend(), notebook_id, ordered_section_ids)
+    return f"sections of {notebook_id} reordered"
+
+
+@mcp.tool()
+def rename_node(parent_id: str, object_id: str, new_name: str) -> str:
+    """STRUCTURAL. Rename a page or section. parent_id = the containing section/notebook ID.
+    Confirm with the user before applying."""
+    hierarchy_edit.rename_node(get_backend(), parent_id, object_id, new_name)
+    return f"{object_id} renamed to {new_name}"
+
+
+@mcp.tool()
+def move_page(notebook_id: str, page_id: str, target_section_id: str) -> str:
+    """STRUCTURAL, EXPERIMENTAL. Move a page to another section within the same notebook.
+    Cross-section move reliability is still being validated on real OneNote — prefer
+    copy_page + delete_node until then. Back up first and confirm with the user."""
+    hierarchy_edit.move_page(get_backend(), notebook_id, page_id, target_section_id)
+    return f"page {page_id} moved to {target_section_id}"
 
 
 # --- Delete (Phase 6: destructive — conservative) ---------------------------

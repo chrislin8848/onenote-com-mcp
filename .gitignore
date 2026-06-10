@@ -30,3 +30,6 @@ htmlcov/
 # OS / editor
 .DS_Store
 *.swp
+
+# Local-only translations of docs (GitHub keeps the canonical English)
+*.zh-TW.md

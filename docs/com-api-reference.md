@@ -74,6 +74,14 @@ COM `[out]` params are returned by pywin32, not passed in. Exact out-param marsh
 - **`CreateNewPage` adds a blank last page**; set position/level via `UpdateHierarchy`
   (`pageLevel` for subpages). The docs note `UpdateHierarchy` gives more control and can make
   subpages directly.
+- **`UpdateHierarchy` ordering semantics (SPEC §5 discipline):** there is NO position-index
+  attribute — order is the child-element order of the submitted XML. Microsoft documents that a
+  *partial* child list makes OneNote "infer" placement of omitted siblings, unpredictably.
+  Restructures must therefore submit the scope's **complete child list, in target order, in one
+  batch** (`apply_hierarchy_restructure` in `service/hierarchy_edit.py` enforces this).
+  Validated surface: page order within a section, section order within a notebook; top-level
+  notebook ordering is unvalidated and out of scope; cross-section page moves are experimental
+  until VM-validated.
 - **`OpenHierarchy` is create-or-open** for hierarchy nodes: section uses `cftSection` (path
   ends `.one`, `relativeTo` = notebook ID); notebook uses `cftNotebook` (needs a real
   filesystem/OneDrive path so it syncs — a bare name makes a local-only notebook).

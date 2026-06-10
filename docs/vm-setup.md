@@ -73,7 +73,7 @@ virt-install \
   --cpu host-passthrough \
   --machine q35 \
   --boot uefi \
-  --tpm backend.type=emulator,backend.version=2.0,model=tpm-crd \
+  --tpm backend.type=emulator,backend.version=2.0,model=tpm-crb \
   --disk path=/var/lib/libvirt/images/win11-onenote.qcow2,size=120,format=qcow2,bus=virtio \
   --cdrom /var/lib/libvirt/images/Win11.iso \
   --disk path=/var/lib/libvirt/images/virtio-win.iso,device=cdrom \
