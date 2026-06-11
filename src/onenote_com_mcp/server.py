@@ -208,8 +208,9 @@ def insert_image(
 
 @mcp.tool()
 def copy_page(page_id: str, target_section_id: str) -> str:
-    """Faithfully copy a page (formatting, tables, inline images, pageLevel) to a section."""
-    return copy.transfer_page(get_backend(), page_id, target_section_id)
+    """Faithfully copy a page (formatting, tables, inline images, pageLevel) to a section.
+    Returns the new page's ID."""
+    return _json({"page_id": copy.transfer_page(get_backend(), page_id, target_section_id)})
 
 
 @mcp.tool()

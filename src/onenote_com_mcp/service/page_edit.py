@@ -86,7 +86,7 @@ def apply_page_edit(
     mutate(tree)  # in place; untouched paragraphs keep their quickStyleIndex/spans verbatim
     if strategy == "changed_objects":
         _prune_unchanged_content(tree, before)
-    _inline_image_binaries(backend, page_id, tree)
+    inline_image_binaries(backend, page_id, tree)
     etree.cleanup_namespaces(tree)  # grafted fragments carry redundant xmlns:one declarations
     payload = etree.tostring(tree, xml_declaration=True, encoding="UTF-8").decode("utf-8")
     backend.update_page_content(payload, expected_last_modified=expected, force=force)
@@ -102,8 +102,12 @@ def _prune_unchanged_content(tree: etree._Element, before: dict[etree._Element, 
             tree.remove(child)
 
 
-def _inline_image_binaries(backend: OneNoteBackend, page_id: str, tree: etree._Element) -> None:
-    """Ensure every one:Image in the payload carries inline one:Data, never a CallbackID."""
+def inline_image_binaries(backend: OneNoteBackend, page_id: str, tree: etree._Element) -> None:
+    """Ensure every one:Image in the payload carries inline one:Data, never a CallbackID.
+
+    Public: the copy path (service/copy.py) needs the same guarantee — even a piBinaryData
+    read serves CallbackID without inline Data (VM ground truth), so any tree heading into
+    UpdatePageContent must have its pixels fetched via GetBinaryPageContent first."""
     for image in tree.iter(qn("Image")):
         callback = image.find(qn("CallbackID"))
         if image.find(qn("Data")) is None:
