@@ -41,5 +41,7 @@ def transfer_section(backend: OneNoteBackend, section_id: str, target_notebook_i
 
 def transfer_notebook(backend: OneNoteBackend, notebook_id: str, name: str, path: str) -> str:
     raise NotImplementedError(
-        "Phase 5: create target notebook (sync-path constraints), then transfer_section each"
+        "Phase 5: create target notebook (sync-path constraints), recreate each source "
+        "section group via OpenHierarchy(cftFolder) so sections land INSIDE their groups "
+        "(never flattened — SPEC §5), then transfer_section each"
     )

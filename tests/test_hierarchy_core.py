@@ -73,6 +73,48 @@ def test_inventing_a_node_is_refused(tmp_path):
         hierarchy_edit.apply_hierarchy_restructure(be, _SEC_ID, HierarchyScope.hsPages, invents_one)
 
 
+_NB_ID = "{NB}{1}{B0}"
+_MIXED_HIERARCHY = (
+    '<?xml version="1.0"?>'
+    '<one:Notebook xmlns:one="http://schemas.microsoft.com/office/onenote/2013/onenote" '
+    'ID="{NB}{1}{B0}" name="N">'
+    '<one:Section ID="{S1}{1}{B0}" name="a"/>'
+    '<one:SectionGroup ID="{SG}{1}{B0}" name="g">'
+    '<one:Section ID="{S2}{1}{B0}" name="b"/>'
+    "</one:SectionGroup>"
+    '<one:Section ID="{S3}{1}{B0}" name="c"/>'
+    "</one:Notebook>"
+)
+
+
+def test_mixed_section_and_group_children_must_both_survive(tmp_path):
+    # SPEC §5: a notebook's direct children are a MIXED Section + SectionGroup list; the
+    # whole batch must contain both kinds. Flattening (dropping the group) is refused.
+    name = f"hierarchy_hsSections__{_sanitize(_NB_ID)}.xml"
+    (tmp_path / name).write_text(_MIXED_HIERARCHY, encoding="utf-8")
+    be = FixtureBackend(tmp_path)
+
+    def flattens_the_group(tree):
+        group = tree[1]
+        tree.remove(group)  # drops the group AND its nested section
+
+    with pytest.raises(ValueError, match="complete child list"):
+        hierarchy_edit.apply_hierarchy_restructure(
+            be, _NB_ID, HierarchyScope.hsSections, flattens_the_group
+        )
+
+    # A pure reorder that keeps both kinds goes through, group nesting intact.
+    def reorders_keeping_both(tree):
+        tree.append(tree[0])  # section "a" to the end; group stays with its child
+
+    hierarchy_edit.apply_hierarchy_restructure(
+        be, _NB_ID, HierarchyScope.hsSections, reorders_keeping_both
+    )
+    xml = next(c for c in be.calls if c.method == "update_hierarchy").kwargs["changes_xml"]
+    assert "SectionGroup" in xml and "{S2}" in xml, "group + nested section submitted"
+    assert xml.index("{SG}") < xml.index("{S1}"), "reorder reflected"
+
+
 @pytest.mark.parametrize(
     "invoke",
     [

@@ -1,6 +1,7 @@
 """``OneNoteBackend`` — the COM abstraction boundary (SPEC §2.1, §3).
 
-Every method maps 1:1 to a OneNote Application COM method (see docs/com-api-reference.md).
+Every method maps 1:1 to a OneNote Application COM method or property (see
+docs/com-api-reference.md).
 Higher layers (xml, service, MCP) depend only on this interface, so they are fully testable
 on Linux via ``FixtureBackend``. The real ``Win32ComBackend`` lives behind a guarded import.
 
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import datetime as _dt
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 from onenote_com_mcp.enums import (
     CreateFileType,
@@ -20,6 +22,21 @@ from onenote_com_mcp.enums import (
     PageInfo,
     SpecialLocation,
 )
+
+
+@dataclass(frozen=True)
+class CurrentWindowIds:
+    """The four ``Current*Id`` properties of ``Application.Windows.CurrentWindow``.
+
+    Granularity stops at the page (SPEC §5): there is no COM API for in-page cursor position
+    or selected text. Any field may be None depending on what the active window shows
+    (e.g. section_group_id is None when the current section sits directly in the notebook).
+    """
+
+    notebook_id: str | None
+    section_group_id: str | None
+    section_id: str | None
+    page_id: str | None
 
 
 class OneNoteBackend(ABC):
@@ -101,6 +118,14 @@ class OneNoteBackend(ABC):
         """Delete one page content object (outline / image / table) by ID."""
 
     # --- Navigation ---------------------------------------------------------
+
+    @abstractmethod
+    def get_current_window_ids(self) -> CurrentWindowIds:
+        """Return the active window's Current*Id quadruple (``Windows.CurrentWindow``).
+
+        Raises ``NoCurrentWindowError`` when OneNote has no open window — report that
+        clearly instead of guessing the user's location (SPEC §5).
+        """
 
     @abstractmethod
     def find_pages(self, start_node_id: str, query: str, include_unindexed: bool = False) -> str:

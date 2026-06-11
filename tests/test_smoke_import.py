@@ -7,6 +7,7 @@ breaks. We assert those modules are absent from ``sys.modules`` after import.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 
 
@@ -19,16 +20,24 @@ def test_package_imports():
 
 
 def test_win32_backend_module_imports_without_pywin32():
-    # Importing the module must be safe on Linux...
-    import onenote_com_mcp.backend.win32com_backend as w  # noqa: F401
-
-    # ...and must not have imported any pywin32 component at module load time.
-    for mod in ("win32com", "win32com.client", "pywintypes", "pythoncom"):
-        assert mod not in sys.modules, f"guarded-import invariant violated: {mod} was imported"
+    # Checked in a clean subprocess: an in-process sys.modules assertion false-positives on
+    # Windows, where the mcp SDK itself (mcp.os.win32.utilities) legitimately imports
+    # pywintypes once another test has imported onenote_com_mcp.server. Only what OUR backend
+    # module pulls in at import time is the invariant. (pywin32's site-packages .pth bootstrap
+    # modules are allowed — they don't load pywintypes.)
+    code = (
+        "import sys; "
+        "import onenote_com_mcp.backend.win32com_backend; "
+        "bad = [m for m in ('win32com', 'win32com.client', 'pywintypes', 'pythoncom') "
+        "if m in sys.modules]; "
+        "sys.exit('guarded-import invariant violated: ' + repr(bad) if bad else 0)"
+    )
+    res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr.strip() or res.stdout.strip()
 
 
 def test_full_tool_catalog_registered():
-    # The MCP surface should expose all 21 SPEC §4 tools even while bodies are stubbed.
+    # The MCP surface should expose all 22 SPEC §4 tools even while bodies are stubbed.
     import asyncio
 
     from onenote_com_mcp.server import mcp
@@ -42,6 +51,7 @@ def test_full_tool_catalog_registered():
         "search_pages",
         "get_page",
         "get_page_images",
+        "get_current_context",
         "create_notebook",
         "create_section",
         "create_page",

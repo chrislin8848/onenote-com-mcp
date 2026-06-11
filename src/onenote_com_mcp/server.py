@@ -30,7 +30,8 @@ def list_notebooks() -> str:
 
 @mcp.tool()
 def list_sections(notebook_id: str) -> str:
-    """List sections in a notebook (name + ID)."""
+    """List sections in a notebook (name + ID), preserving section-group nesting
+    (one:SectionGroup containers appear as nested groups, not flattened)."""
     raise NotImplementedError("Phase 2")
 
 
@@ -58,6 +59,17 @@ def get_page_images(page_id: str) -> str:
     raise NotImplementedError("Phase 2")
 
 
+@mcp.tool()
+def get_current_context() -> str:
+    """Where is the user right now? Returns the active OneNote window's current notebook /
+    section group / section / page (IDs + names), so the user can say "this page" or
+    "the current section". Granularity stops at the page — in-page cursor position and
+    selected text are not available. Errors clearly if OneNote has no open window.
+    Before acting on this context, report it back ("you're currently on page X") so the
+    user can confirm they haven't switched pages since."""
+    raise NotImplementedError("Phase 2")
+
+
 # --- Create (Phase 4) -------------------------------------------------------
 
 
@@ -69,8 +81,9 @@ def create_notebook(name: str, path: str) -> str:
 
 
 @mcp.tool()
-def create_section(notebook_id: str, name: str) -> str:
-    """Create a section in an existing notebook (inherits its sync)."""
+def create_section(parent_id: str, name: str) -> str:
+    """Create a section under ``parent_id`` — an existing notebook OR a section group —
+    inheriting its sync."""
     raise NotImplementedError("Phase 4")
 
 
@@ -122,7 +135,9 @@ def copy_section(section_id: str, target_notebook_id: str) -> str:
 
 @mcp.tool()
 def copy_notebook(notebook_id: str, name: str, path: str) -> str:
-    """Faithfully copy a whole notebook (subject to create_notebook sync constraints)."""
+    """Faithfully copy a whole notebook (subject to create_notebook sync constraints).
+    Section groups are recreated in the target (sections land inside their groups, never
+    flattened)."""
     return copy.transfer_notebook(get_backend(), notebook_id, name, path)
 
 
@@ -172,7 +187,8 @@ def move_page(notebook_id: str, page_id: str, target_section_id: str) -> str:
 
 @mcp.tool()
 def delete_node(object_id: str) -> str:
-    """DESTRUCTIVE. Delete a hierarchy node (notebook / section / page) to the recycle bin."""
+    """DESTRUCTIVE. Delete a hierarchy node (notebook / section group / section / page) to
+    the recycle bin."""
     raise NotImplementedError("Phase 6")
 
 

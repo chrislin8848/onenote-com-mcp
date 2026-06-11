@@ -88,12 +88,17 @@ def restructure_section(
 def reorder_sections(
     backend: OneNoteBackend, notebook_id: str, ordered_section_ids: list[str]
 ) -> None:
-    """Whole-batch reorder of a notebook's sections. (Notebook-level ordering itself is
-    unvalidated and out of scope — SPEC §5.)"""
+    """Whole-batch reorder of a notebook's sections.
+
+    A notebook's direct children are a MIXED list of ``one:Section`` and ``one:SectionGroup``
+    (SPEC §5) — the submitted batch must contain both kinds; the core's ID conservation makes
+    dropping the groups impossible. (Notebook-level ordering itself is unvalidated and out of
+    scope.)"""
 
     def mutate(tree: etree._Element) -> None:
         raise NotImplementedError(
-            "Phase 4: reorder the notebook's complete one:Section list to ordered_section_ids"
+            "Phase 4: reorder the notebook's complete child list (one:Section AND "
+            "one:SectionGroup, both kinds kept) to ordered_section_ids"
         )
 
     apply_hierarchy_restructure(backend, notebook_id, HierarchyScope.hsSections, mutate)

@@ -62,6 +62,26 @@ def test_get_backend_errors_without_com_or_fixtures(monkeypatch):
         get_backend()
 
 
+def test_current_window_ids_from_fixture(tmp_path):
+    (tmp_path / "current_window.json").write_text(
+        '{"notebook_id": "{NB}{1}{B0}", "section_group_id": null, '
+        '"section_id": "{SEC}{1}{B0}", "page_id": "{P}{1}{B0}"}',
+        encoding="utf-8",
+    )
+    ids = FixtureBackend(tmp_path).get_current_window_ids()
+    assert ids.notebook_id == "{NB}{1}{B0}"
+    assert ids.section_group_id is None  # current section sits directly in the notebook
+    assert ids.page_id == "{P}{1}{B0}"
+
+
+def test_current_window_no_window_is_a_clear_error(tmp_path):
+    from onenote_com_mcp.errors import NoCurrentWindowError
+
+    (tmp_path / "current_window.json").write_text("null", encoding="utf-8")
+    with pytest.raises(NoCurrentWindowError):
+        FixtureBackend(tmp_path).get_current_window_ids()
+
+
 def test_signatures_present_on_concrete_backend():
     # Cheap guard that the concrete backend keeps the documented method set.
     for name in ("get_hierarchy", "get_page_content", "update_page_content", "find_pages"):

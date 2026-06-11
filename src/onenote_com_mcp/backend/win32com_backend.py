@@ -18,7 +18,7 @@ from __future__ import annotations
 import datetime as _dt
 import time
 
-from onenote_com_mcp.backend.base import OneNoteBackend
+from onenote_com_mcp.backend.base import CurrentWindowIds, OneNoteBackend
 from onenote_com_mcp.enums import (
     CreateFileType,
     HierarchyScope,
@@ -29,7 +29,9 @@ from onenote_com_mcp.enums import (
 )
 from onenote_com_mcp.errors import (
     BackendUnavailableError,
+    NoCurrentWindowError,
     OneNoteComError,
+    OneNoteError,
     is_retryable_hresult,
 )
 
@@ -75,6 +77,8 @@ class Win32ComBackend(OneNoteBackend):
         for attempt in range(_MAX_RETRIES):
             try:
                 return fn()
+            except OneNoteError:
+                raise  # our own typed errors (e.g. NoCurrentWindowError) pass through
             except Exception as exc:  # noqa: BLE001  (pywintypes.com_error is dynamic)
                 hr = _hresult_of(exc)
                 if is_retryable_hresult(hr):
@@ -201,3 +205,22 @@ class Win32ComBackend(OneNoteBackend):
             "GetHyperlinkToObject",
             lambda: self.app.GetHyperlinkToObject(hierarchy_id, object_id),
         )
+
+    def get_current_window_ids(self) -> CurrentWindowIds:
+        # ⚠ PHASE 3 (VM): property (not method) marshalling — Windows/CurrentWindow access
+        # under early binding must be confirmed on the VM alongside the [out]-param question.
+        def read() -> CurrentWindowIds:
+            windows = self.app.Windows
+            current = windows.CurrentWindow if windows.Count > 0 else None
+            if current is None:
+                raise NoCurrentWindowError(
+                    "OneNote has no open window; cannot read the current viewing context."
+                )
+            return CurrentWindowIds(
+                notebook_id=current.CurrentNotebookId or None,
+                section_group_id=current.CurrentSectionGroupId or None,
+                section_id=current.CurrentSectionId or None,
+                page_id=current.CurrentPageId or None,
+            )
+
+        return self._call("Windows.CurrentWindow", read)

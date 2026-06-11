@@ -14,17 +14,20 @@ Filename convention (under ``fixtures_dir``):
   page_<sanitized id>__binary.xml       GetPageContent (piBinaryData)
   binary_<sanitized callback>.b64       GetBinaryPageContent
   find__<sanitized query>.xml           FindPages
+  current_window.json                   Windows.CurrentWindow Current*Id quadruple (JSON
+                                        object; literal "null" = no open window)
 """
 
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from onenote_com_mcp.backend.base import OneNoteBackend
+from onenote_com_mcp.backend.base import CurrentWindowIds, OneNoteBackend
 from onenote_com_mcp.enums import (
     CreateFileType,
     HierarchyScope,
@@ -32,7 +35,7 @@ from onenote_com_mcp.enums import (
     PageInfo,
     SpecialLocation,
 )
-from onenote_com_mcp.errors import NodeNotFoundError
+from onenote_com_mcp.errors import NoCurrentWindowError, NodeNotFoundError
 
 
 def _sanitize(token: str) -> str:
@@ -97,6 +100,17 @@ class FixtureBackend(OneNoteBackend):
 
     def get_hyperlink_to_object(self, hierarchy_id: str, object_id: str = "") -> str:
         return self._read(f"hyperlink_{_sanitize(hierarchy_id)}_{_sanitize(object_id)}.txt").strip()
+
+    def get_current_window_ids(self) -> CurrentWindowIds:
+        data = json.loads(self._read("current_window.json"))
+        if data is None:  # file contains literal "null" → replay the no-window case
+            raise NoCurrentWindowError("OneNote has no open window (fixture replay)")
+        return CurrentWindowIds(
+            notebook_id=data.get("notebook_id") or None,
+            section_group_id=data.get("section_group_id") or None,
+            section_id=data.get("section_id") or None,
+            page_id=data.get("page_id") or None,
+        )
 
     # --- writes (recorded, not executed) ------------------------------------
 

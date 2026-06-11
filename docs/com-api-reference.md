@@ -54,6 +54,16 @@ COM `[out]` params are returned by pywin32, not passed in. Exact out-param marsh
 | `FindPages` | `(BSTR bstrStartNodeID, BSTR bstrSearchString, [out]BSTR* xml, [in,def false]VARIANT_BOOL fIncludeUnindexedPages, [in,def false]VARIANT_BOOL fDisplay, [in,def]XMLSchema)` | `find_pages(start_node_id, query, include_unindexed=False) -> str` |
 | `GetHyperlinkToObject` | `(BSTR bstrHierarchyID, BSTR bstrPageContentObjectID, [out]BSTR* hyperlink)` | `get_hyperlink_to_object(hierarchy_id, object_id="") -> str` |
 
+### Windows interface (current viewing context)
+
+`Application.Windows` is a *property* (window collection); `Windows.CurrentWindow` is the
+active window, whose `CurrentNotebookId` / `CurrentSectionGroupId` / `CurrentSectionId` /
+`CurrentPageId` give the user's current location → backend
+`get_current_window_ids() -> CurrentWindowIds`. Limits (SPEC §5): with no open window there
+is nothing to read — raise `NoCurrentWindowError`, never guess; multi-window resolves to the
+active one; **granularity stops at the page** — no COM API exposes in-page cursor position or
+selected text. Property (vs method) marshalling under early binding is a Phase 3 VM check.
+
 ## Semantics that drive the design
 
 - **`UpdatePageContent` is a page-level-object merge, not a whole-page replace.** It only
@@ -78,10 +88,11 @@ COM `[out]` params are returned by pywin32, not passed in. Exact out-param marsh
   attribute — order is the child-element order of the submitted XML. Microsoft documents that a
   *partial* child list makes OneNote "infer" placement of omitted siblings, unpredictably.
   Restructures must therefore submit the scope's **complete child list, in target order, in one
-  batch** (`apply_hierarchy_restructure` in `service/hierarchy_edit.py` enforces this).
-  Validated surface: page order within a section, section order within a notebook; top-level
-  notebook ordering is unvalidated and out of scope; cross-section page moves are experimental
-  until VM-validated.
+  batch** (`apply_hierarchy_restructure` in `service/hierarchy_edit.py` enforces this). A
+  notebook's direct children are a **mixed** `one:Section` + `one:SectionGroup` list — the batch
+  must contain both kinds. Validated surface: page order within a section, section order within
+  a notebook; top-level notebook ordering is unvalidated and out of scope; cross-section page
+  moves are experimental until VM-validated.
 - **`OpenHierarchy` is create-or-open** for hierarchy nodes: section uses `cftSection` (path
   ends `.one`, `relativeTo` = notebook ID); notebook uses `cftNotebook` (needs a real
   filesystem/OneDrive path so it syncs — a bare name makes a local-only notebook).

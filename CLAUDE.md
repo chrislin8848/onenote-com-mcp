@@ -53,6 +53,16 @@ node-ID conservation (drop/invent ⇒ `ValueError`). Guard tests `tests/test_hie
 `move_page` is EXPERIMENTAL until VM-validated; notebook-level ordering is out of scope.
 Structure tools are propose-then-confirm + suggest clone backup first.
 
+## Section groups + current context (SPEC v0611)
+- A notebook's direct children are a **mixed** `one:Section` + `one:SectionGroup` list: listings
+  keep the nesting (no flattening, no extra tool), `create_section` parent may be a group,
+  `copy_notebook` recreates groups via `OpenHierarchy(cftFolder)`, and whole-batch restructures
+  must include both kinds (ID conservation already enforces this — see test_hierarchy_core.py).
+- `get_current_context` (Phase 2) = `Windows.CurrentWindow` four Current*Ids
+  (backend `get_current_window_ids()`) + scoped GetHierarchy for names. Three limits (SPEC §5):
+  no open window ⇒ `NoCurrentWindowError` (never guess); granularity stops at the page (no
+  cursor/selection API); report "you're on page X" back before acting on it.
+
 ## Format preservation = self-consistency, not byte-identity
 OneNote re-normalizes spans / renumbers `QuickStyleDef` on redraw. Verify the user-visible
 font/size/color of *untouched* paragraphs is unchanged — not raw-XML equality. Highlight is
@@ -76,11 +86,12 @@ ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_com_mcp   # run ser
 - **Tier 2 (VM, checkpoint):** `@pytest.mark.windows`, real COM round-trips. Auto-skipped off
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
-## Status (2026-06-10)
-Phase 0a (host scaffold) done; write-core convergence + copy direct-path seams in place and
-guard-tested (29 Tier-1 tests green); all pushed to GitHub (`chrislin8848/onenote-com-mcp`,
-private). **Blocked on the Windows VM** for fixtures → Phase 1 (parse/build TDD) and everything
-COM. Phase 0b build guide: `docs/vm-setup.md`.
+## Status (2026-06-11)
+Phase 0a (host scaffold) done; all three seams (write-core convergence, copy direct-path,
+whole-batch hierarchy restructure) in place and guard-tested; SPEC v0611 intaken (22 tools incl.
+get_current_context + section-group integration); all pushed to GitHub
+(`chrislin8848/onenote-com-mcp`, private). **Blocked on the Windows VM** for fixtures → Phase 1
+(parse/build TDD) and everything COM. Phase 0b build guide: `docs/vm-setup.md`.
 
 **Tomorrow's handoff (after the VM is up):** Chris brings (a) the COM smoke result — which pywin32
 binding worked + how `GetHierarchy` returns its `[out]` value, (b) 2–3 real page IDs (mixed
@@ -88,7 +99,7 @@ styling / table / image). Then: finalize `Win32ComBackend` out-param handling, c
 `scripts/dump_fixtures.py`, dump real fixtures, start Phase 1 parse/build TDD. See README "Status".
 
 ## Grounding
-- `docs/SPEC.md` — the spec itself (v0610: adds 整理 capability, 4 hierarchy tools, §5 discipline).
+- `docs/SPEC.md` — the spec itself (v0611: + get_current_context, section-group integration).
 - `docs/com-api-reference.md` — COM signatures + enums (from Microsoft Learn).
 - `docs/onenote-xml-schema.md` — `one:` page/hierarchy XML + format-preservation rules.
 - `docs/vm-setup.md` — Phase 0b Windows VM build (autologon, desktop OneNote, COM smoke, Tier-2).

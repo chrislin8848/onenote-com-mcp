@@ -48,3 +48,10 @@ class ConcurrencyError(OneNoteError):
 
 class NodeNotFoundError(OneNoteError):
     """A requested notebook/section/page/object ID was not found."""
+
+
+class NoCurrentWindowError(OneNoteError):
+    """OneNote has no open window, so the current viewing context cannot be read.
+
+    SPEC §5: surface this clearly instead of guessing the user's location.
+    """

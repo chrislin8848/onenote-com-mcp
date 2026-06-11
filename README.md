@@ -13,14 +13,14 @@ any employee with synced OneNote and needs no admin setup.
 > notebooks, and lossy HTML formatting. This project takes the COM route deliberately —
 > full-fidelity round-trips, scoped queries, and zero cloud onboarding. See `SPEC` §1.2.
 
-## Status — 2026-06-10
+## Status — 2026-06-11
 
 | Phase | What | State |
 |---|---|---|
 | **0a** | Host scaffold: backend interface, guarded import, FixtureBackend, server tool catalog, CI | ✅ done |
 | 0b | Windows 11 VM + autologon + secondary-session runner + `remote_test` + COM smoke | ⛔ **blocked: VM not built yet** |
 | 1 | XML parse/build (lxml) + format preservation, TDD against **real VM fixtures** | ⛔ blocked on 0b (fixtures) |
-| 2 | Read tools on `FixtureBackend` (Linux green) | ⛔ blocked on 0b (fixtures) |
+| 2 | Read tools incl. `get_current_context` on `FixtureBackend` (Linux green) | ⛔ blocked on 0b (fixtures) |
 | 3 | `Win32ComBackend` live + `dump_fixtures.py` | ⛔ blocked on 0b |
 | 4 | Write tools + hierarchy restructure tools (whole-batch UpdateHierarchy; move_page VM-gated) + concurrency guard + format-preservation regression | ⛔ blocked |
 | 5 | Copy/transfer (raw-XML faithful copy) | ⛔ blocked |

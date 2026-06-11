@@ -16,12 +16,14 @@ replay them directly. Scrub personal content before committing (raw/ is gitignor
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 from onenote_com_mcp.backend.fixture import _sanitize
 from onenote_com_mcp.backend.win32com_backend import Win32ComBackend
 from onenote_com_mcp.enums import HierarchyScope, PageInfo
+from onenote_com_mcp.errors import NoCurrentWindowError
 
 OUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 
@@ -44,6 +46,24 @@ def main(page_ids: list[str]) -> int:
             be.get_page_content(pid, PageInfo.piBinaryData), encoding="utf-8"
         )
         print(f"wrote page_{sid}.xml (+ __binary)")
+
+    # Current viewing context (get_current_context fixture). Best-effort: with no open
+    # window we record the no-window case as literal null.
+    try:
+        ids = be.get_current_window_ids()
+        payload = json.dumps(
+            {
+                "notebook_id": ids.notebook_id,
+                "section_group_id": ids.section_group_id,
+                "section_id": ids.section_id,
+                "page_id": ids.page_id,
+            },
+            indent=2,
+        )
+    except NoCurrentWindowError:
+        payload = "null"
+    (OUT / "current_window.json").write_text(payload, encoding="utf-8")
+    print("wrote current_window.json")
 
     # TODO(Phase 3): also pull GetBinaryPageContent for each image callbackID found in the
     # binary page XML → binary_<callback>.b64, and a couple of FindPages results.
