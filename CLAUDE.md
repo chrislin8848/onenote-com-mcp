@@ -133,9 +133,18 @@ in ONE `apply_page_edit` write via the now-public composable `page_edit.content_
 page's pageLevel, order unchanged). Name validation rejects `\\/:*?"<>|&#%~` before any COM
 call. Tier-1: `tests/test_service_create.py` (FixtureBackend's deterministic fake IDs let
 replay fixtures contain the about-to-be-created page).
-Remaining: **Stage 3** hierarchy mutators inside `apply_hierarchy_restructure()` → **Stage 4**
-Tier-2 VM round-trips (create→get→update→delete, concurrency conflict, format-preservation
-regression, payload strategy decision, move_page validation).
+Stage 3 DONE (2026-06-11): hierarchy mutators inside `apply_hierarchy_restructure()` —
+`restructure_section` (complete page list in target order, optional per-page pageLevel),
+`reorder_sections` (notebook OR section-group scope; mixed Section+SectionGroup list, BOTH
+kinds required), `rename_node` (page/section/section group; section names filename-validated
+via shared `service/names.py`), `move_page` (still EXPERIMENTAL: notebook-scope read, page
+appended to target section, pageLevel resets to 1; rejects cross-notebook + recycle-bin
+targets). Key behavior: recycle-bin nodes (hidden from list_*) are PINNED in place during
+reorders but still ride in the submitted batch — completeness is demanded only for visible
+children. Tier-1: `tests/test_hierarchy_mutations.py` on the real notebook fixture (real
+recycle-bin group + section group).
+Remaining: **Stage 4** Tier-2 VM round-trips (create→get→update→delete, concurrency conflict,
+format-preservation regression, payload strategy decision, move_page validation).
 
 ## Grounding
 - `docs/SPEC.md` — the spec itself (v0611: + get_current_context, section-group integration).

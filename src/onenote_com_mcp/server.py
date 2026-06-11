@@ -243,24 +243,27 @@ def restructure_section(section_id: str, ordered_pages: list[dict]) -> str:
 
 @mcp.tool()
 def reorder_sections(notebook_id: str, ordered_section_ids: list[str]) -> str:
-    """STRUCTURAL. Reorder ALL sections of a notebook in one batch (complete list, target
-    order). Notebook-level ordering itself is not supported. Back up first (copy_notebook)
-    and confirm with the user before applying."""
+    """STRUCTURAL. Reorder a notebook's (or section group's) children in one batch.
+    ordered_section_ids = the COMPLETE child list in target order, including BOTH sections
+    and section groups exactly as list_sections shows them at that level (the hidden recycle
+    bin is handled automatically). Notebook-level ordering itself is not supported. Back up
+    first (copy_notebook) and confirm with the user before applying."""
     hierarchy_edit.reorder_sections(get_backend(), notebook_id, ordered_section_ids)
     return f"sections of {notebook_id} reordered"
 
 
 @mcp.tool()
 def rename_node(parent_id: str, object_id: str, new_name: str) -> str:
-    """STRUCTURAL. Rename a page or section. parent_id = the containing section/notebook ID.
-    Confirm with the user before applying."""
+    """STRUCTURAL. Rename a page, section, or section group. parent_id = the containing
+    section/notebook ID. Confirm with the user before applying."""
     hierarchy_edit.rename_node(get_backend(), parent_id, object_id, new_name)
     return f"{object_id} renamed to {new_name}"
 
 
 @mcp.tool()
 def move_page(notebook_id: str, page_id: str, target_section_id: str) -> str:
-    """STRUCTURAL, EXPERIMENTAL. Move a page to another section within the same notebook.
+    """STRUCTURAL, EXPERIMENTAL. Move a page to another section within the same notebook
+    (it lands at the end of the target section and its subpage level resets to 1).
     Cross-section move reliability is still being validated on real OneNote — prefer
     copy_page + delete_node until then. Back up first and confirm with the user."""
     hierarchy_edit.move_page(get_backend(), notebook_id, page_id, target_section_id)

@@ -22,30 +22,15 @@ from onenote_com_mcp.backend.base import OneNoteBackend
 from onenote_com_mcp.enums import CreateFileType, HierarchyScope, SpecialLocation
 from onenote_com_mcp.errors import NodeNotFoundError
 from onenote_com_mcp.service.hierarchy_edit import apply_hierarchy_restructure
+from onenote_com_mcp.service.names import checked_name
 from onenote_com_mcp.service.page_edit import apply_page_edit, content_mutator, set_title
 from onenote_com_mcp.xmllayer.namespaces import qn
-
-# OneNote rejects these in notebook/section names (section = a .one filename; notebook = a
-# folder that also becomes part of the sync URL).
-_INVALID_NAME_CHARS = set('\\/:*?"<>|&#%~')
-
-
-def _checked_name(name: str, kind: str) -> str:
-    name = name.strip()
-    if not name:
-        raise ValueError(f"{kind} name is empty")
-    bad = _INVALID_NAME_CHARS & set(name)
-    if bad:
-        raise ValueError(
-            f"{kind} name contains characters OneNote forbids: {' '.join(sorted(bad))}"
-        )
-    return name
 
 
 def create_notebook(backend: OneNoteBackend, name: str, path: str = "") -> str:
     """Create a notebook folder at ``path``; empty path = OneNote's default notebook folder
     (synced setups point it at OneDrive). Returns the new notebook ID."""
-    name = _checked_name(name, "notebook")
+    name = checked_name(name, "notebook")
     if not path:
         path = backend.get_special_location(SpecialLocation.slDefaultNotebookFolder)
     full_path = path.rstrip("\\/") + "\\" + name
@@ -54,7 +39,7 @@ def create_notebook(backend: OneNoteBackend, name: str, path: str = "") -> str:
 
 def create_section(backend: OneNoteBackend, parent_id: str, name: str) -> str:
     """Create ``name.one`` under a notebook OR section group; returns the new section ID."""
-    name = _checked_name(name, "section")
+    name = checked_name(name, "section")
     return backend.open_hierarchy(f"{name}.one", parent_id, CreateFileType.cftSection)
 
 
