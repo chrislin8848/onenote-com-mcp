@@ -125,10 +125,17 @@ disturb them), `whole_page` (piBinaryData read) is the alternative — **PROVISI
 VM round-trips decide**; every `one:Image` left in a payload gets its binary inlined via
 `GetBinaryPageContent` and `CallbackID` stripped (read-side construct). Tier-1 suite:
 `tests/test_page_edit_content.py` (untouched OEs asserted byte-identical, real fixtures).
-Remaining: **Stage 2** create_notebook/create_section/create_page → **Stage 3** hierarchy
-mutators inside `apply_hierarchy_restructure()` → **Stage 4** Tier-2 VM round-trips
-(create→get→update→delete, concurrency conflict, format-preservation regression, payload
-strategy decision, move_page validation).
+Stage 2 DONE (2026-06-11): `service/create.py` — `create_notebook` (OpenHierarchy cftNotebook;
+empty path → `GetSpecialLocation(slDefaultNotebookFolder)`), `create_section` (`name.one`
+relative to notebook OR section group), `create_page` (CreateNewPage → title + initial content
+in ONE `apply_page_edit` write via the now-public composable `page_edit.content_mutator()` /
+`set_title()`; `page_level`≠1 → whole-batch `apply_hierarchy_restructure` setting only the new
+page's pageLevel, order unchanged). Name validation rejects `\\/:*?"<>|&#%~` before any COM
+call. Tier-1: `tests/test_service_create.py` (FixtureBackend's deterministic fake IDs let
+replay fixtures contain the about-to-be-created page).
+Remaining: **Stage 3** hierarchy mutators inside `apply_hierarchy_restructure()` → **Stage 4**
+Tier-2 VM round-trips (create→get→update→delete, concurrency conflict, format-preservation
+regression, payload strategy decision, move_page validation).
 
 ## Grounding
 - `docs/SPEC.md` — the spec itself (v0611: + get_current_context, section-group integration).

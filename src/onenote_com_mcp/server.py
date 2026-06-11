@@ -17,7 +17,7 @@ import sys
 from mcp.server.fastmcp import FastMCP, Image
 
 from onenote_com_mcp.backend import get_backend
-from onenote_com_mcp.service import copy, hierarchy_edit, page_edit, read
+from onenote_com_mcp.service import copy, create, hierarchy_edit, page_edit, read
 
 mcp = FastMCP("onenote")
 
@@ -85,27 +85,34 @@ def get_current_context() -> str:
     return _json(read.get_current_context(get_backend()))
 
 
-# --- Create (Phase 4) -------------------------------------------------------
+# --- Create (service/create.py) ----------------------------------------------
 
 
 @mcp.tool()
-def create_notebook(name: str, path: str) -> str:
-    """Create a notebook. ``path`` must be a synced (e.g. OneDrive) location, else the
-    notebook is local-only. Prefer create_section inside an existing synced notebook."""
-    raise NotImplementedError("Phase 4")
+def create_notebook(name: str, path: str = "") -> str:
+    """Create a notebook. ``path`` is the parent folder and must be a synced (e.g. OneDrive)
+    location, else the notebook is local-only; empty path uses OneNote's default notebook
+    folder. Prefer create_section inside an existing synced notebook."""
+    return _json({"notebook_id": create.create_notebook(get_backend(), name, path)})
 
 
 @mcp.tool()
 def create_section(parent_id: str, name: str) -> str:
     """Create a section under ``parent_id`` — an existing notebook OR a section group —
     inheriting its sync."""
-    raise NotImplementedError("Phase 4")
+    return _json({"section_id": create.create_section(get_backend(), parent_id, name)})
 
 
 @mcp.tool()
-def create_page(section_id: str, title: str, content: str = "", page_level: int = 1) -> str:
-    """Create a page in a section. ``page_level`` (1/2/3) sets subpage indent."""
-    raise NotImplementedError("Phase 4")
+def create_page(
+    section_id: str, title: str, content: str | list[dict] = "", page_level: int = 1
+) -> str:
+    """Create a page in a section. ``page_level`` (1/2/3) sets subpage indent. ``content``
+    optionally adds initial paragraphs — same shapes as update_page_content (plain text with
+    newlines, or styled paragraph dicts)."""
+    return _json(
+        {"page_id": create.create_page(get_backend(), section_id, title, content, page_level)}
+    )
 
 
 # --- Modify (shared write core — service/page_edit.py) -----------------------

@@ -237,20 +237,36 @@ def _append_table_rows(table: etree._Element, rows: list[list[Any]]) -> None:
         table.append(make_table_row(row, n_cols))
 
 
-# --- Facades the MCP write tools delegate to ----------------------------------------
-# Each builds a Mutator and hands it to the single core above.
+# --- Composable mutators + the facades the MCP write tools delegate to ---------------
+# Each facade builds a Mutator and hands it to the single core above. ``content_mutator``
+# and ``set_title`` are public so other services (create_page) can compose them into ONE
+# guarded write instead of opening a second UpdatePageContent path.
 
 
-def edit_page_content(
-    backend: OneNoteBackend,
-    page_id: str,
-    content: str | list[Any],
-    mode: str = "append",
-    *,
-    target_object_id: str = "",
-    force: bool = False,
-) -> None:
-    """append: add paragraphs to an outline (``target_object_id`` = outline objectID, default
+def set_title(tree: etree._Element, title: str) -> None:
+    """Set the page title IN PLACE: replace the existing Title OE's runs (its objectID and
+    style stay), or create ``one:Title`` ahead of the outlines on a fresh page."""
+    title_el = tree.find(qn("Title"))
+    if title_el is None:
+        title_el = etree.Element(qn("Title"))
+        first_outline = tree.find(qn("Outline"))
+        if first_outline is not None:
+            first_outline.addprevious(title_el)
+        else:
+            tree.append(title_el)
+    oe = title_el.find(qn("OE"))
+    if oe is None:
+        title_el.append(make_text_oe([title]))
+    else:
+        _replace_oe_text(oe, {"runs": [title], "quick_style_index": None, "alignment": None})
+
+
+def content_mutator(
+    content: str | list[Any], mode: str = "append", target_object_id: str = ""
+) -> Mutator:
+    """Validate the content/mode contract EAGERLY and return the in-place Mutator.
+
+    append: add paragraphs to an outline (``target_object_id`` = outline objectID, default
     the page's last outline, created if the page has none). insert_before / insert_after:
     splice paragraphs as siblings of a target paragraph (one:OE objectID). replace: swap the
     target paragraph's text, keeping its identity and paragraph style."""
@@ -279,7 +295,20 @@ def edit_page_content(
             anchor.addnext(oe)
             anchor = oe
 
-    apply_page_edit(backend, page_id, mutate, force=force)
+    return mutate
+
+
+def edit_page_content(
+    backend: OneNoteBackend,
+    page_id: str,
+    content: str | list[Any],
+    mode: str = "append",
+    *,
+    target_object_id: str = "",
+    force: bool = False,
+) -> None:
+    """See :func:`content_mutator` for the mode/content contract."""
+    apply_page_edit(backend, page_id, content_mutator(content, mode, target_object_id), force=force)
 
 
 def add_table(
