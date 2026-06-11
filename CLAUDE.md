@@ -87,7 +87,7 @@ ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_com_mcp   # run ser
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
 ## Status (2026-06-11)
-Phases 0a, 0b, 1, 2, 3, and **4 done**. The VM is up, the XML layer is TDD'd against real dumps,
+Phases 0a, 0b, 1, 2, 3, 4, and **5 done**. The VM is up, the XML layer is TDD'd against real dumps,
 the seven read tools run through `service/read.py` on `FixtureBackend` (Linux green), AND the
 live-COM read path is validated end-to-end on the VM: `tests/test_windows_read.py` (Tier 2,
 `@pytest.mark.windows`) passes all 7 read round-trips via the tar-based `scripts/remote_test.sh`
@@ -163,11 +163,12 @@ hierarchy schema is positional (sections before groups, else hrInvalidXML — en
 
 **Recycle-bin policy (DECIDED 2026-06-11, user-approved):** invisible at the tool surface
 (reads filter it, `include_recycle_bin` stays unexposed), pinned-in-place but fully submitted
-in whole-batch UpdateHierarchy, never an operation target (move_page rejects it). Phase 5:
-`copy_notebook` must SKIP recycle-bin groups when recreating section groups (+ test). Phase 6:
-deletes stay default-to-recycle-bin (`permanent=False`) — the recycle bin is the undo net.
+in whole-batch UpdateHierarchy, never an operation target (move_page rejects it). (The Phase-5
+copy_notebook recycle-skip clause became moot — copy_notebook was removed; copies of sections
+never touch the bin.) Phase 6: deletes stay default-to-recycle-bin (`permanent=False`) — the
+recycle bin is the undo net.
 
-**Phase 5 IN PROGRESS — staged.** Stage 1 DONE (2026-06-11): `transfer_page()` raw-XML clone
+**Phase 5 DONE (staged, user-confirmed per stage).** Stage 1 DONE (2026-06-11): `transfer_page()` raw-XML clone
 inside the copy seam — piBinaryData read, pixels inlined via the now-public
 `page_edit.inline_image_binaries()` (binary dumps serve only CallbackID), identity/stamps/view
 state stripped (QuickStyleDef/TagDef/spans/author attrs ride verbatim, `strip_cdata=False`),
@@ -180,9 +181,18 @@ target = notebook OR group) + `transfer_notebook` (groups recreated via
 policy). Key trap handled: `OpenHierarchy` OPENS an existing same-named node instead of
 creating — copies de-collide names with " (2)", " (3)", … against the target's direct children
 (both kinds). Tier-1: `tests/test_copy_tree.py`.
-Remaining: **Stage 3** Tier-2 VM B≡A fidelity round-trips (copy the three dump-source pages →
-semantic equality + image bytes; copy_section / copy_notebook incl. group recreation +
-recycle skip live).
+Stage 3 DONE (2026-06-11) — Tier-2 全綠 (27 passed): B≡A semantic fingerprints + byte-identical
+image pixels on the three dump-source pages; section copy preserves order + 1/2/3 levels and
+de-collides live; section copy lands inside groups. **`copy_notebook` REMOVED (user-approved):
+`OpenHierarchy(cftNotebook)` refuses BOTH local paths and OneDrive https parents with
+hrFileDoesNotExist on this M365 build — COM cannot create notebooks. `create_notebook` stays
+with a KNOWN-LIMITATION warning. Whole-notebook cloning = copy_section per section.** Further
+ground truths (docs/com-api-reference.md Phase-5 section): OpenHierarchy OPENS same-named
+nodes (→ copies de-collide with " (n)"); DeletePageContent DOES work on one:Outline
+(page-level) — so Phase 6 delete_page_content = page-level objects only; empty-paragraph-only
+outlines render as nothing and are dropped on transplant (B≡A ignores them). VM-ops lesson:
+NEVER probe COM writes over plain SSH — a hung OpenHierarchy blocked OneNote's single-threaded
+COM for everything; writes only via the interactive Tier-2 task.
 
 ## Grounding
 - `docs/SPEC.md` — the spec itself (v0611: + get_current_context, section-group integration).

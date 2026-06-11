@@ -33,7 +33,9 @@ def create_notebook(backend: OneNoteBackend, name: str, path: str = "") -> str:
     name = checked_name(name, "notebook")
     if not path:
         path = backend.get_special_location(SpecialLocation.slDefaultNotebookFolder)
-    full_path = path.rstrip("\\/") + "\\" + name
+    # synced locations are URLs (https://…/Documents) — join those with "/", not "\"
+    sep = "/" if "://" in path else "\\"
+    full_path = path.rstrip("\\/") + sep + name
     return backend.open_hierarchy(full_path, "", CreateFileType.cftNotebook)
 
 

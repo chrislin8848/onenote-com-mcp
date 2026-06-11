@@ -187,6 +187,16 @@ class Win32ComBackend(OneNoteBackend):
         relative_to_object_id: str,
         create_file_type: CreateFileType = CreateFileType.cftNone,
     ) -> str:
+        if create_file_type is CreateFileType.cftNotebook and "://" not in path:
+            # VM ground truth (2026-06-11): OpenHierarchy(cftNotebook) creates the notebook
+            # FOLDER but not missing intermediate directories — a fresh machine whose default
+            # "OneNote Notebooks" folder was never created fails with hrFileDoesNotExist.
+            # The server always runs on the OneNote machine, so ensure the parent here.
+            import os  # noqa: PLC0415
+
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
         return self._call(
             "OpenHierarchy",
             lambda: self.app.OpenHierarchy(path, relative_to_object_id, int(create_file_type)),

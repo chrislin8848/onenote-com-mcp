@@ -159,3 +159,22 @@ any doc sketch above:
   page-level objects (Outline/Image/…). Deleting a paragraph = submitting its outline without
   it via `UpdatePageContent` (merge replaces a submitted object's content wholesale). Phase 6
   must scope `delete_page_content` accordingly.
+
+## VM-validated COM behaviors (Phase 5 Tier-2, 2026-06-11)
+
+- **`OpenHierarchy(cftNotebook)` cannot create notebooks on this M365 build** — it returns
+  `hrFileDoesNotExist` (0x80042006) for BOTH local folder paths (even with the parent folder
+  present) and OneDrive `https://` parents. The `copy_notebook` tool was REMOVED
+  (user-approved); `create_notebook` stays with a KNOWN-LIMITATION warning. Whole-notebook
+  cloning = `copy_section` per section into an existing notebook/group.
+- **`OpenHierarchy` OPENS an existing same-named section/group instead of creating one** — a
+  copy without name de-collision would silently merge into the existing node. Copies append
+  " (2)", " (3)", … against the target parent's direct children of both kinds.
+- **`DeletePageContent` works on `one:Outline` objects** (page-level) — confirmed live while
+  sweeping empty outlines; together with the Phase-4 finding (paragraph OEs refused), Phase 6's
+  `delete_page_content` contract is: page-level objects only.
+- **Outlines holding only empty paragraphs render as nothing and are dropped by OneNote when
+  transplanted** — semantic fidelity (B≡A) is asserted ignoring them.
+- B≡A validated live: mixed-format/table/image pages clone with identical semantic
+  fingerprints and byte-identical image pixels; section copies preserve page order and
+  1/2/3 subpage levels; section copies land inside section groups.

@@ -60,7 +60,6 @@ def test_full_tool_catalog_registered():
         "insert_image",
         "copy_page",
         "copy_section",
-        "copy_notebook",
         "restructure_section",
         "reorder_sections",
         "rename_node",

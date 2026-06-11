@@ -175,3 +175,12 @@ def test_create_page_invalid_level_rejected_before_creation(tmp_path):
     with pytest.raises(ValueError, match="page_level"):
         create.create_page(be, _SECTION_ID, "t", page_level=4)
     assert not be.calls
+
+
+def test_create_notebook_url_path_joins_with_slash(tmp_path):
+    # synced locations are URLs — the notebook folder must join with "/" (VM ground truth:
+    # this M365 build refuses local-path notebooks, so URL parents are the normal case)
+    be = FixtureBackend(tmp_path)
+    create.create_notebook(be, "新本", "https://d.docs.live.net/abc/Documents/")
+    (call,) = [c for c in be.calls if c.method == "open_hierarchy"]
+    assert call.kwargs["path"] == "https://d.docs.live.net/abc/Documents/新本"

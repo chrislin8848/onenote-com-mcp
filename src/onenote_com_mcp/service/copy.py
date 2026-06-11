@@ -17,9 +17,9 @@ from __future__ import annotations
 from lxml import etree
 
 from onenote_com_mcp.backend.base import OneNoteBackend
-from onenote_com_mcp.enums import CreateFileType, HierarchyScope, NewPageStyle, PageInfo
+from onenote_com_mcp.enums import HierarchyScope, NewPageStyle, PageInfo
 from onenote_com_mcp.errors import NodeNotFoundError
-from onenote_com_mcp.service.create import create_notebook, create_section
+from onenote_com_mcp.service.create import create_section
 from onenote_com_mcp.service.hierarchy_edit import apply_hierarchy_restructure
 from onenote_com_mcp.service.page_edit import inline_image_binaries, parse_onenote_datetime
 from onenote_com_mcp.xmllayer.namespaces import local_name, qn
@@ -133,33 +133,7 @@ def transfer_section(backend: OneNoteBackend, section_id: str, target_parent_id:
     return new_section_id
 
 
-def transfer_notebook(backend: OneNoteBackend, notebook_id: str, name: str, path: str) -> str:
-    """Faithfully copy a whole notebook (subject to create_notebook's sync-path constraints).
-
-    Section groups are recreated via ``OpenHierarchy(cftFolder)`` so sections land INSIDE
-    their groups, never flattened (SPEC §5). Recycle-bin groups are SKIPPED — the
-    user-approved recycle-bin policy: never clone another notebook's wastebasket."""
-    new_notebook_id = create_notebook(backend, name, path)
-    tree = etree.fromstring(
-        backend.get_hierarchy(notebook_id, HierarchyScope.hsSections).encode("utf-8")
-    )
-    _transfer_children(backend, _find_node(tree, notebook_id), new_notebook_id)
-    return new_notebook_id
-
-
-def _transfer_children(
-    backend: OneNoteBackend, container: etree._Element, target_parent_id: str
-) -> None:
-    """Recreate a container's mixed Section + SectionGroup children in document order."""
-    for child in container:
-        kind = local_name(child.tag)
-        if kind == "Section":
-            transfer_section(backend, child.get("ID"), target_parent_id)
-        elif kind == "SectionGroup":
-            if child.get("isRecycleBin") == "true":
-                continue  # policy: the recycle bin never rides along on a clone
-            group_name = _unique_child_name(backend, target_parent_id, child.get("name") or "Group")
-            group_id = backend.open_hierarchy(
-                group_name, target_parent_id, CreateFileType.cftFolder
-            )
-            _transfer_children(backend, child, group_id)
+# NOTE: there is deliberately no transfer_notebook. VM ground truth (2026-06-11): this M365
+# OneNote build refuses COM notebook creation — OpenHierarchy(cftNotebook) returns
+# hrFileDoesNotExist (0x80042006) for local folder paths AND OneDrive https parents alike.
+# Whole-notebook cloning = transfer_section per section into an existing notebook/group.

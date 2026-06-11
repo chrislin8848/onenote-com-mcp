@@ -90,9 +90,10 @@ def get_current_context() -> str:
 
 @mcp.tool()
 def create_notebook(name: str, path: str = "") -> str:
-    """Create a notebook. ``path`` is the parent folder and must be a synced (e.g. OneDrive)
-    location, else the notebook is local-only; empty path uses OneNote's default notebook
-    folder. Prefer create_section inside an existing synced notebook."""
+    """Create a notebook at ``path`` (parent folder; empty = OneNote's default folder).
+    KNOWN LIMITATION (validated 2026-06-11): current M365 desktop builds refuse COM notebook
+    creation (both local paths and OneDrive URLs) — expect this to fail there. Prefer
+    create_section inside an existing synced notebook."""
     return _json({"notebook_id": create.create_notebook(get_backend(), name, path)})
 
 
@@ -221,18 +222,15 @@ def copy_section(section_id: str, target_parent_id: str) -> str:
     return _json({"section_id": copy.transfer_section(get_backend(), section_id, target_parent_id)})
 
 
-@mcp.tool()
-def copy_notebook(notebook_id: str, name: str, path: str = "") -> str:
-    """Faithfully copy a whole notebook. ``path`` (parent folder) must be a synced location;
-    empty = OneNote's default notebook folder. Section groups are recreated in the target
-    (sections land inside their groups, never flattened); the recycle bin is not cloned.
-    Returns the new notebook's ID."""
-    return _json({"notebook_id": copy.transfer_notebook(get_backend(), notebook_id, name, path)})
+# NOTE: there is deliberately no copy_notebook tool. VM ground truth (2026-06-11): this M365
+# OneNote build refuses COM notebook creation (OpenHierarchy cftNotebook → hrFileDoesNotExist
+# for local paths AND OneDrive https parents). Whole-notebook cloning is done by copy_section
+# into an existing notebook / section group, section by section.
 
 
 # --- Restructure (Phase 4: whole-batch UpdateHierarchy — SPEC §5 discipline) -
-# Structural changes are propose-then-confirm: suggest a clone backup (copy_section /
-# copy_notebook) first, and present the target order for user confirmation before applying.
+# Structural changes are propose-then-confirm: suggest a clone backup (copy_section)
+# first, and present the target order for user confirmation before applying.
 
 
 @mcp.tool()
@@ -251,7 +249,7 @@ def reorder_sections(notebook_id: str, ordered_section_ids: list[str]) -> str:
     ordered_section_ids = the COMPLETE child list in target order, including BOTH sections
     and section groups exactly as list_sections shows them at that level (the hidden recycle
     bin is handled automatically). Notebook-level ordering itself is not supported. Back up
-    first (copy_notebook) and confirm with the user before applying."""
+    first (copy_section) and confirm with the user before applying."""
     hierarchy_edit.reorder_sections(get_backend(), notebook_id, ordered_section_ids)
     return f"sections of {notebook_id} reordered"
 

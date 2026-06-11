@@ -1,10 +1,7 @@
-"""Tier-1 tests for Phase-5 Stage-2: transfer_section / transfer_notebook.
+"""Tier-1 tests for Phase-5 Stage-2: transfer_section (incl. section-group targets).
 
 The section copy walks REAL page fixtures (content fidelity is test_copy_page's job — here
-the contract is orchestration: order, pageLevel batching, name de-collision). The notebook
-copy is structure-only sources (empty sections): groups recreated via cftFolder in document
-order, sections landing INSIDE their groups, the recycle-bin group skipped (user-approved
-policy).
+the contract is orchestration: order, pageLevel batching, name de-collision, group targets).
 """
 
 from __future__ import annotations
@@ -133,62 +130,27 @@ def test_transfer_section_name_collision_escalates(tmp_path):
     assert sec_call.kwargs["path"] == "甲節 (3).one", "both kinds count as taken names"
 
 
-# --- transfer_notebook -------------------------------------------------------------------
-
-_SRC_NB = "{SRCNB}{1}{B0}"
-_S1, _S2 = "{S1}{1}{B0}", "{S2}{1}{B0}"
-_NEW_NB = "{FIXTURE-cftNotebook-1}{1}{B0}"
-_NEW_GROUP = "{FIXTURE-cftFolder-3}{1}{B0}"  # nb=1, S1-copy=2, folder=3, S2-copy=4
+# --- section copy INTO a section group ----------------------------------------------------
+# (There is deliberately no transfer_notebook: COM notebook creation is refused by this M365
+# build — VM ground truth 2026-06-11. Whole-notebook cloning = transfer_section per section.)
 
 
-@pytest.fixture
-def notebook_be(tmp_path) -> FixtureBackend:
+def test_transfer_section_into_a_section_group(tmp_path):
+    group_id = "{G}{1}{B0}"
     _write(
         tmp_path,
-        f"hierarchy_hsSections__{_sanitize(_SRC_NB)}.xml",
-        f'<one:Notebook xmlns:one="{_ONE}" ID="{_SRC_NB}" name="來源本">'
-        f'<one:Section ID="{_S1}" name="甲節"/>'
-        '<one:SectionGroup ID="{RB}{1}{B0}" name="OneNote_RecycleBin" isRecycleBin="true">'
-        '<one:Section ID="{RBS}{1}{B0}" name="刪除的頁面"/>'
-        "</one:SectionGroup>"
-        '<one:SectionGroup ID="{G}{1}{B0}" name="乙群">'
-        f'<one:Section ID="{_S2}" name="丙節"/>'
-        "</one:SectionGroup>"
-        "</one:Notebook>",
-    )
-    # structure-only sources: both sections are empty (page fidelity is covered elsewhere)
-    for sid, sname in ((_S1, "甲節"), (_S2, "丙節")):
-        _write(
-            tmp_path,
-            f"hierarchy_hsPages__{_sanitize(sid)}.xml",
-            f'<one:Section xmlns:one="{_ONE}" ID="{sid}" name="{sname}"/>',
-        )
-    # unique-name lookups against the freshly created targets (empty replay containers)
-    _write(
-        tmp_path,
-        f"hierarchy_hsSections__{_sanitize(_NEW_NB)}.xml",
-        f'<one:Notebook xmlns:one="{_ONE}" ID="{_NEW_NB}" name="克隆本"/>',
+        f"hierarchy_hsPages__{_sanitize(_SRC_SECTION)}.xml",
+        f'<one:Section xmlns:one="{_ONE}" ID="{_SRC_SECTION}" name="丙節"/>',
     )
     _write(
         tmp_path,
-        f"hierarchy_hsSections__{_sanitize(_NEW_GROUP)}.xml",
-        f'<one:SectionGroup xmlns:one="{_ONE}" ID="{_NEW_GROUP}" name="乙群"/>',
+        f"hierarchy_hsSections__{_sanitize(group_id)}.xml",
+        f'<one:SectionGroup xmlns:one="{_ONE}" ID="{group_id}" name="乙群">'
+        '<one:Section ID="{S2}{1}{B0}" name="丙節"/>'
+        "</one:SectionGroup>",
     )
-    return FixtureBackend(tmp_path)
-
-
-def test_transfer_notebook_recreates_groups_and_skips_recycle_bin(notebook_be):
-    be = notebook_be
-    new_id = copy.transfer_notebook(be, _SRC_NB, "克隆本", "C:\\Users\\dev\\OneDrive\\NB")
-    assert new_id == _NEW_NB
-
-    opens = [c.kwargs for c in be.calls if c.method == "open_hierarchy"]
-    assert [(o["path"], o["relative_to_object_id"], o["create_file_type"]) for o in opens] == [
-        ("C:\\Users\\dev\\OneDrive\\NB\\克隆本", "", CreateFileType.cftNotebook),
-        ("甲節.one", _NEW_NB, CreateFileType.cftSection),
-        ("乙群", _NEW_NB, CreateFileType.cftFolder),
-        ("丙節.one", _NEW_GROUP, CreateFileType.cftSection),
-    ], (
-        "document order; the section lands INSIDE its recreated group; "
-        "the recycle-bin group (and its inner section) is never cloned"
-    )
+    be = FixtureBackend(tmp_path)
+    copy.transfer_section(be, _SRC_SECTION, group_id)
+    (sec_call,) = [c for c in be.calls if c.method == "open_hierarchy"]
+    assert sec_call.kwargs["relative_to_object_id"] == group_id, "section lands IN the group"
+    assert sec_call.kwargs["path"] == "丙節 (2).one", "de-collided against the group's children"
