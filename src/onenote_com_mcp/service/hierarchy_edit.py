@@ -14,10 +14,11 @@ of "complete list"), then submits the whole tree once.
 
 The facades add input-contract checks ON TOP of the seam's conservation backstop: reorders
 demand the complete child-ID list up front (better errors than a post-mutation conservation
-failure), recycle-bin nodes — which the list_* tools deliberately hide — are pinned in place
-automatically, and ``move_page`` stays EXPERIMENTAL until cross-section moves are validated on
-the VM (SPEC §4/§9); it reads at notebook scope so a within-notebook move conserves the node-ID
-set and both sections' complete page lists ride in the one batch.
+failure) and respect OneNote's positional schema (sections before groups), recycle-bin nodes —
+which the list_* tools deliberately hide — are pinned in place automatically, and ``move_page``
+is VM-VALIDATED (2026-06-11; formerly experimental): it reads at notebook scope so the move
+conserves the node-ID set and both sections' complete page lists ride in the one batch, and the
+moved page comes back under a NEW ID.
 """
 
 from __future__ import annotations
@@ -30,7 +31,8 @@ from onenote_com_mcp.backend.base import OneNoteBackend
 from onenote_com_mcp.enums import HierarchyScope
 from onenote_com_mcp.errors import NodeNotFoundError
 from onenote_com_mcp.service.names import checked_name
-from onenote_com_mcp.xmllayer.namespaces import local_name
+from onenote_com_mcp.service.page_edit import apply_page_edit, set_title
+from onenote_com_mcp.xmllayer.namespaces import local_name, qn
 
 # A restructure mutation rearranges the hierarchy tree IN PLACE (reorder children, set
 # pageLevel, change name attributes, re-parent a page). It must not add or drop nodes.
@@ -114,6 +116,24 @@ def _reorder_children(
         parent.append(child)  # appending an existing child MOVES it; final order = sequence
 
 
+def _require_sections_before_groups(container: etree._Element, what: str) -> None:
+    """OneNote's hierarchy schema is POSITIONAL: at any level every ``one:Section`` must come
+    before all ``one:SectionGroup`` siblings (the UI renders groups last). Submitting an
+    interleaved order is rejected with hrInvalidXML — VM ground truth 2026-06-11. Fail with
+    a contract error before any COM write instead."""
+    seen_group = False
+    for child in container:
+        kind = local_name(child.tag)
+        if kind == "SectionGroup":
+            seen_group = True
+        elif kind == "Section" and seen_group:
+            raise ValueError(
+                f"{what}: OneNote requires every section to come before all section groups "
+                "at the same level — sections can only be reordered among sections, and "
+                "groups among groups"
+            )
+
+
 # --- Facades the MCP structure tools delegate to ---------------------------------------
 
 
@@ -165,6 +185,7 @@ def reorder_sections(
             ordered_section_ids,
             "reorder_sections",
         )
+        _require_sections_before_groups(container, "reorder_sections")
 
     apply_hierarchy_restructure(backend, notebook_id, HierarchyScope.hsSections, mutate)
 
@@ -173,35 +194,43 @@ _RENAMABLE = frozenset({"Page", "Section", "SectionGroup"})
 
 
 def rename_node(backend: OneNoteBackend, parent_id: str, object_id: str, new_name: str) -> None:
-    """Rename a page / section / section group. Routed through the full-list core anyway:
-    same-order full submission is inference-proof and keeps the single call site."""
+    """Rename a page / section / section group.
+
+    Pages: ``UpdateHierarchy`` silently IGNORES a ``one:Page`` name attribute — the
+    hierarchy name is derived from the page title (VM ground truth 2026-06-11) — so a page
+    rename IS a title edit, routed through the page-content seam (``apply_page_edit``).
+    Sections/groups: routed through the full-list hierarchy core (same-order full
+    submission is inference-proof and keeps the single call site)."""
+    scope_tree = etree.fromstring(
+        backend.get_hierarchy(parent_id, HierarchyScope.hsPages).encode("utf-8")
+    )
+    kind = local_name(_find_node(scope_tree, object_id).tag)
+    if kind == "Page":
+        name = new_name.strip()
+        if not name:
+            raise ValueError("page name is empty")
+        apply_page_edit(backend, object_id, lambda tree: set_title(tree, name))
+        return
+    if kind not in _RENAMABLE:
+        raise ValueError(f"cannot rename a one:{kind} — only pages, sections, and section groups")
+    label = "section" if kind == "Section" else "section group"
+    name = checked_name(new_name, label)  # section names are .one filenames
 
     def mutate(tree: etree._Element) -> None:
-        node = _find_node(tree, object_id)
-        kind = local_name(node.tag)
-        if kind not in _RENAMABLE:
-            raise ValueError(
-                f"cannot rename a one:{kind} — only pages, sections, and section groups"
-            )
-        if kind == "Page":
-            name = new_name.strip()
-            if not name:
-                raise ValueError("page name is empty")
-        else:
-            label = "section" if kind == "Section" else "section group"
-            name = checked_name(new_name, label)  # section names are .one filenames
-        node.set("name", name)
+        _find_node(tree, object_id).set("name", name)
 
     apply_hierarchy_restructure(backend, parent_id, HierarchyScope.hsPages, mutate)
 
 
 def move_page(
     backend: OneNoteBackend, notebook_id: str, page_id: str, target_section_id: str
-) -> None:
-    """EXPERIMENTAL (SPEC §4/§9): cross-section reliability unvalidated until VM round-trips.
+) -> str:
+    """Move a page to another section in the same notebook; returns the page's NEW ID.
 
-    Reads at notebook scope so the move conserves the node-ID set and BOTH sections' complete
-    page lists ride in the one batch. The moved page's ``pageLevel`` resets to 1 — a subpage
+    VM ground truth (2026-06-11): page IDs embed the owning section, so re-parenting
+    assigns the page a NEW ID — callers must use the returned ID from then on. Reads at
+    notebook scope so the move conserves the node-ID set and BOTH sections' complete page
+    lists ride in the one batch. The moved page's ``pageLevel`` resets to 1 — a subpage
     moved alone must not dangle under a parent that stayed behind."""
 
     def mutate(tree: etree._Element) -> None:
@@ -227,3 +256,13 @@ def move_page(
         page.set("pageLevel", "1")
 
     apply_hierarchy_restructure(backend, notebook_id, HierarchyScope.hsPages, mutate)
+    # the page landed LAST under the target section, under a NEW ID — re-read to learn it
+    after = etree.fromstring(
+        backend.get_hierarchy(target_section_id, HierarchyScope.hsPages).encode("utf-8")
+    )
+    pages = _find_node(after, target_section_id).findall(qn("Page"))
+    if not pages:
+        raise NodeNotFoundError(
+            f"move_page: target section {target_section_id!r} shows no pages after the move"
+        )
+    return pages[-1].get("ID")

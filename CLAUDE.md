@@ -87,7 +87,7 @@ ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_com_mcp   # run ser
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
 ## Status (2026-06-11)
-Phases 0a, 0b, 1, 2, and **3 done**. The VM is up, the XML layer is TDD'd against real dumps,
+Phases 0a, 0b, 1, 2, 3, and **4 done**. The VM is up, the XML layer is TDD'd against real dumps,
 the seven read tools run through `service/read.py` on `FixtureBackend` (Linux green), AND the
 live-COM read path is validated end-to-end on the VM: `tests/test_windows_read.py` (Tier 2,
 `@pytest.mark.windows`) passes all 7 read round-trips via the tar-based `scripts/remote_test.sh`
@@ -113,7 +113,7 @@ sentinel, collects results + fixtures, mirrors the exit code. Guest runner is `r
 auto-run in the Tier-2 loop — the PII lesson (a real tour roster once leaked into a dump) makes
 auto-collecting raw dumps to host unsafe; run_tier2.bat runs pytest only.
 
-**Phase 4 IN PROGRESS — staged, user confirms between stages.** Stage 1 DONE (2026-06-11):
+**Phase 4 DONE (staged, user-confirmed per stage).** Stage 1 DONE (2026-06-11):
 the surgical content mutators are built INSIDE `apply_page_edit()` — `update_page_content`
 (modes append / insert_before / insert_after / replace; `target_object_id` anchors on
 get_page objectIDs; content = plain text or styled runs), `create_table` (new table, or
@@ -143,8 +143,23 @@ targets). Key behavior: recycle-bin nodes (hidden from list_*) are PINNED in pla
 reorders but still ride in the submitted batch — completeness is demanded only for visible
 children. Tier-1: `tests/test_hierarchy_mutations.py` on the real notebook fixture (real
 recycle-bin group + section group).
-Remaining: **Stage 4** Tier-2 VM round-trips (create→get→update→delete, concurrency conflict,
-format-preservation regression, payload strategy decision, move_page validation).
+Stage 4 DONE (2026-06-11) — **Phase 4 COMPLETE**: `tests/test_windows_write.py` (14 Tier-2
+write tests) green on the VM alongside the 7 read tests (21 passed, 8 iterations). Validated
+live: create→get→update round-trips, styled writes (dual highlight), the SPEC §6
+format-preservation regression on the real mixed-format page, BOTH payload strategies
+(**DECIDED: `changed_objects` stays the default**; `whole_page` = validated fallback),
+concurrency guard (wrong stamp → `ConcurrencyError`; matching passes; force overrides),
+table create/append-rows/cell-edit, PNG byte-identical insert round-trip, restructure,
+rename, group-scope reorder, and **move_page (EXPERIMENTAL dropped — returns the page's NEW
+ID)**. VM ground truths recorded in docs/com-api-reference.md ("VM-validated COM behaviors"):
+VT_DATE only takes PyTime + DATE-0 unreachable (backend resolves current stamps; UTC→local
+naive), real HRESULT lives in com_error excepinfo scode, COM `force` doesn't bypass the date
+check (forced writes carry the current stamp), GetPageContent's lastModifiedTime is refresh-
+lazy after programmatic writes, page rename = Title edit (UpdateHierarchy ignores page name),
+hierarchy schema is positional (sections before groups, else hrInvalidXML — enforced in
+`reorder_sections`), moved pages get NEW IDs, and `DeletePageContent` refuses paragraph OEs
+(0x8004200E — paragraph delete = outline rewrite via the edit seam; **Phase 6 must scope
+`delete_page_content` to page-level objects**).
 
 **Recycle-bin policy (DECIDED 2026-06-11, user-approved):** invisible at the tool surface
 (reads filter it, `include_recycle_bin` stays unexposed), pinned-in-place but fully submitted

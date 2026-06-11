@@ -255,19 +255,20 @@ def reorder_sections(notebook_id: str, ordered_section_ids: list[str]) -> str:
 @mcp.tool()
 def rename_node(parent_id: str, object_id: str, new_name: str) -> str:
     """STRUCTURAL. Rename a page, section, or section group. parent_id = the containing
-    section/notebook ID. Confirm with the user before applying."""
+    section/notebook ID. (A page rename edits its title — the hierarchy name follows it.)
+    Confirm with the user before applying."""
     hierarchy_edit.rename_node(get_backend(), parent_id, object_id, new_name)
     return f"{object_id} renamed to {new_name}"
 
 
 @mcp.tool()
 def move_page(notebook_id: str, page_id: str, target_section_id: str) -> str:
-    """STRUCTURAL, EXPERIMENTAL. Move a page to another section within the same notebook
-    (it lands at the end of the target section and its subpage level resets to 1).
-    Cross-section move reliability is still being validated on real OneNote — prefer
-    copy_page + delete_node until then. Back up first and confirm with the user."""
-    hierarchy_edit.move_page(get_backend(), notebook_id, page_id, target_section_id)
-    return f"page {page_id} moved to {target_section_id}"
+    """STRUCTURAL. Move a page to another section within the same notebook (it lands at the
+    end of the target section and its subpage level resets to 1). The moved page gets a NEW
+    page ID — returned here; use it for any follow-up calls. Confirm with the user before
+    applying."""
+    new_id = hierarchy_edit.move_page(get_backend(), notebook_id, page_id, target_section_id)
+    return _json({"new_page_id": new_id, "section_id": target_section_id})
 
 
 # --- Delete (Phase 6: destructive — conservative) ---------------------------

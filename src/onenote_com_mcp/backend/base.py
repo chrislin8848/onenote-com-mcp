@@ -100,7 +100,10 @@ class OneNoteBackend(ABC):
         """Merge page-level objects from ``changes_xml`` into the page.
 
         Guarded by ``expected_last_modified`` (concurrency). ``force`` defaults False and
-        should only be set on explicit user opt-in.
+        should only be set on explicit user opt-in. ``None`` means the implementation
+        resolves the page's CURRENT stamp itself (OneNote's COM marshalling cannot express
+        "skip the check" — VM ground truth 2026-06-11); callers that read first should pass
+        the stamp from that read.
         """
 
     @abstractmethod

@@ -130,20 +130,29 @@ def test_restructure_section_bad_entry_rejected_before_any_read(section_be):
 # --- reorder_sections ------------------------------------------------------------------
 
 
-def test_reorder_sections_mixed_kinds_with_recycle_bin_pinned(be):
-    # real notebook children: [Section, RecycleBin group, SectionGroup] — swap the two
-    # visible ones; the hidden recycle bin must keep its slot AND ride in the batch
-    hierarchy_edit.reorder_sections(be, NOTEBOOK_ID, [GROUP_ID, SECTION_ID])
+def test_reorder_sections_rejects_groups_before_sections(be):
+    # VM ground truth (2026-06-11, hrInvalidXML): OneNote's hierarchy schema is positional —
+    # every one:Section precedes all one:SectionGroup siblings. Interleaving is refused
+    # BEFORE any COM write.
+    with pytest.raises(ValueError, match="section groups"):
+        hierarchy_edit.reorder_sections(be, NOTEBOOK_ID, [GROUP_ID, SECTION_ID])
+    assert _no_write(be)
+
+
+def test_reorder_sections_keeps_recycle_bin_pinned_in_batch(be):
+    # real notebook children: [Section, RecycleBin group, SectionGroup] — a kind-respecting
+    # full submission goes through; the hidden recycle bin keeps its slot AND rides along
+    hierarchy_edit.reorder_sections(be, NOTEBOOK_ID, [SECTION_ID, GROUP_ID])
     sent = _sent(be)
     children = [(etree.QName(c).localname, c.get("ID")) for c in sent]
     assert children == [
-        ("SectionGroup", GROUP_ID),
-        ("SectionGroup", RECYCLE_GROUP_ID),
         ("Section", SECTION_ID),
+        ("SectionGroup", RECYCLE_GROUP_ID),
+        ("SectionGroup", GROUP_ID),
     ]
-    group = sent[0]
+    group = sent[-1]
     assert [s.get("ID") for s in group.findall(qn("Section"))] == [SEC1_ID, SEC2_ID], (
-        "nesting inside the moved group is untouched"
+        "nesting inside the groups is untouched"
     )
 
 
@@ -169,15 +178,21 @@ def test_reorder_sections_works_inside_a_section_group(fixtures_dir, tmp_path):
 # --- rename_node -----------------------------------------------------------------------
 
 
-def test_rename_page_changes_name_only_order_untouched(be, notebook_pages):
-    page_id = _section_pages(notebook_pages, SEC2_ID)[0].get("ID")
-    hierarchy_edit.rename_node(be, NOTEBOOK_ID, page_id, "測試查詢與保養")
-    sent = _sent(be)
-    renamed = next(el for el in sent.iter(qn("Page")) if el.get("ID") == page_id)
-    assert renamed.get("name") == "測試查詢與保養"
-    assert [e.get("ID") for e in sent.iter() if e.get("ID")] == [
-        e.get("ID") for e in notebook_pages.iter() if e.get("ID")
-    ], "rename must not reorder anything"
+def test_rename_page_routes_through_title_edit(be, notebook_pages):
+    # VM ground truth (2026-06-11): UpdateHierarchy silently IGNORES a one:Page name attr —
+    # the hierarchy name follows the TITLE, so a page rename is a title edit through the
+    # page-content seam (one guarded UpdatePageContent, zero UpdateHierarchy).
+    page_id = next(
+        p.get("ID") for p in _section_pages(notebook_pages, SECTION_ID) if p.get("name") == "圖片頁"
+    )
+    hierarchy_edit.rename_node(be, NOTEBOOK_ID, page_id, "圖片頁改名")
+    assert _no_write(be), "a page rename must not touch UpdateHierarchy"
+    (write,) = [c for c in be.calls if c.method == "update_page_content"]
+    assert "圖片頁改名" in write.kwargs["changes_xml"]
+    assert write.kwargs["expected_last_modified"] is not None
+
+    with pytest.raises(ValueError, match="page name"):
+        hierarchy_edit.rename_node(be, NOTEBOOK_ID, page_id, "   ")
 
 
 def test_rename_section_group_and_section_validate_filename_chars(be):
@@ -200,7 +215,18 @@ def test_rename_notebook_rejected(be):
 # --- move_page (EXPERIMENTAL) ----------------------------------------------------------
 
 
-def test_move_page_reparents_resets_level_and_keeps_both_lists(be, notebook_pages):
+@pytest.fixture
+def move_be(fixtures_dir, tmp_path) -> FixtureBackend:
+    """move_page reads the notebook AND re-reads the target section (for the page's NEW ID —
+    VM ground truth: re-parenting re-IDs the page). Serve the real dump under both names."""
+    src = (fixtures_dir / f"hierarchy_hsPages__{_sanitize(NOTEBOOK_ID)}.xml").read_text("utf-8")
+    for node_id in (NOTEBOOK_ID, SEC1_ID):
+        (tmp_path / f"hierarchy_hsPages__{_sanitize(node_id)}.xml").write_text(src, "utf-8")
+    return FixtureBackend(tmp_path)
+
+
+def test_move_page_reparents_resets_level_and_keeps_both_lists(move_be, notebook_pages):
+    be = move_be
     # 測試頁面7 is a level-2 subpage in the big section; move it to 第1節
     moved_id = next(
         p.get("ID") for p in _section_pages(notebook_pages, SECTION_ID) if p.get("pageLevel") == "2"
@@ -208,7 +234,10 @@ def test_move_page_reparents_resets_level_and_keeps_both_lists(be, notebook_page
     source_before = [p.get("ID") for p in _section_pages(notebook_pages, SECTION_ID)]
     target_before = [p.get("ID") for p in _section_pages(notebook_pages, SEC1_ID)]
 
-    hierarchy_edit.move_page(be, NOTEBOOK_ID, moved_id, SEC1_ID)
+    new_id = hierarchy_edit.move_page(be, NOTEBOOK_ID, moved_id, SEC1_ID)
+    # replay semantics: the post-move re-read serves the pre-move fixture, so the "new ID"
+    # resolves to the fixture target section's last page; live, OneNote re-IDs the moved page
+    assert new_id == target_before[-1]
 
     sent = _sent(be)
     source_after = [p.get("ID") for p in _section_pages(sent, SECTION_ID)]

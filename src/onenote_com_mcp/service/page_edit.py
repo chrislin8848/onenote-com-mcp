@@ -6,15 +6,16 @@ concurrency guard is applied. The facades below own only content shaping: their 
 callbacks do surgical in-place edits on the live GetPageContent tree (SPEC §5 — never rebuild
 from a slimmed model, or untouched paragraphs lose their formatting).
 
-Payload strategy (PROVISIONAL until the Phase-4 VM round-trips lock it in):
-``UpdatePageContent`` merges page-level objects, touching only the ones present in the
-submitted XML. The default ``changed_objects`` strategy therefore prunes the payload down to
-the page shell + definitional children (QuickStyleDef etc.) + only the page-level objects the
-mutation actually changed — untouched outlines/images are never re-sent, so the merge cannot
-disturb them. ``whole_page`` (read piBinaryData, send everything) is the alternative under
-test. In BOTH strategies, every ``one:Image`` left in the payload gets its binary inlined
-(``one:Data`` fetched via GetBinaryPageContent, ``CallbackID`` removed): CallbackID is a
-read-side construct, and an Image submitted without Data risks losing its pixels.
+Payload strategy (DECIDED 2026-06-11 — BOTH validated on the VM, images byte-identical
+through an edit either way): ``UpdatePageContent`` merges page-level objects, touching only
+the ones present in the submitted XML. The default ``changed_objects`` strategy prunes the
+payload down to the page shell + definitional children (QuickStyleDef etc.) + only the
+page-level objects the mutation actually changed — untouched outlines/images are never
+re-sent, so the merge cannot disturb them, and no piBinaryData read is needed.
+``whole_page`` (read piBinaryData, send everything) stays as the validated fallback. In BOTH
+strategies, every ``one:Image`` left in the payload gets its binary inlined (``one:Data``
+fetched via GetBinaryPageContent, ``CallbackID`` removed): CallbackID is a read-side
+construct, and an Image submitted without Data risks losing its pixels.
 """
 
 from __future__ import annotations
@@ -38,7 +39,8 @@ Mutator = Callable[[etree._Element], None]
 
 PayloadStrategy = Literal["changed_objects", "whole_page"]
 
-# Default pending Phase-4 VM validation (see module docstring).
+# DECIDED 2026-06-11 (Phase-4 VM round-trips): both strategies preserve untouched content;
+# changed_objects ships smaller payloads and needs no piBinaryData read, so it is the default.
 DEFAULT_PAYLOAD_STRATEGY: PayloadStrategy = "changed_objects"
 
 # strip_cdata=False keeps one:T CDATA sections verbatim through the read → write round-trip.

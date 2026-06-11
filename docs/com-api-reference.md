@@ -127,3 +127,35 @@ We reuse the **payload shapes** and tool-naming intuition, NOT its execution mod
 - `]]>` inside text breaks the CDATA wrapper — must be escaped.
 - mhzarem reads via **backup-file parsing (pyOneNote)** and writes via **PowerShell
   subprocess**. SPEC §1.1 forbids both: we use live COM through in-process pywin32 only.
+
+## VM-validated COM behaviors (Phase 4 Tier-2, 2026-06-11)
+
+Discovered against real OneNote (M365 desktop, early-bound makepy module) — these override
+any doc sketch above:
+
+- **`VT_DATE` params accept ONLY a PyTime instance.** A plain int, the makepy default tuple,
+  and omitting the parameter all raise `TypeError: must be a pywintypes time object`; and
+  pythoncom cannot marshal pre-1970 stamps (mktime → `OSError`), so the documented
+  "DATE 0 ⇒ skip the check" is **unreachable from Python**. The backend therefore always
+  carries a real stamp and resolves the node's CURRENT `lastModifiedTime` when the caller has
+  none. `pywintypes.Time` does NOT localize tz-aware datetimes — OneNote's UTC `…Z` stamps
+  must be converted to local naive before the comparison.
+- **The real error code hides in `com_error`'s excepinfo.** A server-side refusal surfaces as
+  DISP_E_EXCEPTION; the OneNote HRESULT (e.g. `hrLastModifiedDateDidNotMatch` 0x80042010,
+  `hrInvalidXML` 0x80042001) is the excepinfo tuple's `scode` (last element).
+- **`force=true` does NOT bypass `dateExpectedLastModified`** — it only overrides
+  unsaved-UI-edit protection. A forced write must carry the page's current stamp.
+- **`GetPageContent`'s `lastModifiedTime` does not refresh promptly after a programmatic
+  `UpdatePageContent`** (observed unchanged ≥10 s). Served and compared stamps stay consistent
+  with each other, so read-then-write flows are unaffected.
+- **`UpdateHierarchy` ignores a `one:Page` `name` attribute** — the hierarchy page name derives
+  from the title. A page rename is a Title edit via `UpdatePageContent`.
+- **The hierarchy schema is positional: all `one:Section` children precede all
+  `one:SectionGroup` siblings** at the same level (the UI renders groups last); an interleaved
+  child order is rejected with `hrInvalidXML`.
+- **A page moved to another section gets a NEW page ID** (page IDs embed the owning section
+  GUID). `move_page` re-reads the target section and returns the new ID.
+- **`DeletePageContent` refuses paragraph-level `one:OE` targets** (hr 0x8004200E) — it is for
+  page-level objects (Outline/Image/…). Deleting a paragraph = submitting its outline without
+  it via `UpdatePageContent` (merge replaces a submitted object's content wholesale). Phase 6
+  must scope `delete_page_content` accordingly.

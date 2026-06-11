@@ -87,3 +87,55 @@ def test_signatures_present_on_concrete_backend():
     for name in ("get_hierarchy", "get_page_content", "update_page_content", "find_pages"):
         assert callable(getattr(FixtureBackend, name))
         assert inspect.signature(getattr(FixtureBackend, name))
+
+
+# --- Win32ComBackend._call error mapping (no COM needed: the connection is lazy) --------
+
+
+def _win32_backend():
+    from onenote_com_mcp.backend.win32com_backend import Win32ComBackend
+
+    return Win32ComBackend()  # __init__ touches no COM; only .app would
+
+
+def test_call_maps_concurrency_hresult_to_concurrency_error():
+    from onenote_com_mcp.errors import ConcurrencyError
+
+    be = _win32_backend()
+
+    def stale_write():
+        raise Exception(0x80042010 - 0x1_0000_0000, "hrLastModifiedDateDidNotMatch")
+
+    with pytest.raises(ConcurrencyError, match="changed since it was read"):
+        be._call("UpdatePageContent", stale_write)
+
+
+def test_call_wraps_other_com_errors():
+    from onenote_com_mcp.errors import OneNoteComError
+
+    be = _win32_backend()
+
+    def boom():
+        raise Exception(-2147213312, "some other failure")
+
+    with pytest.raises(OneNoteComError):
+        be._call("GetPageContent", boom)
+
+
+def test_call_unwraps_excepinfo_scode():
+    # a real OneNote refusal arrives as DISP_E_EXCEPTION with the actual code (here
+    # hrLastModifiedDateDidNotMatch) buried in excepinfo's scode — VM ground truth
+    from onenote_com_mcp.errors import ConcurrencyError
+
+    be = _win32_backend()
+
+    def stale_write():
+        raise Exception(
+            -2147352567,  # DISP_E_EXCEPTION
+            "exception occurred",
+            (0, None, None, None, 0, 0x80042010 - 0x1_0000_0000),
+            None,
+        )
+
+    with pytest.raises(ConcurrencyError):
+        be._call("UpdatePageContent", stale_write)

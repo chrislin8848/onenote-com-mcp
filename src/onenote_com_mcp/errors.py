@@ -22,6 +22,24 @@ def is_retryable_hresult(hresult: int | None) -> bool:
     return hresult is not None and hresult in _RETRYABLE_HRESULTS
 
 
+# hrLastModifiedDateDidNotMatch — the dateExpectedLastModified concurrency guard tripping
+# on UpdatePageContent / DeletePageContent / DeleteHierarchy. Not a failure: the page/node
+# changed since it was read. Both unsigned and pywin32's signed form.
+HR_LAST_MODIFIED_MISMATCH = 0x80042010  # -2147213296 signed
+
+_CONCURRENCY_HRESULTS = frozenset(
+    {
+        HR_LAST_MODIFIED_MISMATCH,
+        HR_LAST_MODIFIED_MISMATCH - 0x1_0000_0000,
+    }
+)
+
+
+def is_concurrency_hresult(hresult: int | None) -> bool:
+    """True if a COM HRESULT means 'the target changed since you read it' (SPEC §5)."""
+    return hresult is not None and hresult in _CONCURRENCY_HRESULTS
+
+
 class OneNoteError(Exception):
     """Base class for all OneNote MCP errors."""
 

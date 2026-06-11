@@ -120,8 +120,12 @@ def test_mixed_section_and_group_children_must_both_survive(tmp_path):
     [
         lambda be: hierarchy_edit.restructure_section(be, _SEC_ID, [{"page_id": "x"}]),
         lambda be: hierarchy_edit.reorder_sections(be, _SEC_ID, ["a", "b"]),
-        lambda be: hierarchy_edit.rename_node(be, _SEC_ID, "{P1}{1}{B0}", "new"),
-        lambda be: hierarchy_edit.move_page(be, _SEC_ID, "{P1}{1}{B0}", "{SEC2}{1}{B0}"),
+        # rename of a SECTION stays in the hierarchy seam. A PAGE rename is a title edit and
+        # routes through the page-content seam instead (VM ground truth — see
+        # tests/test_hierarchy_mutations.py for that guard).
+        lambda be: hierarchy_edit.rename_node(be, _SEC_ID, _SEC_ID, "new"),
+        # target == the same section: the post-move new-ID re-read stays on the fixture
+        lambda be: hierarchy_edit.move_page(be, _SEC_ID, "{P1}{1}{B0}", _SEC_ID),
     ],
     ids=["restructure_section", "reorder_sections", "rename_node", "move_page"],
 )

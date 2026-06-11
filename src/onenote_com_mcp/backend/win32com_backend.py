@@ -15,6 +15,7 @@ an out-of-process COM server in the autologon session, so DCOM activation reache
 from __future__ import annotations
 
 import datetime as _dt
+import re
 import time
 
 from onenote_com_mcp.backend.base import CurrentWindowIds, OneNoteBackend
@@ -28,19 +29,34 @@ from onenote_com_mcp.enums import (
 )
 from onenote_com_mcp.errors import (
     BackendUnavailableError,
+    ConcurrencyError,
     NoCurrentWindowError,
     OneNoteComError,
     OneNoteError,
+    is_concurrency_hresult,
     is_retryable_hresult,
 )
 
 _MAX_RETRIES = 6
 _BASE_DELAY_S = 0.25
 
+_STAMP_RE = re.compile(r'lastModifiedTime="([^"]+)"')
+_PAGE_ID_RE = re.compile(r'\bID="([^"]+)"')
+
 
 def _hresult_of(exc: Exception) -> int | None:
-    """Pull the HRESULT out of a pywintypes.com_error, if present."""
+    """Pull the meaningful HRESULT out of a pywintypes.com_error, if present.
+
+    ``com_error.args`` is ``(hresult, message, excepinfo, argerror)``. When OneNote raises a
+    server-side exception, the outer hresult is just DISP_E_EXCEPTION — the actual OneNote
+    error code (hrLastModifiedDateDidNotMatch, hrInvalidXML, …) is the excepinfo's ``scode``
+    (its last element). VM ground truth 2026-06-11.
+    """
     args = getattr(exc, "args", ())
+    if len(args) >= 3 and isinstance(args[2], tuple) and args[2]:
+        scode = args[2][-1]
+        if isinstance(scode, int) and scode != 0:
+            return scode
     if args and isinstance(args[0], int):
         return args[0]
     return getattr(exc, "hresult", None)
@@ -102,21 +118,55 @@ class Win32ComBackend(OneNoteBackend):
                     last = exc
                     time.sleep(_BASE_DELAY_S * (2**attempt))
                     continue
+                if is_concurrency_hresult(hr):
+                    raise ConcurrencyError(
+                        f"{name} refused: the target changed since it was read "
+                        "(dateExpectedLastModified mismatch). Re-read and retry; force only "
+                        "with explicit user approval."
+                    ) from exc
                 raise OneNoteComError(f"{name} failed", hresult=hr) from exc
         raise OneNoteComError(
             f"{name} kept returning busy after retries", hresult=_hresult_of(last)
         )
 
     @staticmethod
-    def _com_date(value: _dt.datetime | None):
-        """Convert a datetime to a COM DATE; ``None`` → 0 (skip the concurrency check)."""
-        if value is None:
-            return 0
-        import pythoncom  # noqa: PLC0415
+    def _date_kwargs(value: _dt.datetime | None) -> dict:
+        """``dateExpectedLastModified`` kwargs for a makepy call.
+
+        VM ground truth (2026-06-11): the early-bound VT_DATE param accepts ONLY a PyTime —
+        a plain int, the makepy default tuple, and even omitting the parameter all fail with
+        ``must be a pywintypes time object``; AND pythoncom cannot marshal pre-1970 stamps
+        (mktime → OSError), so the documented "DATE 0 == skip the check" is UNREACHABLE from
+        Python. Callers therefore must always supply a real stamp — the write/delete methods
+        below resolve the node's CURRENT stamp when given None (which is also what SPEC §5
+        wants: every write/delete carries the lastModifiedTime from a read). VT_DATE is
+        timezone-less local time and ``pywintypes.Time`` does NOT localize aware datetimes,
+        so OneNote's UTC ``...Z`` stamps are converted to local naive before the comparison.
+        """
         import pywintypes  # noqa: PLC0415
 
-        _ = pythoncom  # imported to ensure COM types registered
-        return pywintypes.Time(value)
+        if value is None:
+            raise OneNoteComError(
+                "dateExpectedLastModified is required (COM cannot express 'skip the check') "
+                "— resolve the node's current lastModifiedTime first"
+            )
+        if value.tzinfo is not None:
+            value = value.astimezone().replace(tzinfo=None)
+        return {"dateExpectedLastModified": pywintypes.Time(value)}
+
+    @staticmethod
+    def _xml_stamp(xml: str) -> _dt.datetime | None:
+        """First ``lastModifiedTime`` attribute in an XML string → aware datetime.
+
+        Deliberately a regex, not a parse-layer call: the backend stays a thin COM mirror
+        (SPEC §3) and only needs this one attribute to satisfy VT_DATE marshalling."""
+        match = _STAMP_RE.search(xml)
+        if not match:
+            return None
+        try:
+            return _dt.datetime.fromisoformat(match.group(1).replace("Z", "+00:00"))
+        except ValueError:
+            return None
 
     _SCHEMA = int(XMLSchema.xs2013)
 
@@ -153,10 +203,18 @@ class Win32ComBackend(OneNoteBackend):
         expected_last_modified: _dt.datetime | None = None,
         permanent: bool = False,
     ) -> None:
+        if expected_last_modified is None:
+            # SPEC §5: deletes carry the node's stamp. Resolve the CURRENT one — "skip the
+            # check" is not marshallable (see _date_kwargs).
+            expected_last_modified = self._xml_stamp(
+                self.get_hierarchy(object_id, HierarchyScope.hsSelf)
+            )
         self._call(
             "DeleteHierarchy",
             lambda: self.app.DeleteHierarchy(
-                object_id, self._com_date(expected_last_modified), permanent
+                object_id,
+                deletePermanently=permanent,
+                **self._date_kwargs(expected_last_modified),
             ),
         )
 
@@ -180,10 +238,25 @@ class Win32ComBackend(OneNoteBackend):
         expected_last_modified: _dt.datetime | None = None,
         force: bool = False,
     ) -> None:
+        if force:
+            # VM ground truth (2026-06-11): COM's force flag does NOT bypass the date check —
+            # it only overrides unsaved-UI-edit protection. Our contract's force means
+            # "overwrite even though it changed", so resolve and carry the CURRENT stamp.
+            expected_last_modified = None
+        elif expected_last_modified is None:
+            # the payload normally carries the stamp of the read it was built from
+            expected_last_modified = self._xml_stamp(changes_xml)
+        if expected_last_modified is None and (match := _PAGE_ID_RE.search(changes_xml)):
+            expected_last_modified = self._xml_stamp(
+                self.get_page_content(match.group(1), PageInfo.piBasic)
+            )
         self._call(
             "UpdatePageContent",
             lambda: self.app.UpdatePageContent(
-                changes_xml, self._com_date(expected_last_modified), self._SCHEMA, force
+                changes_xml,
+                xsSchema=self._SCHEMA,
+                force=force,
+                **self._date_kwargs(expected_last_modified),
             ),
         )
 
@@ -200,10 +273,17 @@ class Win32ComBackend(OneNoteBackend):
         expected_last_modified: _dt.datetime | None = None,
         force: bool = False,
     ) -> None:
+        if expected_last_modified is None:
+            expected_last_modified = self._xml_stamp(
+                self.get_page_content(page_id, PageInfo.piBasic)
+            )
         self._call(
             "DeletePageContent",
             lambda: self.app.DeletePageContent(
-                page_id, object_id, self._com_date(expected_last_modified), force
+                page_id,
+                object_id,
+                force=force,
+                **self._date_kwargs(expected_last_modified),
             ),
         )
 
