@@ -26,6 +26,10 @@ Where the real fixtures disagreed with the sketches below, the fixtures won. The
 - **`one:Image` carries `one:CallbackID` as a CHILD element** (`<one:CallbackID
   callbackID="{…}"/>`), not a `callbackID` attribute as sketched below — read both. No
   `format` attribute was present on the dumped image.
+- **`one:Image` has NO `objectID` of its own** (confirmed Phase 2): the deletable page-content
+  object is the enclosing `one:OE`, which holds the `objectID`. So `delete_page_content`
+  (Phase 6) for an image must target the wrapping OE's ID, and the read tools surface that OE
+  ID as the image block's `object_id`. Tables and cells *do* carry their own `objectID`.
 - **Inline `one:Data` may be absent even on a `piBinaryData` dump** (observed on the 圖片頁
   dump); image bytes reliably come from `GetBinaryPageContent(callback_id)` instead. The
   copy path (Phase 5) must verify on the VM what `piBinaryData` actually inlines.

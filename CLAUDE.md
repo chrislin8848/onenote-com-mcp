@@ -87,18 +87,25 @@ ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_com_mcp   # run ser
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
 ## Status (2026-06-11)
-Phases 0a, 0b, and **1 done**. The VM is up (COM smoke passed), real fixtures are dumped into
-`tests/fixtures/`, and the XML layer is implemented TDD-first against them: `spans.py` (CDATA
-rich-text runs), `models.py` (lxml-node-backed views), `parse.py` (`parse_hierarchy`/`parse_page`
-+ three-layer effective style QuickStyleDef → OE style → span), `build.py` (fragment builders,
-highlight dual-write). All three seams remain guard-tested. Pushed to GitHub
-(`chrislin8848/onenote-com-mcp`, private).
+Phases 0a, 0b, 1, and **2 done**. The VM is up (COM smoke passed), real fixtures are dumped into
+`tests/fixtures/`, the XML layer is implemented TDD-first against them (`spans.py`, `models.py`,
+`parse.py` three-layer effective style, `build.py` highlight dual-write), and the seven read
+tools are wired through `service/read.py` onto `FixtureBackend` (Linux green). All three seams
+remain guard-tested. Pushed to GitHub (`chrislin8848/onenote-com-mcp`, private).
 
-**Next (Phase 2):** wire the read tools (`list_*`, `get_page`, `get_page_images`,
-`search_pages`, `get_current_context`) through the service layer onto `FixtureBackend`, Linux
-green. Ground-truth deviations from the original schema sketch (e.g. `one:CallbackID` is a child
-element, inline `one:Data` may be absent even on piBinaryData dumps) are recorded in
-docs/onenote-xml-schema.md — trust the fixtures over the sketch.
+Phase 2 shape: `service/read.py` does the orchestration (backend call → parse → project →
+resolve IDs to names), pure-Python and testable on Linux; `server.py` tools are thin facades
+(`json.dumps` for text, FastMCP `Image` content for `get_page_images` — `@mcp.tool(
+structured_output=False)` since `Image` has no pydantic output schema). `get_page` is the
+lossless runs+style model (effective style per run, structured tables, every content object's
+`objectID`); `get_current_context` resolves the window's four `Current*Id`s via one scoped
+`GetHierarchy(notebook, hsPages)`. Ground truth: a `one:Image` has NO `objectID` — the deletable
+ID is on the enclosing `one:OE` (Phase 6 `delete_page_content` must target the OE).
+
+**Next (Phase 3):** `Win32ComBackend` + `dump_fixtures.py` are already done (commit 803ca55);
+remaining is the VM read-integration loop via `scripts/remote_test.sh` (`@pytest.mark.windows`
+round-trips), plus the deferred `remote_test.sh` rsync→tar fix (guest has no rsync) and the
+formal `onenote-tier2` schtasks task. Trust fixtures over the schema sketch.
 
 ## Grounding
 - `docs/SPEC.md` — the spec itself (v0611: + get_current_context, section-group integration).

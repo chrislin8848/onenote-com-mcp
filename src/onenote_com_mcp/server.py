@@ -10,14 +10,22 @@ stdio transport: nothing but MCP protocol may go to stdout. Logs go to stderr (S
 
 from __future__ import annotations
 
+import base64
+import json
 import sys
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 
 from onenote_com_mcp.backend import get_backend
-from onenote_com_mcp.service import copy, hierarchy_edit, page_edit
+from onenote_com_mcp.service import copy, hierarchy_edit, page_edit, read
 
 mcp = FastMCP("onenote")
+
+
+def _json(data: object) -> str:
+    # ensure_ascii=False keeps CJK note content readable in the tool result
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
 
 # --- Read (Phase 2: wired to FixtureBackend on Linux) -----------------------
 
@@ -25,38 +33,45 @@ mcp = FastMCP("onenote")
 @mcp.tool()
 def list_notebooks() -> str:
     """List all open OneNote notebooks (name + ID)."""
-    raise NotImplementedError("Phase 2")
+    return _json(read.list_notebooks(get_backend()))
 
 
 @mcp.tool()
 def list_sections(notebook_id: str) -> str:
     """List sections in a notebook (name + ID), preserving section-group nesting
     (one:SectionGroup containers appear as nested groups, not flattened)."""
-    raise NotImplementedError("Phase 2")
+    return _json(read.list_sections(get_backend(), notebook_id))
 
 
 @mcp.tool()
 def list_pages(section_id: str) -> str:
     """List pages in a section, including each page's subpage level (pageLevel)."""
-    raise NotImplementedError("Phase 2")
+    return _json(read.list_pages(get_backend(), section_id))
 
 
 @mcp.tool()
 def search_pages(query: str, scope_id: str = "") -> str:
     """Full-text search for pages. Scope to a notebook/section ID (recommended)."""
-    raise NotImplementedError("Phase 2")
+    return _json(read.search_pages(get_backend(), query, scope_id))
 
 
 @mcp.tool()
 def get_page(page_id: str) -> str:
     """Read a page preserving rich text formatting, structure, tables, and object IDs."""
-    raise NotImplementedError("Phase 2")
+    return _json(read.get_page(get_backend(), page_id))
 
 
-@mcp.tool()
-def get_page_images(page_id: str) -> str:
-    """Return a page's images (binary) as viewable image content."""
-    raise NotImplementedError("Phase 2")
+# structured_output=False: the return is image content, not a JSON schema — FastMCP can't
+# build a pydantic output schema for Image, and we don't want one here.
+@mcp.tool(structured_output=False)
+def get_page_images(page_id: str) -> list[Image]:
+    """Return a page's images (binary) as viewable image content. Per-image metadata
+    (object IDs, dimensions, OCR text) is on get_page; this returns the pixels so they can
+    be recognized visually."""
+    return [
+        Image(data=base64.b64decode(img["data_base64"]), format=img["media_type"].split("/")[-1])
+        for img in read.get_page_images(get_backend(), page_id)
+    ]
 
 
 @mcp.tool()
@@ -67,7 +82,7 @@ def get_current_context() -> str:
     selected text are not available. Errors clearly if OneNote has no open window.
     Before acting on this context, report it back ("you're currently on page X") so the
     user can confirm they haven't switched pages since."""
-    raise NotImplementedError("Phase 2")
+    return _json(read.get_current_context(get_backend()))
 
 
 # --- Create (Phase 4) -------------------------------------------------------

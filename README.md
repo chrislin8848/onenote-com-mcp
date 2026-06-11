@@ -20,7 +20,7 @@ any employee with synced OneNote and needs no admin setup.
 | **0a** | Host scaffold: backend interface, guarded import, FixtureBackend, server tool catalog, CI | ✅ done |
 | **0b** | Windows 11 VM + autologon + secondary-session runner + `remote_test` + COM smoke | ✅ done |
 | **1** | XML parse/build (lxml) + format preservation, TDD against **real VM fixtures** | ✅ done |
-| 2 | Read tools incl. `get_current_context` on `FixtureBackend` (Linux green) | ▶ **next** |
+| **2** | Read tools incl. `get_current_context` on `FixtureBackend` (Linux green) | ✅ done |
 | 3 | `Win32ComBackend` live + `dump_fixtures.py` | 🔶 COM binding + fixture dump done; VM read-integration loop pending |
 | 4 | Write tools + hierarchy restructure tools (whole-batch UpdateHierarchy; move_page VM-gated) + concurrency guard + format-preservation regression | ⛔ blocked |
 | 5 | Copy/transfer (raw-XML faithful copy) | ⛔ blocked |
@@ -32,6 +32,16 @@ recycle-bin filtering), `parse_page` (three-layer effective style: `QuickStyleDe
 OE `style` → inline span, highlight dual-attribute, structured tables, image callback IDs),
 and `build_*` fragment builders that round-trip through the parser. Ground-truth findings
 are recorded in [docs/onenote-xml-schema.md](docs/onenote-xml-schema.md).
+
+Phase 2 (2026-06-11): the seven read tools (`list_notebooks` / `list_sections` / `list_pages`
+/ `search_pages` / `get_page` / `get_page_images` / `get_current_context`) wired through
+[`service/read.py`](src/onenote_com_mcp/service/read.py) onto `FixtureBackend`, Linux green.
+`get_page` returns a lossless runs+style model with structured tables and every content
+object's `objectID`; `get_page_images` returns MCP image content (binary via
+`GetBinaryPageContent`, media type sniffed from the magic number); `get_current_context`
+resolves the active window's four `Current*Id`s to names via one scoped `GetHierarchy`.
+Ground-truth finding baked in: a `one:Image` has no `objectID` of its own — the deletable
+object ID lives on the enclosing `one:OE` (matters for Phase 6 `delete_page_content`).
 
 ## Develop (Linux host)
 
