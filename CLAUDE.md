@@ -194,8 +194,28 @@ outlines render as nothing and are dropped on transplant (B≡A ignores them). V
 NEVER probe COM writes over plain SSH — a hung OpenHierarchy blocked OneNote's single-threaded
 COM for everything; writes only via the interactive Tier-2 task.
 
+## Phase 6 (next — SPEC v0612)
+Deletes (`delete_node` hierarchy incl. section group + `delete_page_content` page-level objects:
+image/table/outline — target the enclosing `one:OE`, recycle-bin default), error/retry
+hardening, smoke tests, then packaging (PyInstaller → Inno/NSIS `OneNoteMCP-Setup.exe`). Two new
+SPEC v0612 deliverables:
+- **Diagnostic log (§7), default OFF.** Env switch `ONENOTE_MCP_LOG_LEVEL` (default `ERROR`;
+  `DEBUG` on) + `ONENOTE_MCP_LOG_FILE`; rotating file (`%LOCALAPPDATA%\OneNoteMCP\logs\`) and/or
+  stderr, **never stdout** (JSON-RPC). One record per tool call: name, params (large/base64
+  fields truncated), result + COM error code. Logging must never throw/interrupt; write-fail →
+  silent-degrade to stderr. `--configure` does NOT write the var. Mostly host-doable + testable.
+- **Tool-description enhancement (§4), one cross-set pass.** Contrastive/negative borders on
+  confusable pairs (delete_node vs delete_page_content; update_page_content vs create_table vs
+  insert_image; restructure_section vs reorder_sections vs move_page vs rename_node; get_page vs
+  get_page_images), DESTRUCTIVE + propose-confirm contracts in description text, append/insert/
+  replace as a per-value enum, server-level `instructions`, read tools return `objectID`s.
+  **Acceptance is real Claude Desktop (Chris), NOT CC sub-agents** (SPEC §4 — sub-agents pollute
+  the naive-Claude test). Open decision: unify the `restructure_section`/`reorder_sections`
+  verb/plural mismatch IF the API isn't externally frozen.
+
 ## Grounding
-- `docs/SPEC.md` — the spec itself (v0611: + get_current_context, section-group integration).
+- `docs/SPEC.md` — the spec itself (v0612: create_notebook/copy_notebook removed; + tool-
+  description enhancement §4, diagnostic log §7 — both Phase 6).
 - `docs/com-api-reference.md` — COM signatures + enums (from Microsoft Learn).
 - `docs/onenote-xml-schema.md` — `one:` page/hierarchy XML + format-preservation rules.
 - `docs/vm-setup.md` — Phase 0b Windows VM build (autologon, desktop OneNote, COM smoke, Tier-2).
