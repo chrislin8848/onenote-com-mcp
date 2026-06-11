@@ -87,16 +87,18 @@ ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_com_mcp   # run ser
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
 ## Status (2026-06-11)
-Phase 0a (host scaffold) done; all three seams (write-core convergence, copy direct-path,
-whole-batch hierarchy restructure) in place and guard-tested; SPEC v0611 intaken (22 tools incl.
-get_current_context + section-group integration); all pushed to GitHub
-(`chrislin8848/onenote-com-mcp`, private). **Blocked on the Windows VM** for fixtures → Phase 1
-(parse/build TDD) and everything COM. Phase 0b build guide: `docs/vm-setup.md`.
+Phases 0a, 0b, and **1 done**. The VM is up (COM smoke passed), real fixtures are dumped into
+`tests/fixtures/`, and the XML layer is implemented TDD-first against them: `spans.py` (CDATA
+rich-text runs), `models.py` (lxml-node-backed views), `parse.py` (`parse_hierarchy`/`parse_page`
++ three-layer effective style QuickStyleDef → OE style → span), `build.py` (fragment builders,
+highlight dual-write). All three seams remain guard-tested. Pushed to GitHub
+(`chrislin8848/onenote-com-mcp`, private).
 
-**Tomorrow's handoff (after the VM is up):** Chris brings (a) the COM smoke result — which pywin32
-binding worked + how `GetHierarchy` returns its `[out]` value, (b) 2–3 real page IDs (mixed
-styling / table / image). Then: finalize `Win32ComBackend` out-param handling, complete
-`scripts/dump_fixtures.py`, dump real fixtures, start Phase 1 parse/build TDD. See README "Status".
+**Next (Phase 2):** wire the read tools (`list_*`, `get_page`, `get_page_images`,
+`search_pages`, `get_current_context`) through the service layer onto `FixtureBackend`, Linux
+green. Ground-truth deviations from the original schema sketch (e.g. `one:CallbackID` is a child
+element, inline `one:Data` may be absent even on piBinaryData dumps) are recorded in
+docs/onenote-xml-schema.md — trust the fixtures over the sketch.
 
 ## Grounding
 - `docs/SPEC.md` — the spec itself (v0611: + get_current_context, section-group integration).

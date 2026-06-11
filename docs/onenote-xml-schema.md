@@ -11,6 +11,35 @@ Grounding for Phase 1 (`onenote_com_mcp.xmllayer`). The **format-preservation re
 > against a real dump before the parser is trusted.** Treat this doc as the design target,
 > the dumped fixtures as ground truth.
 
+## Ground-truth findings (2026-06-11, real VM dumps — Phase 1)
+
+Where the real fixtures disagreed with the sketches below, the fixtures won. The parser
+(`xmllayer/parse.py`, `xmllayer/spans.py`) bakes these in:
+
+- **`one:T` CDATA is word-wrapped by OneNote** — newlines appear between attributes AND
+  *inside* attribute values (`style='font-family:\n\n"Microsoft JhengHei"'`). Parse the
+  CDATA with a real HTML parser (`html.parser`), never a regex; collapse whitespace when
+  splitting style declarations.
+- **Attribute quoting varies**: `style` is single-quoted, font names may be double-quoted,
+  single-quoted, or bare CJK (`font-family:新細明體`); `lang=zh-TW` is unquoted. HTML
+  entities (`&nbsp;`) appear inside the CDATA and must decode (→ U+00A0).
+- **`one:Image` carries `one:CallbackID` as a CHILD element** (`<one:CallbackID
+  callbackID="{…}"/>`), not a `callbackID` attribute as sketched below — read both. No
+  `format` attribute was present on the dumped image.
+- **Inline `one:Data` may be absent even on a `piBinaryData` dump** (observed on the 圖片頁
+  dump); image bytes reliably come from `GetBinaryPageContent(callback_id)` instead. The
+  copy path (Phase 5) must verify on the VM what `piBinaryData` actually inlines.
+- **The OE `style` attribute is a third style layer**: effective run style =
+  `QuickStyleDef` baseline (via `quickStyleIndex`) ← OE `style` attr ← inline span style.
+  The sketch below only shows two layers. OE `style` may itself contain `color`,
+  `text-align`, etc., and is also word-wrapped.
+- **Table cells** carry `shadingColor` on `one:Cell`; alignment lives on the cell's inner
+  OE (`alignment` + `text-align` in its `style`). An empty cell is `<one:T/>` (present but
+  empty). `one:Table` has `hasHeaderRow`; `one:Column` has `isLocked`.
+- The mixed-style page's `QuickStyleDef`s carried only
+  `name/fontColor/highlightColor/font/fontSize/spaceBefore/spaceAfter` (no `bold`/`italic`
+  attrs observed — the parser still accepts them).
+
 Namespace prefix `one:` = `http://schemas.microsoft.com/office/onenote/2013/onenote`.
 
 ## Hierarchy XML (`GetHierarchy` / `FindPages` output)

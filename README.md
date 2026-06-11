@@ -18,17 +18,20 @@ any employee with synced OneNote and needs no admin setup.
 | Phase | What | State |
 |---|---|---|
 | **0a** | Host scaffold: backend interface, guarded import, FixtureBackend, server tool catalog, CI | ✅ done |
-| 0b | Windows 11 VM + autologon + secondary-session runner + `remote_test` + COM smoke | ⛔ **blocked: VM not built yet** |
-| 1 | XML parse/build (lxml) + format preservation, TDD against **real VM fixtures** | ⛔ blocked on 0b (fixtures) |
-| 2 | Read tools incl. `get_current_context` on `FixtureBackend` (Linux green) | ⛔ blocked on 0b (fixtures) |
-| 3 | `Win32ComBackend` live + `dump_fixtures.py` | ⛔ blocked on 0b |
+| **0b** | Windows 11 VM + autologon + secondary-session runner + `remote_test` + COM smoke | ✅ done |
+| **1** | XML parse/build (lxml) + format preservation, TDD against **real VM fixtures** | ✅ done |
+| 2 | Read tools incl. `get_current_context` on `FixtureBackend` (Linux green) | ▶ **next** |
+| 3 | `Win32ComBackend` live + `dump_fixtures.py` | 🔶 COM binding + fixture dump done; VM read-integration loop pending |
 | 4 | Write tools + hierarchy restructure tools (whole-batch UpdateHierarchy; move_page VM-gated) + concurrency guard + format-preservation regression | ⛔ blocked |
 | 5 | Copy/transfer (raw-XML faithful copy) | ⛔ blocked |
 | 6 | Delete + retry hardening + **PyInstaller/Inno installer** | ⛔ blocked |
 
-**Next bottleneck: build the Windows VM (Phase 0b)** — step-by-step guide in
-[docs/vm-setup.md](docs/vm-setup.md). Per the 2026-06-10 decision, fixtures come from real
-OneNote (not synthetic), so Phase 1 onward needs the VM up and `scripts/dump_fixtures.py` run once.
+Phase 1 (2026-06-11): `xmllayer/` parse + build implemented TDD-first against the real VM
+dumps in `tests/fixtures/` — `parse_hierarchy` (mixed section/section-group nesting,
+recycle-bin filtering), `parse_page` (three-layer effective style: `QuickStyleDef` →
+OE `style` → inline span, highlight dual-attribute, structured tables, image callback IDs),
+and `build_*` fragment builders that round-trip through the parser. Ground-truth findings
+are recorded in [docs/onenote-xml-schema.md](docs/onenote-xml-schema.md).
 
 ## Develop (Linux host)
 
