@@ -17,11 +17,12 @@ from __future__ import annotations
 from lxml import etree
 
 from onenote_com_mcp.backend.base import OneNoteBackend
-from onenote_com_mcp.enums import HierarchyScope, NewPageStyle, PageInfo
+from onenote_com_mcp.enums import CreateFileType, HierarchyScope, NewPageStyle, PageInfo
 from onenote_com_mcp.errors import NodeNotFoundError
+from onenote_com_mcp.service.create import create_notebook, create_section
 from onenote_com_mcp.service.hierarchy_edit import apply_hierarchy_restructure
 from onenote_com_mcp.service.page_edit import inline_image_binaries, parse_onenote_datetime
-from onenote_com_mcp.xmllayer.namespaces import qn
+from onenote_com_mcp.xmllayer.namespaces import local_name, qn
 
 # strip_cdata=False keeps one:T CDATA sections verbatim — byte-level span fidelity.
 _PARSER = etree.XMLParser(strip_cdata=False)
@@ -86,13 +87,79 @@ def _transplant_raw_page(
     return new_page_id
 
 
-def transfer_section(backend: OneNoteBackend, section_id: str, target_notebook_id: str) -> str:
-    raise NotImplementedError("Phase 5 Stage 2: create target section, then transfer_page each")
+def _find_node(tree: etree._Element, node_id: str) -> etree._Element:
+    el = next((e for e in tree.iter() if e.get("ID") == node_id), None)
+    if el is None:
+        raise NodeNotFoundError(f"no node with ID {node_id!r} in this hierarchy scope")
+    return el
+
+
+def _unique_child_name(backend: OneNoteBackend, parent_id: str, name: str) -> str:
+    """De-collide a section/group name among the target parent's direct children.
+
+    ``OpenHierarchy`` OPENS an existing same-named node instead of creating one — a copy
+    would silently merge into it. Existing name → "name (2)", "name (3)", …"""
+    tree = etree.fromstring(
+        backend.get_hierarchy(parent_id, HierarchyScope.hsSections).encode("utf-8")
+    )
+    parent = _find_node(tree, parent_id)
+    taken = {
+        child.get("name")
+        for child in parent
+        if local_name(child.tag) in ("Section", "SectionGroup")
+    }
+    if name not in taken:
+        return name
+    n = 2
+    while f"{name} ({n})" in taken:
+        n += 1
+    return f"{name} ({n})"
+
+
+def transfer_section(backend: OneNoteBackend, section_id: str, target_parent_id: str) -> str:
+    """Faithfully copy a whole section into a notebook OR section group.
+
+    The new section takes the source's name (de-collided); pages are copied in document
+    order via ``transfer_page``, each keeping its ``pageLevel`` (subpage nesting survives).
+    Returns the new section ID."""
+    tree = etree.fromstring(
+        backend.get_hierarchy(section_id, HierarchyScope.hsPages).encode("utf-8")
+    )
+    source = _find_node(tree, section_id)
+    name = _unique_child_name(backend, target_parent_id, source.get("name") or "Section")
+    new_section_id = create_section(backend, target_parent_id, name)
+    for page in source.findall(qn("Page")):
+        transfer_page(backend, page.get("ID"), new_section_id)
+    return new_section_id
 
 
 def transfer_notebook(backend: OneNoteBackend, notebook_id: str, name: str, path: str) -> str:
-    raise NotImplementedError(
-        "Phase 5 Stage 2: create target notebook (sync-path constraints), recreate each source "
-        "section group via OpenHierarchy(cftFolder) so sections land INSIDE their groups "
-        "(never flattened — SPEC §5), SKIP recycle-bin groups, then transfer_section each"
+    """Faithfully copy a whole notebook (subject to create_notebook's sync-path constraints).
+
+    Section groups are recreated via ``OpenHierarchy(cftFolder)`` so sections land INSIDE
+    their groups, never flattened (SPEC §5). Recycle-bin groups are SKIPPED — the
+    user-approved recycle-bin policy: never clone another notebook's wastebasket."""
+    new_notebook_id = create_notebook(backend, name, path)
+    tree = etree.fromstring(
+        backend.get_hierarchy(notebook_id, HierarchyScope.hsSections).encode("utf-8")
     )
+    _transfer_children(backend, _find_node(tree, notebook_id), new_notebook_id)
+    return new_notebook_id
+
+
+def _transfer_children(
+    backend: OneNoteBackend, container: etree._Element, target_parent_id: str
+) -> None:
+    """Recreate a container's mixed Section + SectionGroup children in document order."""
+    for child in container:
+        kind = local_name(child.tag)
+        if kind == "Section":
+            transfer_section(backend, child.get("ID"), target_parent_id)
+        elif kind == "SectionGroup":
+            if child.get("isRecycleBin") == "true":
+                continue  # policy: the recycle bin never rides along on a clone
+            group_name = _unique_child_name(backend, target_parent_id, child.get("name") or "Group")
+            group_id = backend.open_hierarchy(
+                group_name, target_parent_id, CreateFileType.cftFolder
+            )
+            _transfer_children(backend, child, group_id)

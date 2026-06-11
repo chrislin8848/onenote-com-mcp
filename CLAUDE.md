@@ -167,6 +167,23 @@ in whole-batch UpdateHierarchy, never an operation target (move_page rejects it)
 `copy_notebook` must SKIP recycle-bin groups when recreating section groups (+ test). Phase 6:
 deletes stay default-to-recycle-bin (`permanent=False`) — the recycle bin is the undo net.
 
+**Phase 5 IN PROGRESS — staged.** Stage 1 DONE (2026-06-11): `transfer_page()` raw-XML clone
+inside the copy seam — piBinaryData read, pixels inlined via the now-public
+`page_edit.inline_image_binaries()` (binary dumps serve only CallbackID), identity/stamps/view
+state stripped (QuickStyleDef/TagDef/spans/author attrs ride verbatim, `strip_cdata=False`),
+transplanted onto a `npsBlankPageNoTitle` page in ONE UpdatePageContent guarded by the BLANK
+page's stamp, source pageLevel preserved via the whole-batch hierarchy seam. Tier-1:
+`tests/test_copy_page.py` (byte-level fidelity on real binary fixtures).
+Stage 2 DONE (2026-06-11): `transfer_section` (pages in document order, per-page pageLevel;
+target = notebook OR group) + `transfer_notebook` (groups recreated via
+`OpenHierarchy(cftFolder)`, sections land INSIDE groups, **recycle-bin groups skipped** per
+policy). Key trap handled: `OpenHierarchy` OPENS an existing same-named node instead of
+creating — copies de-collide names with " (2)", " (3)", … against the target's direct children
+(both kinds). Tier-1: `tests/test_copy_tree.py`.
+Remaining: **Stage 3** Tier-2 VM B≡A fidelity round-trips (copy the three dump-source pages →
+semantic equality + image bytes; copy_section / copy_notebook incl. group recreation +
+recycle skip live).
+
 ## Grounding
 - `docs/SPEC.md` — the spec itself (v0611: + get_current_context, section-group integration).
 - `docs/com-api-reference.md` — COM signatures + enums (from Microsoft Learn).

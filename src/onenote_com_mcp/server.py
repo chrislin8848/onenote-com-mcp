@@ -214,17 +214,20 @@ def copy_page(page_id: str, target_section_id: str) -> str:
 
 
 @mcp.tool()
-def copy_section(section_id: str, target_notebook_id: str) -> str:
-    """Faithfully copy a whole section into a notebook."""
-    return copy.transfer_section(get_backend(), section_id, target_notebook_id)
+def copy_section(section_id: str, target_parent_id: str) -> str:
+    """Faithfully copy a whole section (pages in order, subpage levels kept) into a notebook
+    OR section group. The copy keeps the source name, de-collided with " (2)" if taken.
+    Returns the new section's ID."""
+    return _json({"section_id": copy.transfer_section(get_backend(), section_id, target_parent_id)})
 
 
 @mcp.tool()
-def copy_notebook(notebook_id: str, name: str, path: str) -> str:
-    """Faithfully copy a whole notebook (subject to create_notebook sync constraints).
-    Section groups are recreated in the target (sections land inside their groups, never
-    flattened)."""
-    return copy.transfer_notebook(get_backend(), notebook_id, name, path)
+def copy_notebook(notebook_id: str, name: str, path: str = "") -> str:
+    """Faithfully copy a whole notebook. ``path`` (parent folder) must be a synced location;
+    empty = OneNote's default notebook folder. Section groups are recreated in the target
+    (sections land inside their groups, never flattened); the recycle bin is not cloned.
+    Returns the new notebook's ID."""
+    return _json({"notebook_id": copy.transfer_notebook(get_backend(), notebook_id, name, path)})
 
 
 # --- Restructure (Phase 4: whole-batch UpdateHierarchy — SPEC §5 discipline) -
