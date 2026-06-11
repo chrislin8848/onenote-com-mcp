@@ -146,6 +146,12 @@ recycle-bin group + section group).
 Remaining: **Stage 4** Tier-2 VM round-trips (create→get→update→delete, concurrency conflict,
 format-preservation regression, payload strategy decision, move_page validation).
 
+**Recycle-bin policy (DECIDED 2026-06-11, user-approved):** invisible at the tool surface
+(reads filter it, `include_recycle_bin` stays unexposed), pinned-in-place but fully submitted
+in whole-batch UpdateHierarchy, never an operation target (move_page rejects it). Phase 5:
+`copy_notebook` must SKIP recycle-bin groups when recreating section groups (+ test). Phase 6:
+deletes stay default-to-recycle-bin (`permanent=False`) — the recycle bin is the undo net.
+
 ## Grounding
 - `docs/SPEC.md` — the spec itself (v0611: + get_current_context, section-group integration).
 - `docs/com-api-reference.md` — COM signatures + enums (from Microsoft Learn).
