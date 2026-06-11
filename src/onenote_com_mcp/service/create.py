@@ -1,9 +1,10 @@
-"""Create tools — service layer (SPEC §4: create_notebook / create_section / create_page).
+"""Create tools — service layer (SPEC §4: create_section / create_page).
 
-Notebooks and sections are ``OpenHierarchy`` calls (SPEC §5): a section is ``name.one``
-relative to its parent notebook OR section group (it inherits their sync); a notebook needs
-an explicit folder path that syncs (e.g. OneDrive) or it ends up local-only — empty path
-falls back to OneNote's configured default notebook folder.
+Sections are ``OpenHierarchy`` calls (SPEC §5): ``name.one`` relative to the parent notebook
+OR section group (the new section inherits their sync). There is deliberately no
+create_notebook — VM ground truth (2026-06-11): this M365 build refuses COM notebook creation
+(``OpenHierarchy(cftNotebook)`` → hrFileDoesNotExist for local paths AND OneDrive https
+parents alike). Notebooks are created in the OneNote UI; everything below them is ours.
 
 ``create_page`` composes the existing seams instead of opening new write paths: title +
 initial content are ONE ``apply_page_edit`` call (single guarded UpdatePageContent), and a
@@ -19,24 +20,12 @@ from typing import Any
 from lxml import etree
 
 from onenote_com_mcp.backend.base import OneNoteBackend
-from onenote_com_mcp.enums import CreateFileType, HierarchyScope, SpecialLocation
+from onenote_com_mcp.enums import CreateFileType, HierarchyScope
 from onenote_com_mcp.errors import NodeNotFoundError
 from onenote_com_mcp.service.hierarchy_edit import apply_hierarchy_restructure
 from onenote_com_mcp.service.names import checked_name
 from onenote_com_mcp.service.page_edit import apply_page_edit, content_mutator, set_title
 from onenote_com_mcp.xmllayer.namespaces import qn
-
-
-def create_notebook(backend: OneNoteBackend, name: str, path: str = "") -> str:
-    """Create a notebook folder at ``path``; empty path = OneNote's default notebook folder
-    (synced setups point it at OneDrive). Returns the new notebook ID."""
-    name = checked_name(name, "notebook")
-    if not path:
-        path = backend.get_special_location(SpecialLocation.slDefaultNotebookFolder)
-    # synced locations are URLs (https://…/Documents) — join those with "/", not "\"
-    sep = "/" if "://" in path else "\\"
-    full_path = path.rstrip("\\/") + sep + name
-    return backend.open_hierarchy(full_path, "", CreateFileType.cftNotebook)
 
 
 def create_section(backend: OneNoteBackend, parent_id: str, name: str) -> str:

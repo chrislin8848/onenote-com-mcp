@@ -86,15 +86,10 @@ def get_current_context() -> str:
 
 
 # --- Create (service/create.py) ----------------------------------------------
-
-
-@mcp.tool()
-def create_notebook(name: str, path: str = "") -> str:
-    """Create a notebook at ``path`` (parent folder; empty = OneNote's default folder).
-    KNOWN LIMITATION (validated 2026-06-11): current M365 desktop builds refuse COM notebook
-    creation (both local paths and OneDrive URLs) — expect this to fail there. Prefer
-    create_section inside an existing synced notebook."""
-    return _json({"notebook_id": create.create_notebook(get_backend(), name, path)})
+# NOTE: there is deliberately no create_notebook tool. VM ground truth (2026-06-11): this
+# M365 OneNote build refuses COM notebook creation — OpenHierarchy(cftNotebook) returns
+# hrFileDoesNotExist for local paths AND OneDrive https parents alike. Notebooks are created
+# in the OneNote UI; create_section covers everything below them.
 
 
 @mcp.tool()
@@ -222,9 +217,8 @@ def copy_section(section_id: str, target_parent_id: str) -> str:
     return _json({"section_id": copy.transfer_section(get_backend(), section_id, target_parent_id)})
 
 
-# NOTE: there is deliberately no copy_notebook tool. VM ground truth (2026-06-11): this M365
-# OneNote build refuses COM notebook creation (OpenHierarchy cftNotebook → hrFileDoesNotExist
-# for local paths AND OneDrive https parents). Whole-notebook cloning is done by copy_section
+# NOTE: there is deliberately no copy_notebook tool — same ground truth as create_notebook
+# (COM cannot create notebooks on this build). Whole-notebook cloning is done by copy_section
 # into an existing notebook / section group, section by section.
 
 

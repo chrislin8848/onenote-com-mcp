@@ -125,8 +125,8 @@ disturb them), `whole_page` (piBinaryData read) is the alternative — **PROVISI
 VM round-trips decide**; every `one:Image` left in a payload gets its binary inlined via
 `GetBinaryPageContent` and `CallbackID` stripped (read-side construct). Tier-1 suite:
 `tests/test_page_edit_content.py` (untouched OEs asserted byte-identical, real fixtures).
-Stage 2 DONE (2026-06-11): `service/create.py` — `create_notebook` (OpenHierarchy cftNotebook;
-empty path → `GetSpecialLocation(slDefaultNotebookFolder)`), `create_section` (`name.one`
+Stage 2 DONE (2026-06-11): `service/create.py` — `create_notebook` (REMOVED post-Phase-5:
+COM can't create notebooks on this build), `create_section` (`name.one`
 relative to notebook OR section group), `create_page` (CreateNewPage → title + initial content
 in ONE `apply_page_edit` write via the now-public composable `page_edit.content_mutator()` /
 `set_title()`; `page_level`≠1 → whole-batch `apply_hierarchy_restructure` setting only the new
@@ -183,10 +183,10 @@ creating — copies de-collide names with " (2)", " (3)", … against the target
 (both kinds). Tier-1: `tests/test_copy_tree.py`.
 Stage 3 DONE (2026-06-11) — Tier-2 全綠 (27 passed): B≡A semantic fingerprints + byte-identical
 image pixels on the three dump-source pages; section copy preserves order + 1/2/3 levels and
-de-collides live; section copy lands inside groups. **`copy_notebook` REMOVED (user-approved):
-`OpenHierarchy(cftNotebook)` refuses BOTH local paths and OneDrive https parents with
-hrFileDoesNotExist on this M365 build — COM cannot create notebooks. `create_notebook` stays
-with a KNOWN-LIMITATION warning. Whole-notebook cloning = copy_section per section.** Further
+de-collides live; section copy lands inside groups. **`copy_notebook` AND `create_notebook`
+REMOVED (user-approved): `OpenHierarchy(cftNotebook)` refuses BOTH local paths and OneDrive
+https parents with hrFileDoesNotExist on this M365 build — COM cannot create notebooks.
+Notebooks are made in the OneNote UI; whole-notebook cloning = copy_section per section.** Further
 ground truths (docs/com-api-reference.md Phase-5 section): OpenHierarchy OPENS same-named
 nodes (→ copies de-collide with " (n)"); DeletePageContent DOES work on one:Outline
 (page-level) — so Phase 6 delete_page_content = page-level objects only; empty-paragraph-only

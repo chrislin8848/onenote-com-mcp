@@ -164,9 +164,10 @@ any doc sketch above:
 
 - **`OpenHierarchy(cftNotebook)` cannot create notebooks on this M365 build** — it returns
   `hrFileDoesNotExist` (0x80042006) for BOTH local folder paths (even with the parent folder
-  present) and OneDrive `https://` parents. The `copy_notebook` tool was REMOVED
-  (user-approved); `create_notebook` stays with a KNOWN-LIMITATION warning. Whole-notebook
-  cloning = `copy_section` per section into an existing notebook/group.
+  present) and OneDrive `https://` parents. BOTH notebook-creation tools were REMOVED
+  (user-approved): `copy_notebook` and `create_notebook`. Notebooks are created in the
+  OneNote UI; whole-notebook cloning = `copy_section` per section into an existing
+  notebook/group.
 - **`OpenHierarchy` OPENS an existing same-named section/group instead of creating one** — a
   copy without name de-collision would silently merge into the existing node. Copies append
   " (2)", " (3)", … against the target parent's direct children of both kinds.

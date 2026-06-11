@@ -37,7 +37,8 @@ def test_win32_backend_module_imports_without_pywin32():
 
 
 def test_full_tool_catalog_registered():
-    # The MCP surface should expose all 22 SPEC §4 tools even while bodies are stubbed.
+    # The MCP surface = SPEC §4 minus the two notebook-creation tools (create_notebook /
+    # copy_notebook): COM cannot create notebooks on this M365 build (VM 2026-06-11).
     import asyncio
 
     from onenote_com_mcp.server import mcp
@@ -52,7 +53,6 @@ def test_full_tool_catalog_registered():
         "get_page",
         "get_page_images",
         "get_current_context",
-        "create_notebook",
         "create_section",
         "create_page",
         "update_page_content",

@@ -37,7 +37,9 @@ def _write_blank_page_fixture(tmp_path, body: str = "") -> None:
     )
 
 
-# --- create_section / create_notebook --------------------------------------------------
+# --- create_section ----------------------------------------------------------------------
+# (No create_notebook tests: the tool was removed — this M365 build refuses COM notebook
+# creation, OpenHierarchy(cftNotebook) → hrFileDoesNotExist. VM ground truth 2026-06-11.)
 
 
 def test_create_section_opens_dot_one_under_parent(tmp_path):
@@ -50,32 +52,11 @@ def test_create_section_opens_dot_one_under_parent(tmp_path):
     assert section_id.startswith("{FIXTURE-cftSection")
 
 
-def test_create_notebook_joins_parent_path_and_name(tmp_path):
-    be = FixtureBackend(tmp_path)
-    create.create_notebook(be, "新筆記本", "C:\\Users\\dev\\OneDrive\\Notebooks\\")
-    (call,) = _calls(be, "open_hierarchy")
-    assert call.kwargs["path"] == "C:\\Users\\dev\\OneDrive\\Notebooks\\新筆記本"
-    assert call.kwargs["relative_to_object_id"] == ""
-    assert call.kwargs["create_file_type"] is CreateFileType.cftNotebook
-
-
-def test_create_notebook_empty_path_uses_default_notebook_folder(tmp_path):
-    (tmp_path / "special_slDefaultNotebookFolder.txt").write_text(
-        "C:\\Users\\dev\\OneDrive\\文件\\OneNote 筆記本", encoding="utf-8"
-    )
-    be = FixtureBackend(tmp_path)
-    create.create_notebook(be, "新筆記本")
-    (call,) = _calls(be, "open_hierarchy")
-    assert call.kwargs["path"] == "C:\\Users\\dev\\OneDrive\\文件\\OneNote 筆記本\\新筆記本"
-
-
 @pytest.mark.parametrize("bad", ["行程/六月", "a:b", "x?y", "  ", "tag#1"])
 def test_invalid_names_rejected_before_any_com_call(tmp_path, bad):
     be = FixtureBackend(tmp_path)
     with pytest.raises(ValueError):
         create.create_section(be, "{NB}{1}{B0}", bad)
-    with pytest.raises(ValueError):
-        create.create_notebook(be, bad, "C:\\x")
     assert not be.calls
 
 
@@ -175,12 +156,3 @@ def test_create_page_invalid_level_rejected_before_creation(tmp_path):
     with pytest.raises(ValueError, match="page_level"):
         create.create_page(be, _SECTION_ID, "t", page_level=4)
     assert not be.calls
-
-
-def test_create_notebook_url_path_joins_with_slash(tmp_path):
-    # synced locations are URLs — the notebook folder must join with "/" (VM ground truth:
-    # this M365 build refuses local-path notebooks, so URL parents are the normal case)
-    be = FixtureBackend(tmp_path)
-    create.create_notebook(be, "新本", "https://d.docs.live.net/abc/Documents/")
-    (call,) = [c for c in be.calls if c.method == "open_hierarchy"]
-    assert call.kwargs["path"] == "https://d.docs.live.net/abc/Documents/新本"
