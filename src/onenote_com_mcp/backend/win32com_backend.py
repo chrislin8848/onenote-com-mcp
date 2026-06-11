@@ -4,13 +4,12 @@ GUARDED IMPORT INVARIANT (SPEC §2.1): this module must ``import`` cleanly on Li
 **no** ``win32com`` / ``pywintypes`` / ``pythoncom`` import appears at module top level — they
 are imported lazily inside methods. ``tests/test_smoke_import.py`` enforces this.
 
-⚠ PHASE 3 (VM): the exact pywin32 out-parameter marshalling for OneNote is confirmed on the
-VM. This module assumes early binding (``gencache.EnsureDispatch``) where ``[out] BSTR`` params
-are returned as the call's return value. If the generated typelib differs, adjust the call
-sites here — the rest of the codebase depends only on the string in/out contract, not on this.
-
-Until then, every method body below is written to the documented signature but is
-**unvalidated against a real OneNote**.
+CONNECTION (confirmed on the VM, 2026-06-11): OneNote must be early-bound via an explicit
+``gencache.EnsureModule`` + coclass instantiation (see ``app`` below) — ``EnsureDispatch`` and
+plain ``Dispatch`` both fail. Under that binding ``[out] BSTR`` params are returned as the
+call's return value, which is the string in/out contract the rest of the codebase depends on.
+``get_hierarchy`` round-trips real notebook XML over both the SPICE console and SSH (OneNote is
+an out-of-process COM server in the autologon session, so DCOM activation reaches it either way).
 """
 
 from __future__ import annotations
@@ -55,19 +54,37 @@ class Win32ComBackend(OneNoteBackend):
 
     @property
     def app(self):
-        """Lazily connect to the running OneNote application via COM."""
+        """Lazily connect to the running OneNote application via COM.
+
+        OneNote cannot be late-bound: ``Dispatch("OneNote.Application")`` yields a dynamic
+        object whose ``GetIDsOfNames`` can't resolve ``GetHierarchy``, and
+        ``gencache.EnsureDispatch`` fails with "can not automate the makepy process". The
+        working recipe (confirmed on the VM, 2026-06-11) is to locate the OneNote type library,
+        build its early-bound makepy module explicitly, then instantiate the coclass — after
+        which ``[out] BSTR`` params come back as the call's return value. For a frozen build the
+        gen cache must be bundled (SPEC §8); see the PyInstaller spec when packaging.
+        """
         if self._app is None:
             try:
                 # Imported here, never at module top, to keep Linux import clean.
-                import win32com.client  # noqa: PLC0415
+                from win32com.client import gencache, selecttlb  # noqa: PLC0415
 
-                # EnsureDispatch = early binding (typed). For a frozen build the gen cache
-                # must be bundled (SPEC §8); see PyInstaller spec when packaging.
-                self._app = win32com.client.gencache.EnsureDispatch("OneNote.Application")
+                # Pick the OneNote 15.x (Office 2013+/M365 desktop) type library. A stale
+                # "OneNote 12.0" / version 1.0 registration with no backing file makes COM
+                # calls fail later with TYPE_E_LIBNOTREGISTERED (-2147319779) — prefer the
+                # highest version, which is the live one.
+                tlbs = [t for t in selecttlb.EnumTlbs() if "onenote" in t.desc.lower()]
+                if not tlbs:
+                    raise RuntimeError("No OneNote type library registered.")
+                tlb = max(tlbs, key=lambda t: (int(t.major, 16), int(t.minor, 16)))
+                mod = gencache.EnsureModule(tlb.clsid, 0, int(tlb.major, 16), int(tlb.minor, 16))
+                self._app = mod.Application()
             except Exception as exc:  # noqa: BLE001
                 raise BackendUnavailableError(
                     "Could not connect to OneNote via COM. Ensure the OneNote desktop app "
-                    "is installed and running in this interactive session."
+                    "(M365, not the UWP 'OneNote for Windows 10') is installed and running in "
+                    "this interactive session. If a call fails with 'program library not "
+                    "registered', delete the stale HKCR\\TypeLib\\{0EA692EE-...}\\1.0 subkey."
                 ) from exc
         return self._app
 
