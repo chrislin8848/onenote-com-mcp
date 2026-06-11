@@ -8,10 +8,10 @@
 
 建立一個 **COM-only** 的 OneNote MCP server,讓 Claude(在 Windows 上的 Claude Desktop)能對 OneNote 桌面版做完整 CRUD:
 
-- 讀取:筆記本/節/頁清單、頁面文字、**表格(保留結構)**、**圖片(二進位)**、文字搜尋。
+- 讀取:筆記本/節/頁清單、頁面文字、**表格(保留結構)**、**圖片(二進位)**、文字搜尋、**使用者目前檢視位置**(目前停留的筆記本/節/頁)。
 - 寫入:**新增筆記本/節/頁**、**附加或就地修改內容(含表格)**、**新增表格**、**插入圖片**。
 - 刪除:刪頁/節/筆記本(層級節點);刪頁面內容物件——圖片、表格、大綱。
-- 複製:忠實克隆筆記本/節/頁(保留格式、表格、圖片、子頁階層);搭配既有編輯工具做「複製後改寫」(見 §4 複製工具、§5)。
+- 複製:忠實克隆筆記本/節/頁(保留格式、表格、圖片、子頁階層、**節群組**);搭配既有編輯工具做「複製後改寫」(見 §4 複製工具、§5)。
 - 整理:重排頁/節順序、調整頁面階層(`pageLevel`)、改名、跨節搬頁——支援「請 Claude 重整雜亂筆記本」情境(見 §4 結構工具、§5 層級重排紀律)。
 
 文字一律**完整保真**(字型/字級/顏色、粗斜底、螢光等):讀得出、編輯不擾動既有格式、可對新內容設定格式(規則見 §5「格式保真」)。
@@ -143,22 +143,23 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 | 工具 | 用途 | 對應 COM 方法 |
 |---|---|---|
 | `list_notebooks` | 列所有筆記本 | `GetHierarchy(scope=hsNotebooks)` |
-| `list_sections` | 列某本的節 | `GetHierarchy(notebookId, hsSections)` |
+| `list_sections` | 列某本的節(**含節群組巢狀結構**) | `GetHierarchy(notebookId, hsSections)`(回傳含 `one:SectionGroup` 巢狀,解析須保留,不另開工具) |
 | `list_pages` | 列某節的頁(**範圍化,含 `pageLevel` 子頁階層**) | `GetHierarchy(sectionId, hsPages)` |
 | `search_pages` | 跨/範圍文字搜尋 | `FindPages` |
 | `get_page` | 取單頁內容(**保真富文字** + 結構化表格) | `GetPageContent(pageId)` |
 | `get_page_images` | 取頁面圖片(二進位) | `GetPageContent` → `GetBinaryPageContent(callbackId)` |
+| `get_current_context` | 取使用者目前檢視位置(筆記本/節群組/節/頁,ID+名稱) | `Windows.CurrentWindow` 的 `CurrentNotebookId/CurrentSectionGroupId/CurrentSectionId/CurrentPageId` + 範圍化 `GetHierarchy` 解名稱 |
 | `create_notebook` | 建立筆記本 | `OpenHierarchy(path, "", out id, cftNotebook)` |
-| `create_section` | 在指定本建立節 | `OpenHierarchy(name+".one", notebookId, out id, cftSection)` |
+| `create_section` | 在指定本(或節群組)建立節 | `OpenHierarchy(name+".one", parentId, out id, cftSection)`(parent 可為 notebook 或節群組) |
 | `create_page` | 在指定節建新頁(可設 `pageLevel` 子頁) | `CreateNewPage` (+ `UpdateHierarchy` 設 pageLevel) + `UpdatePageContent` |
 | `update_page_content` | 改頁面內容:append / insert / replace(含改表格儲存格/加列) | `GetPageContent` → 改 XML → `UpdatePageContent`(純 append 可免讀全頁) |
 | `create_table` | 新增表格 | 組 `one:Table` XML → `UpdatePageContent` |
 | `insert_image` | 插入圖片到頁面 | 組 `one:Image` + base64 `one:Data` → `UpdatePageContent` |
-| `delete_node` | 刪頁/節/筆記本(層級) | `DeleteHierarchy(objectId)` |
+| `delete_node` | 刪頁/節/節群組/筆記本(層級) | `DeleteHierarchy(objectId)` |
 | `delete_page_content` | 刪頁面內容物件(圖片/表格/大綱) | `DeletePageContent(pageId, objectId)` |
 | `copy_page` | 忠實克隆單頁到目標節 | 內部 raw-XML 克隆(見 §5「複製/克隆」) |
 | `copy_section` | 忠實克隆整節 | 建節 + 逐頁 `copy_page`(保留 pageLevel) |
-| `copy_notebook` | 忠實克隆整本 | 建本 + 逐節 `copy_section`(受 `create_notebook` 雲端限制) |
+| `copy_notebook` | 忠實克隆整本 | 建本 + **重建節群組**(`cftFolder`)+ 逐節 `copy_section`(受 `create_notebook` 雲端限制) |
 | `restructure_section` | 同節內**整批**重排頁面順序 + 調整 `pageLevel` 階層 | `GetHierarchy` → 重排完整頁清單(每頁帶 `pageLevel`)→ `UpdateHierarchy`(紀律見 §5「層級重排」) |
 | `reorder_sections` | 重排某本內節的順序 | 同上,對 `one:Section` 元素整批重排(僅節/頁有實證;**筆記本層級排序未驗證、不納入**) |
 | `rename_node` | 重新命名頁/節 | `UpdateHierarchy`(改 name 屬性) |
@@ -180,9 +181,10 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
   - **並發保護**:帶上 `dateExpectedLastModified`(從讀取時的頁面取得);若頁面在這之間被改過,更新會失敗。**預設不要用 `force=true`**,以免蓋掉使用者正在編輯的內容;改為回報衝突讓上層決定。
 - `FindPages`:文字搜尋,依賴 OneNote 自身索引。
 - `DeleteHierarchy(objectId, ...)`:刪除節點。
-- `OpenHierarchy(path, relativeToId, out objectId, CreateFileType)`:**建立/開啟層級節點**。建節用 `cftSection`(name 以 `.one` 結尾、relativeTo 給父 `notebookId`);建本用 `cftNotebook`(給路徑/位置);`cftFolder`=節群組、`cftNone`=只開不建。`UpdateHierarchy` 用來設 `pageLevel`(子頁,`create_page` 與複製都會用到,屬必用);改名(`rename_node`)、重排(`restructure_section`/`reorder_sections`)、搬移(`move_page`)亦全走它。
+- `OpenHierarchy(path, relativeToId, out objectId, CreateFileType)`:**建立/開啟層級節點**。建節用 `cftSection`(name 以 `.one` 結尾、relativeTo 給父 notebook **或節群組**的 ID);建本用 `cftNotebook`(給路徑/位置);`cftFolder`=節群組、`cftNone`=只開不建。`UpdateHierarchy` 用來設 `pageLevel`(子頁,`create_page` 與複製都會用到,屬必用);改名(`rename_node`)、重排(`restructure_section`/`reorder_sections`)、搬移(`move_page`)亦全走它。
   - ⚠️ **建 notebook 要指定位置(路徑):** 你們是雲端同步筆記本,新建的本要落在會同步到 OneDrive 的位置,否則只是本機筆記本。**建 section 在既有(已同步)notebook 內則自動沿用其同步,較單純**——多數情況建議建節而非建本。
-- **層級重排紀律(`UpdateHierarchy`):** 順序由提交 XML 中**子元素的排列順序**決定,沒有位置索引屬性。`UpdateHierarchy` 對部分清單會「推斷」意圖——微軟文件明言:只提交部分子元素時,未提交者的落點**不可預期**。因此重排**必須整批提交該層級的完整子元素清單**(照目標順序、頁面各自帶 `pageLevel`),嚴禁只丟想動的那幾個。實證範圍:節內頁面與本內節的重排有社群實例;**最上層筆記本清單的排序未驗證,不納入**;**跨節搬頁(`move_page`)的可靠性需 VM 實機驗證後才轉正**。結構性變更(重排/搬移/改名)的工具描述應註明「建議先克隆備份(copy_section/copy_notebook),且 Claude 應先提案經使用者確認再批次套用」。
+- **層級重排紀律(`UpdateHierarchy`):** 順序由提交 XML 中**子元素的排列順序**決定,沒有位置索引屬性。`UpdateHierarchy` 對部分清單會「推斷」意圖——微軟文件明言:只提交部分子元素時,未提交者的落點**不可預期**。因此重排**必須整批提交該層級的完整子元素清單**(照目標順序、頁面各自帶 `pageLevel`),嚴禁只丟想動的那幾個;若該本含節群組,筆記本直屬子元素是 `one:Section` 與 `one:SectionGroup` 的**混合清單**,整批提交須兩種都含。實證範圍:節內頁面與本內節的重排有社群實例;**最上層筆記本清單的排序未驗證,不納入**;**跨節搬頁(`move_page`)的可靠性需 VM 實機驗證後才轉正**。結構性變更(重排/搬移/改名)的工具描述應註明「建議先克隆備份(copy_section/copy_notebook),且 Claude 應先提案經使用者確認再批次套用」。
+- **目前檢視位置(`Windows` 介面):** `Application.Windows.CurrentWindow` 取作用中視窗,其 `CurrentPageId / CurrentSectionId / CurrentSectionGroupId / CurrentNotebookId` 即使用者目前停留的位置;`get_current_context` 以此實作,並用範圍化 `GetHierarchy` 把 ID 解析成名稱回報。限制:**無開啟視窗時取不到**(回報明確錯誤,勿猜);多視窗以作用中視窗為準;**頁內游標位置/選取文字無 API 可取**,粒度止於「頁」;工具描述應提醒 Claude 動作前先回報「你目前在 X 頁」供使用者確認(避免使用者已切頁的時間差)。
 - 錯誤處理:對 `RPC_E_SERVERCALL_RETRYLATER`(0x8001010A,OneNote 忙碌/同步中)做重試 + 退避。
 - OneNote XML schema:核心元素 `one:Page / one:Outline / one:OEChildren / one:OE / one:T`(文字)、`one:Table/Row/Cell`、`one:Image`。注意 `one:` namespace 前綴。
 
@@ -209,7 +211,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 
 ### 複製/克隆(忠實克隆 + 複製後改寫)
 
-`copy_*` 工具做的是**忠實克隆**,內部用「整頁原始 XML 克隆」:讀來源頁完整 XML(`GetPageContent`),**把圖片 binary 以 `GetBinaryPageContent` 取出 inline 進去**、**連同該頁的 `QuickStyleDef` 一起帶過去**(否則 `quickStyleIndex` 失準、格式跑掉)、**重設 object ID**、**依來源設定目標頁 `pageLevel`**(保留子頁階層),再寫到目標節。`copy_section`/`copy_notebook` 是建好對應層級後逐頁套用。
+`copy_*` 工具做的是**忠實克隆**,內部用「整頁原始 XML 克隆」:讀來源頁完整 XML(`GetPageContent`),**把圖片 binary 以 `GetBinaryPageContent` 取出 inline 進去**、**連同該頁的 `QuickStyleDef` 一起帶過去**(否則 `quickStyleIndex` 失準、格式跑掉)、**重設 object ID**、**依來源設定目標頁 `pageLevel`**(保留子頁階層),再寫到目標節。`copy_section`/`copy_notebook` 是建好對應層級後逐頁套用;**來源含節群組時,`copy_notebook` 須以 `OpenHierarchy(cftFolder)` 重建對應節群組**,把節建在正確的群組內,不可攤平。
 
 ⚠️ **克隆走「接近原始的 XML 直通」(讀 → 重設 ID／inline 圖片／帶樣式 → 寫),嚴禁繞經 `get_page` 的結構化/富文字表示再重建。** `get_page` 那條路是給 Claude 閱讀與編輯用的,對整頁複製會有損(理由同 §5 格式保真的「嚴禁有損模型」)。換言之複製**不是** §4「多對一共用核心」那條手術式 merge 路徑,而是自己一條整頁 create 路徑。
 
@@ -280,7 +282,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 2. 產出一份**分階段開發計畫**,建議的分期方向(可調整):
    - **Phase 0** — 專案骨架、`OneNoteBackend` 介面、pywin32 守護匯入、host 端 CI(lint + 單元測試)跑得起來;**並行**把 §2 的 Windows VM、autologon 互動 session 執行器、`remote_test` 迴圈建起來(這是後續所有整合測試的前提)。**並在 VM 實機先確認 COM 可喚得起來**(`Dispatch("OneNote.Application")` + 一次 `GetHierarchy` 成功)再往下做——確保裝的是有 COM 的桌面版 OneNote、互動 session 正常,環境問題在此一次清掉。
    - **Phase 1** — OneNote XML 層(parse + build)純函式 + 對 fixtures 的單元測試;先做讀取相關(hierarchy、page text、table、image callback id)。**保真要求:解析 inline span 樣式 + 解析 `quickStyleIndex`→`QuickStyleDef`;build 端能帶樣式(見 §5 格式保真)。**
-   - **Phase 2** — 讀取類 MCP 工具(list_*、get_page、get_page_images、search_pages)接到 `FixtureBackend`,Linux 全綠。
+   - **Phase 2** — 讀取類 MCP 工具(list_*、get_page、get_page_images、search_pages、get_current_context)接到 `FixtureBackend`,Linux 全綠。
    - **Phase 3** — `Win32ComBackend` 實作 + `dump_fixtures.py`;經 `remote_test` 迴圈在 VM 跑讀取整合測試(不再手動搬機器)。
    - **Phase 4** — 寫入類(create_notebook、create_section、create_page〔可設 `pageLevel`〕、update_page_content〔含 append/insert/replace〕、create_table、insert_image)+ **層級結構類(restructure_section、reorder_sections、rename_node;`move_page` 跨節搬移先在 VM 實證可靠才轉正)** + 並發保護 + **手術式就地修改(保真)** + Windows round-trip 整合測試 + **格式保真回歸測試**。
    - **Phase 5** — 複製/克隆:raw-XML 克隆核心(inline 圖片 binary、帶 `QuickStyleDef`、重設 object ID、設 `pageLevel`)+ `copy_page`/`copy_section`/`copy_notebook`;整合測試驗「B≡A」忠實度。「複製後改寫」沿用既有 `get_page` + `update_page_content`,不另開工具。
