@@ -185,7 +185,8 @@ def insert_image(
 ) -> str:
     """Insert an image (base64 + media type, e.g. "image/png") into a page, appended to an
     outline (target_object_id = outline objectID, default the page's last outline).
-    width/height are points; omit to let OneNote size it. Concurrency-guarded."""
+    width/height are points; omit to let OneNote size it. Concurrency-guarded; force=True
+    only after explicit user confirmation."""
     page_edit.insert_image(
         get_backend(),
         page_id,

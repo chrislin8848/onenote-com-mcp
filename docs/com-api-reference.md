@@ -179,3 +179,28 @@ any doc sketch above:
 - B≡A validated live: mixed-format/table/image pages clone with identical semantic
   fingerprints and byte-identical image pixels; section copies preserve page order and
   1/2/3 subpage levels; section copies land inside section groups.
+
+## UpdateHierarchy has NO optimistic-concurrency protection (fact-finding, 2026-06-12)
+
+Triple-confirmed — type-library signature, Microsoft docs, AND live VM behavior all agree:
+
+- **Signature (makepy, OneNote 15.0 TypeLib `{0EA692EE-…}` v1.1):**
+  `UpdateHierarchy(bstrChangesXmlIn, xsSchema=2)` — only two params. It is the ONLY mutating
+  method on `IApplication` WITHOUT a `dateExpectedLastModified`; `UpdatePageContent`,
+  `DeleteHierarchy`, and `DeletePageContent` all carry it (the first/last also carry `force`).
+- **Docs:** the `UpdateHierarchy` page lists only those two params and says nothing about
+  concurrency; the "proceeds only if the value matches … prevents accidentally overwriting"
+  language appears ONLY on the three methods that have the date param. The `UpdateHierarchy`
+  example even strips `lastModifiedTime` from the submitted XML (it is a decorative/output
+  attribute, not a write-path token).
+- **Live behavior (`tests/test_windows_concurrency.py`, Tier-2 green):** a stale read
+  resubmitted after a second COM call reordered the section is applied SILENTLY and clobbers
+  the middle change (last-write-wins, no error); a reorder whose body carries a stale
+  `lastModifiedTime` (backdated to 2000) still applies — so UpdateHierarchy reads no
+  concurrency token from the body either.
+- **Consequence (Phase 6 hardening):** hierarchy/structural writes cannot be optimistically
+  guarded at the COM layer. Compensate in the service layer — minimize the read→write window
+  (already: read-full → mutate → submit in one call), optionally re-read after the write and
+  report any diff vs. intended order/names/pageLevel, and keep propose-confirm + suggest a
+  clone backup before structural ops. Page-CONTENT writes keep their real `UpdatePageContent`
+  date guard (→ `ConcurrencyError`) — the gap is structural only.
