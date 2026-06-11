@@ -108,28 +108,91 @@ def create_page(section_id: str, title: str, content: str = "", page_level: int 
     raise NotImplementedError("Phase 4")
 
 
-# --- Modify (Phase 4: shared write core) ------------------------------------
+# --- Modify (shared write core — service/page_edit.py) -----------------------
 
 
 @mcp.tool()
-def update_page_content(page_id: str, content: str, mode: str = "append") -> str:
-    """Modify page content. mode = append | insert | replace. Preserves untouched
-    formatting (in-place tree edit). Concurrency-guarded; will not force-overwrite."""
-    page_edit.edit_page_content(get_backend(), page_id, content, mode)
+def update_page_content(
+    page_id: str,
+    content: str | list[dict],
+    mode: str = "append",
+    target_object_id: str = "",
+    force: bool = False,
+) -> str:
+    """Edit page content surgically — untouched paragraphs keep their formatting verbatim.
+
+    mode: "append" (add paragraphs at the end of an outline; target_object_id optionally
+    names an outline objectID, default = the page's last outline), "insert_before" /
+    "insert_after" (target_object_id = a paragraph objectID from get_page; new paragraphs
+    become its siblings), or "replace" (swap that paragraph's text, keeping its paragraph
+    style unless the new content overrides it). Table cell text is edited by targeting the
+    paragraph inside the cell with "replace".
+
+    content: plain text (newlines split paragraphs) OR a list of paragraph dicts —
+    {"text": "...", "style": {...}} or {"runs": [{"text": "...", "style": {...}}, ...]},
+    each optionally with "quick_style_index" / "alignment". Style keys are the CSS-like keys
+    get_page returns: font-weight, font-style, text-decoration, color, background (highlight),
+    font-family, font-size.
+
+    Concurrency-guarded: fails instead of clobbering if the page changed since it was read.
+    Set force=True only after explicit user confirmation."""
+    page_edit.edit_page_content(
+        get_backend(), page_id, content, mode, target_object_id=target_object_id, force=force
+    )
     return f"updated {page_id}"
 
 
 @mcp.tool()
-def create_table(page_id: str, rows: list[list[str]]) -> str:
-    """Add a table (rows = list of rows of cell text) to a page."""
-    page_edit.add_table(get_backend(), page_id, rows)
+def create_table(
+    page_id: str,
+    rows: list[list[str | dict]],
+    borders_visible: bool = True,
+    has_header_row: bool = False,
+    target_object_id: str = "",
+    force: bool = False,
+) -> str:
+    """Add a table to a page, or append rows to an existing table.
+
+    rows: cells are plain strings or dicts {"text" | "runs", "style", "shading_color",
+    "alignment"} (short rows are padded). target_object_id: empty → new table at the end of
+    the page's last outline; an outline objectID → new table in that outline; an existing
+    table's objectID (from get_page) → append the rows to that table (row width must fit its
+    columns). Concurrency-guarded; force=True only after explicit user confirmation."""
+    page_edit.add_table(
+        get_backend(),
+        page_id,
+        rows,
+        borders_visible=borders_visible,
+        has_header_row=has_header_row,
+        target_object_id=target_object_id,
+        force=force,
+    )
     return f"table added to {page_id}"
 
 
 @mcp.tool()
-def insert_image(page_id: str, image_base64: str, media_type: str) -> str:
-    """Insert an image (base64) into a page."""
-    page_edit.insert_image(get_backend(), page_id, image_base64, media_type)
+def insert_image(
+    page_id: str,
+    image_base64: str,
+    media_type: str,
+    width: float | None = None,
+    height: float | None = None,
+    target_object_id: str = "",
+    force: bool = False,
+) -> str:
+    """Insert an image (base64 + media type, e.g. "image/png") into a page, appended to an
+    outline (target_object_id = outline objectID, default the page's last outline).
+    width/height are points; omit to let OneNote size it. Concurrency-guarded."""
+    page_edit.insert_image(
+        get_backend(),
+        page_id,
+        image_base64,
+        media_type,
+        width=width,
+        height=height,
+        target_object_id=target_object_id,
+        force=force,
+    )
     return f"image inserted into {page_id}"
 
 

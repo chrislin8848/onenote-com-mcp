@@ -1,7 +1,7 @@
 """Build OneNote XML fragments for NEW content. Pure lxml — no COM.
 
-These emit standalone namespaced fragments (``<one:OE …>``, ``<one:Table …>``,
-``<one:Image …>``) that the service layer grafts into a live GetPageContent tree.
+The ``make_*`` functions return lxml elements the service layer grafts into a live
+GetPageContent tree; the ``build_*_xml`` wrappers serialize them standalone (namespaced).
 Editing EXISTING content never goes through here — that is in-place tree mutation in
 ``service/page_edit.py`` (SPEC §5); rebuilding a page from a model drops formatting.
 
@@ -24,13 +24,14 @@ def _tostring(el: etree._Element) -> str:
     return etree.tostring(el, encoding="unicode")
 
 
-def _make_oe(
+def make_text_oe(
     runs: list[Any],
     quick_style_index: int | None = None,
     alignment: str | None = None,
     *,
     root: bool = False,
 ) -> etree._Element:
+    """Runs → a ``one:OE`` element holding one ``one:T`` (CDATA spans)."""
     oe = etree.Element(qn("OE"), nsmap=NSMAP if root else None)
     if alignment:
         oe.set("alignment", alignment)
@@ -48,7 +49,7 @@ def build_text_oe_xml(
     alignment: str | None = None,
 ) -> str:
     """Runs (str | dict ``{"text", "style"}`` | :class:`~..spans.Run`) → ``one:OE`` XML."""
-    return _tostring(_make_oe(runs, quick_style_index, alignment, root=True))
+    return _tostring(make_text_oe(runs, quick_style_index, alignment, root=True))
 
 
 def _cell_runs(cell: Any) -> tuple[list[Any], str | None, str | None]:
@@ -61,17 +62,26 @@ def _cell_runs(cell: Any) -> tuple[list[Any], str | None, str | None]:
     return [cell], None, None
 
 
-def build_table_xml(
+def make_table_row(cells: list[Any], n_cols: int) -> etree._Element:
+    """One row of cell inputs → a ``one:Row`` element, padded to ``n_cols`` cells."""
+    row_el = etree.Element(qn("Row"))
+    for cell in list(cells) + [""] * (n_cols - len(cells)):
+        runs, shading_color, alignment = _cell_runs(cell)
+        cell_el = etree.SubElement(row_el, qn("Cell"))
+        if shading_color:
+            cell_el.set("shadingColor", shading_color)
+        children = etree.SubElement(cell_el, qn("OEChildren"))
+        children.append(make_text_oe(runs, alignment=alignment))
+    return row_el
+
+
+def make_table(
     rows: list[list[Any]],
     borders_visible: bool = True,
     has_header_row: bool = False,
     col_widths: list[float] | None = None,
-) -> str:
-    """Structured rows → full ``one:Table`` XML (Columns + Row/Cell/OEChildren/OE).
-
-    Cells accept str, run-list, or dict ``{"text"|"runs", "style", "shading_color",
-    "alignment"}``. Short rows are padded to the widest row.
-    """
+) -> etree._Element:
+    """Structured rows → a full ``one:Table`` element (Columns + Row/Cell/OEChildren/OE)."""
     n_cols = max((len(r) for r in rows), default=0)
     widths = col_widths if col_widths is not None else [120.0] * n_cols
     table = etree.Element(qn("Table"), nsmap=NSMAP)
@@ -83,24 +93,31 @@ def build_table_xml(
         col.set("index", str(i))
         col.set("width", str(float(width)))
     for row in rows:
-        row_el = etree.SubElement(table, qn("Row"))
-        for cell in list(row) + [""] * (n_cols - len(row)):
-            runs, shading_color, alignment = _cell_runs(cell)
-            cell_el = etree.SubElement(row_el, qn("Cell"))
-            if shading_color:
-                cell_el.set("shadingColor", shading_color)
-            children = etree.SubElement(cell_el, qn("OEChildren"))
-            children.append(_make_oe(runs, alignment=alignment))
-    return _tostring(table)
+        table.append(make_table_row(row, n_cols))
+    return table
 
 
-def build_image_xml(
+def build_table_xml(
+    rows: list[list[Any]],
+    borders_visible: bool = True,
+    has_header_row: bool = False,
+    col_widths: list[float] | None = None,
+) -> str:
+    """Structured rows → full ``one:Table`` XML.
+
+    Cells accept str, run-list, or dict ``{"text"|"runs", "style", "shading_color",
+    "alignment"}``. Short rows are padded to the widest row.
+    """
+    return _tostring(make_table(rows, borders_visible, has_header_row, col_widths))
+
+
+def make_image(
     data_b64: str,
     media_type: str = "image/png",
     width: float | None = None,
     height: float | None = None,
-) -> str:
-    """base64 bytes → ``one:Image`` with inline ``one:Data`` (insert path, SPEC §4)."""
+) -> etree._Element:
+    """base64 bytes → a ``one:Image`` element with inline ``one:Data``."""
     image = etree.Element(qn("Image"), nsmap=NSMAP)
     image.set("format", media_type.rsplit("/", 1)[-1])
     if width is not None or height is not None:
@@ -112,4 +129,14 @@ def build_image_xml(
         size.set("isSetByUser", "true")
     data = etree.SubElement(image, qn("Data"))
     data.text = data_b64
-    return _tostring(image)
+    return image
+
+
+def build_image_xml(
+    data_b64: str,
+    media_type: str = "image/png",
+    width: float | None = None,
+    height: float | None = None,
+) -> str:
+    """base64 bytes → ``one:Image`` XML with inline ``one:Data`` (insert path, SPEC §4)."""
+    return _tostring(make_image(data_b64, media_type, width, height))

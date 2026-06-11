@@ -113,12 +113,22 @@ sentinel, collects results + fixtures, mirrors the exit code. Guest runner is `r
 auto-run in the Tier-2 loop — the PII lesson (a real tour roster once leaked into a dump) makes
 auto-collecting raw dumps to host unsafe; run_tier2.bat runs pytest only.
 
-**Next (Phase 4):** write tools + hierarchy restructure (whole-batch UpdateHierarchy; move_page
-VM-gated) + concurrency guard + surgical in-place format-preservation edits. This is the hardest
-phase (Fable + high/xhigh effort territory). The single edit seam `apply_page_edit()` and the
-hierarchy seam `apply_hierarchy_restructure()` already exist — build the content logic INSIDE
-them. Phase 4 Tier 2 adds the create→get→update→delete round-trip + format-preservation regression
-(read mixed-format page → edit one paragraph → assert untouched paragraphs' style unchanged).
+**Phase 4 IN PROGRESS — staged, user confirms between stages.** Stage 1 DONE (2026-06-11):
+the surgical content mutators are built INSIDE `apply_page_edit()` — `update_page_content`
+(modes append / insert_before / insert_after / replace; `target_object_id` anchors on
+get_page objectIDs; content = plain text or styled runs), `create_table` (new table, or
+append rows when the target is an existing `one:Table` objectID), `insert_image` (OE-wrapped,
+inline `one:Data`). Mechanics locked in Stage 1: parse with `strip_cdata=False` (CDATA
+survives the round-trip byte-identical); payload-strategy seam — `DEFAULT_PAYLOAD_STRATEGY
+= "changed_objects"` prunes untouched page-level objects from the payload (merge can't
+disturb them), `whole_page` (piBinaryData read) is the alternative — **PROVISIONAL until the
+VM round-trips decide**; every `one:Image` left in a payload gets its binary inlined via
+`GetBinaryPageContent` and `CallbackID` stripped (read-side construct). Tier-1 suite:
+`tests/test_page_edit_content.py` (untouched OEs asserted byte-identical, real fixtures).
+Remaining: **Stage 2** create_notebook/create_section/create_page → **Stage 3** hierarchy
+mutators inside `apply_hierarchy_restructure()` → **Stage 4** Tier-2 VM round-trips
+(create→get→update→delete, concurrency conflict, format-preservation regression, payload
+strategy decision, move_page validation).
 
 ## Grounding
 - `docs/SPEC.md` — the spec itself (v0611: + get_current_context, section-group integration).
