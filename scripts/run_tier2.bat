@@ -19,5 +19,7 @@ call uv sync > test-results\tier2.log 2>&1
 call uv run pytest -m windows --junitxml=test-results\tier2.xml -ra >> test-results\tier2.log 2>&1
 REM capture pytest's exit code immediately (next command would overwrite ERRORLEVEL)
 set RC=%ERRORLEVEL%
-echo %RC%> test-results\exit_code.txt
+REM redirect-first: `echo %RC%> file` would parse a digit+`>` as a stdin redirect (e.g. `0>`),
+REM leaving the file empty. Putting the redirect first writes the value reliably.
+>test-results\exit_code.txt echo %RC%
 endlocal

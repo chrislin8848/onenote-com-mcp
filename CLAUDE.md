@@ -87,11 +87,12 @@ ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_com_mcp   # run ser
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
 ## Status (2026-06-11)
-Phases 0a, 0b, 1, and **2 done**. The VM is up (COM smoke passed), real fixtures are dumped into
-`tests/fixtures/`, the XML layer is implemented TDD-first against them (`spans.py`, `models.py`,
-`parse.py` three-layer effective style, `build.py` highlight dual-write), and the seven read
-tools are wired through `service/read.py` onto `FixtureBackend` (Linux green). All three seams
-remain guard-tested. Pushed to GitHub (`chrislin8848/onenote-com-mcp`, private).
+Phases 0a, 0b, 1, 2, and **3 done**. The VM is up, the XML layer is TDD'd against real dumps,
+the seven read tools run through `service/read.py` on `FixtureBackend` (Linux green), AND the
+live-COM read path is validated end-to-end on the VM: `tests/test_windows_read.py` (Tier 2,
+`@pytest.mark.windows`) passes all 7 read round-trips via the tar-based `scripts/remote_test.sh`
+loop (`onenote-tier2` `/it` task → poll → collect → mirror exit code). All three seams remain
+guard-tested. Pushed to GitHub (`chrislin8848/onenote-com-mcp`, private).
 
 Phase 2 shape: `service/read.py` does the orchestration (backend call → parse → project →
 resolve IDs to names), pure-Python and testable on Linux; `server.py` tools are thin facades
@@ -102,10 +103,22 @@ lossless runs+style model (effective style per run, structured tables, every con
 `GetHierarchy(notebook, hsPages)`. Ground truth: a `one:Image` has NO `objectID` — the deletable
 ID is on the enclosing `one:OE` (Phase 6 `delete_page_content` must target the OE).
 
-**Next (Phase 3):** `Win32ComBackend` + `dump_fixtures.py` are already done (commit 803ca55);
-remaining is the VM read-integration loop via `scripts/remote_test.sh` (`@pytest.mark.windows`
-round-trips), plus the deferred `remote_test.sh` rsync→tar fix (guest has no rsync) and the
-formal `onenote-tier2` schtasks task. Trust fixtures over the schema sketch.
+Phase 3 details: `remote_test.sh` ships code via **tar-over-SSH** (guest has no rsync/git; uses
+the guest's bsdtar; shell builtins wrapped in `cmd /c` to be cmd/PowerShell-agnostic), registers
+the `/it` `onenote-tier2` task idempotently (`/f`), triggers, polls a `test-results\exit_code.txt`
+sentinel, collects results + fixtures, mirrors the exit code. Guest runner is `run_tier2.bat`
+(watch the `echo %RC%>file` → `0>` stdin-redirect footgun; use redirect-first). VM is `dev@
+192.168.122.13` (DHCP — `virsh domifaddr --source agent win11-onenote`); default SSH shell is cmd.
+**Fixture re-dump stays a deliberate MANUAL step** (dump_fixtures.py + hand-sanitize), NOT
+auto-run in the Tier-2 loop — the PII lesson (a real tour roster once leaked into a dump) makes
+auto-collecting raw dumps to host unsafe; run_tier2.bat runs pytest only.
+
+**Next (Phase 4):** write tools + hierarchy restructure (whole-batch UpdateHierarchy; move_page
+VM-gated) + concurrency guard + surgical in-place format-preservation edits. This is the hardest
+phase (Fable + high/xhigh effort territory). The single edit seam `apply_page_edit()` and the
+hierarchy seam `apply_hierarchy_restructure()` already exist — build the content logic INSIDE
+them. Phase 4 Tier 2 adds the create→get→update→delete round-trip + format-preservation regression
+(read mixed-format page → edit one paragraph → assert untouched paragraphs' style unchanged).
 
 ## Grounding
 - `docs/SPEC.md` — the spec itself (v0611: + get_current_context, section-group integration).

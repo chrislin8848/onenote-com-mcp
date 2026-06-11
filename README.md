@@ -21,8 +21,8 @@ any employee with synced OneNote and needs no admin setup.
 | **0b** | Windows 11 VM + autologon + secondary-session runner + `remote_test` + COM smoke | ✅ done |
 | **1** | XML parse/build (lxml) + format preservation, TDD against **real VM fixtures** | ✅ done |
 | **2** | Read tools incl. `get_current_context` on `FixtureBackend` (Linux green) | ✅ done |
-| 3 | `Win32ComBackend` live + `dump_fixtures.py` | 🔶 COM binding + fixture dump done; VM read-integration loop pending |
-| 4 | Write tools + hierarchy restructure tools (whole-batch UpdateHierarchy; move_page VM-gated) + concurrency guard + format-preservation regression | ⛔ blocked |
+| **3** | `Win32ComBackend` live + `dump_fixtures.py` + VM read-integration loop | ✅ done |
+| 4 | Write tools + hierarchy restructure tools (whole-batch UpdateHierarchy; move_page VM-gated) + concurrency guard + format-preservation regression | ▶ **next** |
 | 5 | Copy/transfer (raw-XML faithful copy) | ⛔ blocked |
 | 6 | Delete + retry hardening + **PyInstaller/Inno installer** | ⛔ blocked |
 
@@ -42,6 +42,15 @@ object's `objectID`; `get_page_images` returns MCP image content (binary via
 resolves the active window's four `Current*Id`s to names via one scoped `GetHierarchy`.
 Ground-truth finding baked in: a `one:Image` has no `objectID` of its own — the deletable
 object ID lives on the enclosing `one:OE` (matters for Phase 6 `delete_page_content`).
+
+Phase 3 (2026-06-11): the live-COM read path is validated end-to-end on the VM. `Win32ComBackend`
++ `dump_fixtures.py` were already in place (commit 803ca55); this closed the loop with
+[`tests/test_windows_read.py`](tests/test_windows_read.py) (Tier 2, `@pytest.mark.windows`) and a
+tar-based [`scripts/remote_test.sh`](scripts/remote_test.sh) (ships code → triggers the `/it`
+`onenote-tier2` task in the autologon session → polls → collects → mirrors the pytest exit code).
+All 7 Tier-2 read round-trips pass on real OneNote — including the previously-open question that
+`Windows.CurrentWindow`'s `Current*Id` properties marshal under early binding, and that the
+highlight dual-attribute survives a live read (not just the committed dump).
 
 ## Develop (Linux host)
 

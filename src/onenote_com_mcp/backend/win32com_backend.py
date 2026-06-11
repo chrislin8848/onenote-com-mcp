@@ -224,8 +224,9 @@ class Win32ComBackend(OneNoteBackend):
         )
 
     def get_current_window_ids(self) -> CurrentWindowIds:
-        # ⚠ PHASE 3 (VM): property (not method) marshalling — Windows/CurrentWindow access
-        # under early binding must be confirmed on the VM alongside the [out]-param question.
+        # CONFIRMED on the VM (2026-06-11, Tier 2): under the early-bound makepy module the
+        # Windows / CurrentWindow PROPERTY chain and the Current*Id properties marshal fine —
+        # no special handling needed beyond what methods get.
         def read() -> CurrentWindowIds:
             windows = self.app.Windows
             current = windows.CurrentWindow if windows.Count > 0 else None
