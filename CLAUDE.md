@@ -87,8 +87,10 @@ ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_com_mcp   # run ser
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
 ## Status (2026-06-12)
-Phases 0a, 0b, 1, 2, 3, 4, 5, and **5b done** (5b: see its own section below — 22-tool catalog
-complete, Tier-1 177 + Tier-2 36 green). Next: **Phase 6**.
+Phases 0a, 0b, 1, 2, 3, 4, 5, **5b done**, and **Phase 6 Stages 1–4 done** (deletes + diagnostic
+log + §4 descriptions + Tier-2 delete round-trips; Tier-1 202 + Tier-2 43 green). Only **Phase 6
+Stage 5 (PyInstaller packaging + installer, in the VM)** remains, plus Chris's real-Desktop §4
+acceptance pass.
 The VM is up, the XML layer is TDD'd against real dumps,
 the seven read tools run through `service/read.py` on `FixtureBackend` (Linux green), AND the
 live-COM read path is validated end-to-end on the VM: `tests/test_windows_read.py` (Tier 2,
@@ -277,7 +279,38 @@ Original scope (all delivered):
   never straight into tests/fixtures; inspect for PII before moving — the first dump caught
   real flight tickets and was rejected; page 1 is being rebuilt with neutral files).
 
-## Phase 6 (NEXT — SPEC v0612)
+## Phase 6 (IN PROGRESS — SPEC v0612) — Stages 1–4 DONE, Stage 5 (packaging) NEXT
+**Stage 1 DONE (commit 8890557, Tier-1 187):** `service/delete.py`. `delete_node` = thin
+DeleteHierarchy facade, recycle-bin default (`permanent=False`). `delete_page_content` validates
+the target is a PAGE-LEVEL object (direct `one:Page` child: Outline/Image/InsertedFile/
+InkDrawing/MediaFile) BEFORE the COM call, turning the inline-OE refusal into a clear error
+naming what the target is + pointing at update_page_content. Carries the stamp from the
+validation read.
+**Stage 2 DONE (commit 9434e05, Tier-1 196):** `logging_config.py` (§7). `ONENOTE_MCP_LOG_LEVEL`
+(default ERROR=detailed off; DEBUG=on) + `ONENOTE_MCP_LOG_FILE` (default `%LOCALAPPDATA%\OneNoteMCP
+\logs\`, omitted→stderr-only). Rotating file + stderr, NEVER stdout. `log_tool_call` composed into
+`logged_tool` on all 22 tools: DEBUG logs redacted params+result, ERROR logs failures+hresult even
+when off. Redaction bounds every field (no base64/note content); fully guarded (never throws,
+bad path→stderr). `configure_logging()` in main().
+**Stage 3 DONE (commit 55b7019):** §4 cross-set description pass — contrastive borders on all
+confusable sets, DESTRUCTIVE+propose-confirm contracts in text, `mode` as a Literal enum,
+server-level `_SERVER_INSTRUCTIONS` (live-OneNote caution, two-step objectID rule, propose-confirm,
+date-rewrite benchmark). **restructure/reorder verb-plural mismatch: KEPT (user decision
+2026-06-12 — the singular/plural already signals one-section-of-pages vs many-sections; the
+borders handle the confusion).** §4 acceptance on real Claude Desktop is still Chris's to run.
+**Stage 4 DONE (host smoke commit 6c64da7 + Tier-2 commit pending; Tier-2 43 passed):**
+`tests/test_smoke_server.py` (catalog completeness, host) + `tests/test_windows_delete.py` (7
+Tier-2 delete round-trips, ALL GREEN on the VM): delete_node section/page/permanent (recycled →
+gone from list_*), delete_page_content on a page-level outline/attachment/image actually removes
+it, and an inline paragraph OE is refused with ValueError before COM. **VM-confirmed delete
+semantics** (already in docs/com-api-reference.md Phase-5b section): page-level Outline/Image/
+InsertedFile ACCEPTED; inline OEs REFUSED.
+**Stage 5 NEXT — packaging only:** PyInstaller freeze → Inno/NSIS `OneNoteMCP-Setup.exe` with
+`--configure` (Store + regular Claude Desktop config paths), built in the VM. Freeze constraint:
+late-bound Dispatch won't work (the makepy gen cache must be bundled — see win32 backend note);
+stdout must stay clean.
+
+Original Phase-6 scope as planned (all but packaging delivered):
 Deletes (`delete_node` hierarchy incl. section group + `delete_page_content` PAGE-LEVEL objects
 only — VM-verified semantics: outline/page-level Image/page-level InsertedFile are ACCEPTED;
 paragraph OEs AND inline attachment-bearing OEs are REFUSED, so inline content removal = outline
