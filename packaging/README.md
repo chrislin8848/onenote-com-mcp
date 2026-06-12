@@ -43,7 +43,8 @@ packaging\build.bat
 
 Steps: `uv sync --group packaging` → `pyinstaller packaging/onenote-mcp.spec` →
 `OneNoteMCP.exe --configure` smoke → `iscc packaging/onenote-mcp.iss`. Output:
-`dist/OneNoteMCP/` (frozen app) and `dist/installer/OneNoteMCP-Setup.exe`.
+`dist/OneNoteMCP/` (frozen app) and `dist/installer/OneNoteMCP-Setup_<version>.exe`
+(the installer filename carries the `AppVersion` from the .iss, e.g. `_0.9.9`).
 
 ## Validation (still VM-gated — author-then-verify)
 

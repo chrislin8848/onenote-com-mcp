@@ -87,10 +87,12 @@ ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_com_mcp   # run ser
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
 ## Status (2026-06-12)
-Phases 0a, 0b, 1, 2, 3, 4, 5, **5b done**, and **Phase 6 Stages 1–4 done + Stage 5 freeze
-VALIDATED** (deletes + diagnostic log + §4 descriptions + Tier-2 deletes; PyInstaller freeze
-binds OneNote live via --selftest). Tier-1 212 + Tier-2 43 green. Remaining: install Inno Setup
-on the VM → build/test the installer, plus Chris's real-Desktop §4 acceptance pass.
+Phases 0a, 0b, 1, 2, 3, 4, 5, **5b done**, and **Phase 6 COMPLETE through Stage 5** (deletes +
+diagnostic log + §4 descriptions + Tier-2 deletes; PyInstaller freeze AND the Inno Setup
+installer both VM-validated end-to-end — silent install → `--configure` registers Claude
+Desktop → installed exe `--selftest` binds OneNote, 3 notebooks, exit 0; version 0.9.9). Tier-1
+212 + Tier-2 43 green. Remaining: only Chris's real-Claude-Desktop §4 acceptance pass (by hand,
+NOT CC sub-agents) — packaging is done.
 The VM is up, the XML layer is TDD'd against real dumps,
 the seven read tools run through `service/read.py` on `FixtureBackend` (Linux green), AND the
 live-COM read path is validated end-to-end on the VM: `tests/test_windows_read.py` (Tier 2,
@@ -305,7 +307,7 @@ gone from list_*), delete_page_content on a page-level outline/attachment/image 
 it, and an inline paragraph OE is refused with ValueError before COM. **VM-confirmed delete
 semantics** (already in docs/com-api-reference.md Phase-5b section): page-level Outline/Image/
 InsertedFile ACCEPTED; inline OEs REFUSED.
-**Stage 5 IN PROGRESS — freeze VALIDATED, installer gated on Inno:**
+**Stage 5 DONE — freeze + installer both VM-VALIDATED end-to-end (2026-06-12):**
 - **Host authoring DONE (commits 0495522 + e052acf):** `configure.py` (`--configure`: detect
   regular + Store Claude config by glob, merge-not-clobber, no log-level var) + `--selftest`
   (bind COM, list notebooks — the install health check) + `packaging/` (PyInstaller spec [onedir,
@@ -317,12 +319,21 @@ InsertedFile ACCEPTED; inline OEs REFUSED.
   gen_py-regeneration recipe works (see docs/com-api-reference.md "Phase 6 Stage 5"): EnsureModule
   + bundled makepy + writable `win32com.__gen_path__`. **SPEC §8's late-bound-Dispatch note is
   moot** (late binding never worked for OneNote; this is the right fix, now proven).
-- **REMAINING for Stage 5:** install Inno Setup 6 (iscc.exe) on the VM, then `packaging/build.bat`
-  builds `dist/installer/OneNoteMCP-Setup.exe`; install it and confirm the `onenote` entry lands
-  in Claude Desktop and the server launches. Gated on the Inno install (user decision 2026-06-12:
-  validate freeze first, defer installer).
-- **Also pending (Chris):** the §4 real-Claude-Desktop acceptance pass — now unblocked, since the
-  frozen exe runs (or use the source server with ONENOTE_FIXTURES_DIR / the live VM).
+- **Installer BUILT + END-TO-END VALIDATED ON THE VM (2026-06-12):** Inno Setup 6.7.3 installed
+  via `winget install --id JRSoftware.InnoSetup --source winget` (per-user, NOT on PATH, at
+  `%LocalAppData%\Programs\Inno Setup 6\ISCC.exe`; avoid the msstore source — its agreement
+  prompt hangs non-interactive SSH). `packaging/build.bat` now resolves iscc from PATH→that
+  location; the `.iss` anchors Source/OutputDir with `{#SourcePath}..\` (freeze writes repo-root
+  `dist\`, but iscc resolves relatives against the script's `packaging\` dir). Output filename
+  carries the version: `dist/installer/OneNoteMCP-Setup_<AppVersion>.exe` (built
+  `OneNoteMCP-Setup_0.9.9.exe`, ~22.8 MB). Validated full chain: silent install
+  (`/VERYSILENT`, per-user, no admin) → exe lands at `%LocalAppData%\Programs\OneNoteMCP\` →
+  post-install `--configure` registers the `onenote` entry in `claude_desktop_config.json`
+  pointing at the INSTALLED exe → the installed exe's `--selftest` bound OneNote (3 notebooks,
+  exit 0) via the interactive task. Version is 0.9.9 (pyproject + __init__ + .iss + uv.lock).
+- **Still pending (Chris, NOT a packaging blocker):** the §4 real-Claude-Desktop acceptance pass
+  — install the .exe (or the source server) and exercise the 22-tool catalog by hand in real
+  Claude Desktop (SPEC §4 — NOT CC sub-agents).
 
 Original Phase-6 scope as planned (all but packaging delivered):
 Deletes (`delete_node` hierarchy incl. section group + `delete_page_content` PAGE-LEVEL objects

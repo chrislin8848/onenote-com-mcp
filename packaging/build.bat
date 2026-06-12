@@ -32,5 +32,5 @@ if not defined ISCC (
 echo using "%ISCC%"
 "%ISCC%" packaging\onenote-mcp.iss || exit /b 1
 
-echo === done: dist\installer\OneNoteMCP-Setup.exe ===
+echo === done: dist\installer\OneNoteMCP-Setup_<version>.exe ===
 endlocal

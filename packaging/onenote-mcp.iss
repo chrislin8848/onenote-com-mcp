@@ -23,7 +23,7 @@ DisableProgramGroupPage=yes
 ; Paths are resolved relative to this script's dir ({#SourcePath}); the freeze output and the
 ; installer both live under the repo-root dist\ (one level up from packaging\).
 OutputDir={#SourcePath}..\dist\installer
-OutputBaseFilename=OneNoteMCP-Setup
+OutputBaseFilename=OneNoteMCP-Setup_{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
