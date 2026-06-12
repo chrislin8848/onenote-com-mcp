@@ -144,6 +144,22 @@ cell-content), **never** flatten to one string. Build full `one:Table` XML for c
   `piBinaryData`. Read: `get_page_images` → `GetBinaryPageContent(callbackID)` → return as MCP
   image content. Insert: emit `one:Image` with inline base64 `one:Data`.
 
+### Attachments / embedded objects (`one:InsertedFile`) — DESIGN TARGET, pending VM dump
+
+⚠ Phase 5b: everything here must be confirmed against a real dump of an attachment page /
+embedded spreadsheet / file printout before the parser is trusted (SPEC v0612-2 §5).
+
+- Sketch: `<one:InsertedFile pathSource="..." pathCache="..." preferredName="..."
+  objectID="...">` with optional `Previews` / `Printout` children (these drive the `kind`
+  discrimination: attachment icon vs embedded preview vs printout — exact rule TBD on dump).
+- **Binary location differs from images:** content is the on-disk cache file at `pathCache`
+  (OneNote-managed), read directly — NOT `GetBinaryPageContent`. Cache may be absent
+  (unsynced/purged): degrade gracefully, report "cache unavailable".
+- Copy: old `pathCache` is a dead reference in the clone — copy the cache file aside, point
+  `pathSource` at the copy, drop `pathCache`, let OneNote re-import (mechanics VM-gated).
+- `Printout` renders as page images — burned-in pixels, same limits as images.
+- No write path (no `insert_file`) this round, by SPEC decision.
+
 ## Editing model (in-place tree mutation — SPEC §5, hard rule)
 
 The edit data model **is the lxml tree itself**, not a DTO. Flow:

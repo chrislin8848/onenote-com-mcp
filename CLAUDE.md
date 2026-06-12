@@ -194,9 +194,34 @@ outlines render as nothing and are dropped on transplant (B≡A ignores them). V
 NEVER probe COM writes over plain SSH — a hung OpenHierarchy blocked OneNote's single-threaded
 COM for everything; writes only via the interactive Tier-2 task.
 
-## Phase 6 (next — SPEC v0612)
+## Phase 5b (next — SPEC v0612-2 §5): attachments / embedded objects (`one:InsertedFile`)
+New feature slice, deliberately BEFORE Phase 6 (the §4 description pass needs the final 22-tool
+catalog; adding tools after that pass would force a redo). Scope:
+- **Two new read tools** — `get_page_files_info` (metadata for ANY InsertedFile: preferredName,
+  type, size from the cache file, `objectID`, `kind` attachment-icon/embedded-preview/printout
+  via `Previews`/`Printout` children — discrimination法待 VM dump; never parses content) and
+  `get_page_files` (content extraction LIMITED to: text-class decode, image → MCP image content,
+  PDF → server-side text via a pure-Python lib [default candidate: pypdf — PyInstaller-safe];
+  docx/xlsx/pptx etc. → metadata + explicit "unsupported"; size cap + truncate).
+- **Binary path differs from images:** content = read the `pathCache` file on disk, NOT
+  `GetBinaryPageContent`. Cache may be missing (unsynced/purged) → graceful "cache unavailable",
+  never crash. File reads live BEHIND the backend (new backend method; FixtureBackend replays).
+- **Copy fidelity extension (transfer_page):** old `pathCache` = dead reference; clone = copy
+  the cache file aside, rewrite the element to `pathSource` → the copy, drop `pathCache`, let
+  OneNote re-import. Re-import mechanics + embedded-spreadsheet clone behavior are VM-gated.
+  Source cache unavailable ⇒ report that attachment explicitly in the result, never skip silently.
+- **Edit-path question (VM):** should `InsertedFile` join `_CONTENT_TAGS` in page_edit so
+  unchanged attachments are pruned from `changed_objects` payloads? Verify an edit on an
+  attachment-bearing page leaves the attachment intact (format-preservation regression extends
+  to attachments).
+- **No `insert_file` tool** (deliberate, in the limits list). `Printout` renders as page images
+  → same burned-in-pixels limits as images.
+- Fixtures first: VM dump of an attachment page / embedded sheet / printout page (Chris adds
+  test material) — InsertedFile XML ground truth before parsing is trusted.
+
+## Phase 6 (after 5b — SPEC v0612)
 Deletes (`delete_node` hierarchy incl. section group + `delete_page_content` page-level objects:
-image/table/outline — target the enclosing `one:OE`, recycle-bin default), error/retry
+image/table/outline/InsertedFile — target the enclosing `one:OE`, recycle-bin default), error/retry
 hardening, smoke tests, then packaging (PyInstaller → Inno/NSIS `OneNoteMCP-Setup.exe`). Two new
 SPEC v0612 deliverables:
 - **Diagnostic log (§7), default OFF.** Env switch `ONENOTE_MCP_LOG_LEVEL` (default `ERROR`;
@@ -207,15 +232,18 @@ SPEC v0612 deliverables:
 - **Tool-description enhancement (§4), one cross-set pass.** Contrastive/negative borders on
   confusable pairs (delete_node vs delete_page_content; update_page_content vs create_table vs
   insert_image; restructure_section vs reorder_sections vs move_page vs rename_node; get_page vs
-  get_page_images), DESTRUCTIVE + propose-confirm contracts in description text, append/insert/
-  replace as a per-value enum, server-level `instructions`, read tools return `objectID`s.
+  get_page_images vs get_page_files_info [metadata, any type] vs get_page_files [content, only
+  text/image/PDF — info is the prerequisite of files]), DESTRUCTIVE + propose-confirm contracts
+  in description text, append/insert/replace as a per-value enum, server-level `instructions`,
+  read tools return `objectID`s (incl. get_page_files_info → delete_page_content).
   **Acceptance is real Claude Desktop (Chris), NOT CC sub-agents** (SPEC §4 — sub-agents pollute
   the naive-Claude test). Open decision: unify the `restructure_section`/`reorder_sections`
   verb/plural mismatch IF the API isn't externally frozen.
 
 ## Grounding
-- `docs/SPEC.md` — the spec itself (v0612: create_notebook/copy_notebook removed; + tool-
-  description enhancement §4, diagnostic log §7 — both Phase 6).
+- `docs/SPEC.md` — the spec itself (v0612-2: + attachments/embedded objects §5 → Phase 5b;
+  create_notebook/copy_notebook removed; tool-description enhancement §4 + diagnostic log §7
+  → Phase 6).
 - `docs/com-api-reference.md` — COM signatures + enums (from Microsoft Learn).
 - `docs/onenote-xml-schema.md` — `one:` page/hierarchy XML + format-preservation rules.
 - `docs/vm-setup.md` — Phase 0b Windows VM build (autologon, desktop OneNote, COM smoke, Tier-2).
