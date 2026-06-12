@@ -1,9 +1,19 @@
-"""FastMCP server — the full OneNote tool catalog (SPEC §4).
+"""FastMCP server — the full 22-tool OneNote catalog (SPEC §4).
 
-This module wires every tool's *name, signature, and description* (the MCP contract the LLM
-sees) up front. Bodies raise ``NotImplementedError`` tagged with the phase that fills them in,
-so the surface is reviewable now and lights up phase by phase. The shared write core and the
-copy core live in ``onenote_com_mcp.service`` — these tools stay thin facades (SPEC §4).
+Every tool is a thin facade over ``onenote_com_mcp.service`` (the shared write core, the copy
+core, the hierarchy core); the orchestration lives there, not here. Descriptions carry the §4
+contract the LLM reads: contrastive borders on confusable pairs (get_page vs get_page_images vs
+get_page_files_info vs get_page_files; update_page_content vs create_table vs insert_image;
+restructure_section vs reorder_sections vs move_page vs rename_node; delete_node vs
+delete_page_content; copy vs move), DESTRUCTIVE + propose-then-confirm contracts in text, and
+``mode`` as a per-value enum. Cross-tool rules that belong to no single tool live in
+``_SERVER_INSTRUCTIONS`` (MCP ``initialize`` instructions). ``logged_tool`` adds the §7 per-call
+diagnostic log at the decorator seam.
+
+Description quality is ACCEPTANCE-TESTED on real Claude Desktop (SPEC §4 — a naive Claude that
+sees only these descriptions must pick the right tool; CC sub-agents are explicitly not a valid
+proxy). Pending: unifying the restructure_section/reorder_sections verb-plural mismatch (Chris's
+call — only if the API is not externally frozen).
 
 stdio transport: nothing but MCP protocol may go to stdout. Logs go to stderr (SPEC §8).
 """
@@ -13,6 +23,7 @@ from __future__ import annotations
 import base64
 import json
 import sys
+from typing import Literal
 
 from mcp.server.fastmcp import FastMCP, Image
 
@@ -20,7 +31,32 @@ from onenote_com_mcp.backend import get_backend
 from onenote_com_mcp.logging_config import configure_logging, log_tool_call
 from onenote_com_mcp.service import copy, create, delete, files, hierarchy_edit, page_edit, read
 
-mcp = FastMCP("onenote")
+# Server-level guidance (SPEC §4): cross-tool rules that belong to no single tool. Claude
+# Desktop's uptake of `instructions` is to be confirmed empirically (Stage-3 acceptance).
+_SERVER_INSTRUCTIONS = """\
+This server edits the LIVE OneNote desktop app: every create/update/delete/copy/restructure \
+takes effect immediately in the real notebooks — there is no staging copy and no undo beyond \
+OneNote's own recycle bin. Work conservatively.
+
+Two-step rule for in-page objects: to edit or delete something INSIDE a page (a paragraph, \
+table, image, or attachment) you first need its objectID — read the page with get_page (text, \
+tables, images), get_page_images (image pixels), or get_page_files_info (attachments/embedded \
+objects). Picking the right tool but omitting the objectID it needs is as wrong as picking the \
+wrong tool.
+
+Destructive and structural operations (delete_node, delete_page_content, force overwrites, \
+restructure_section, reorder_sections, move_page, rename_node) are propose-then-confirm: tell \
+the user exactly what will change and get their go-ahead before calling. For risky restructures, \
+suggest a clone backup with copy_section first.
+
+Benchmark workflow for "copy these pages and change the dates" (faithful copy, then edit the \
+copy): (1) the user manually creates a synced notebook B in the OneNote UI (COM cannot create \
+notebooks); (2) copy_section clones each source section into B — a perfect, mechanical copy; \
+(3) search_pages (scoped to B) finds the pages with dates; (4) get_page reads the clean text; \
+(5) update_page_content (replace) changes only the date paragraphs, preserving all other \
+formatting. Verify B≡A before editing, then verify the dates."""
+
+mcp = FastMCP("onenote", instructions=_SERVER_INSTRUCTIONS)
 
 
 def logged_tool(*args, **kwargs):
@@ -71,7 +107,12 @@ def search_pages(query: str, scope_id: str = "") -> str:
 
 @logged_tool()
 def get_page(page_id: str) -> str:
-    """Read a page preserving rich text formatting, structure, tables, and object IDs."""
+    """Read a page's full content — rich-text runs with resolved styles, structured tables,
+    and the objectID of every content object (outlines, paragraphs, tables, images,
+    attachments). This is the primary page read and the source of the objectIDs that
+    update_page_content / create_table / delete_page_content need. It returns images and
+    attachments as lightweight references (object IDs + metadata), NOT their bytes — use
+    get_page_images for image pixels and get_page_files / get_page_files_info for attachments."""
     return _json(read.get_page(get_backend(), page_id))
 
 
@@ -79,9 +120,11 @@ def get_page(page_id: str) -> str:
 # build a pydantic output schema for Image, and we don't want one here.
 @logged_tool(structured_output=False)
 def get_page_images(page_id: str) -> list[Image]:
-    """Return a page's images (binary) as viewable image content. Per-image metadata
-    (object IDs, dimensions, OCR text) is on get_page; this returns the pixels so they can
-    be recognized visually."""
+    """Return the PIXELS of a page's embedded images (one:Image) as viewable image content,
+    so they can be recognized visually. This is bytes only — for an image's objectID,
+    dimensions, or OCR text use get_page. For files attached to the page (PDFs, Office docs,
+    text files — one:InsertedFile, shown as an icon or embedded preview, not an inline image)
+    use get_page_files_info / get_page_files instead."""
     return [
         Image(data=base64.b64decode(img["data_base64"]), format=img["media_type"].split("/")[-1])
         for img in read.get_page_images(get_backend(), page_id)
@@ -90,22 +133,25 @@ def get_page_images(page_id: str) -> list[Image]:
 
 @logged_tool()
 def get_page_files_info(page_id: str) -> str:
-    """List a page's attachments and embedded objects (one:InsertedFile) — metadata only,
-    any file type: display name, extension, size (from the local cache; flagged when the
-    cache is unavailable), kind (attachment_icon / printout / embedded_preview), and the
-    objectID needed to delete it. Never parses file content — get_page_files extracts
-    content for the supported types."""
+    """List a page's attachments and embedded objects (one:InsertedFile) — METADATA ONLY, for
+    ANY file type: display name, extension, size, kind (attachment_icon / printout /
+    embedded_preview), and the objectID needed to delete it with delete_page_content. Does NOT
+    read content (use get_page_files for that — this is its prerequisite) and is NOT for inline
+    images (use get_page_images). Always works regardless of type, so call this first to see
+    what a page carries before extracting anything."""
     return _json(files.get_page_files_info(get_backend(), page_id))
 
 
 # structured_output=False: entries may be MCP image content (see get_page_images).
 @logged_tool(structured_output=False)
 def get_page_files(page_id: str, object_id: str = "", max_chars: int = 50000) -> list[str | Image]:
-    """Extract attachment CONTENT for the supported types only: text-class files (decoded
-    text), image attachments (returned as viewable image content), and PDFs (server-side
-    text extraction). Other types (docx/xlsx/pptx/…) report metadata + "unsupported" — use
-    get_page_files_info first to see what a page has. object_id narrows to one attachment;
-    text is truncated at max_chars. Unavailable caches are reported per file, never crash."""
+    """Extract attachment CONTENT, for three supported types ONLY: text-class files (decoded
+    text), image attachments (returned as viewable image content), and PDFs (server-side text
+    extraction). Other types (docx/xlsx/pptx/…) return metadata + an explicit "unsupported" —
+    run get_page_files_info first to see types and objectIDs. This reads one:InsertedFile
+    attachments, NOT inline page images (those are get_page_images). object_id narrows to one
+    attachment; text is truncated at max_chars; a missing/unsynced cache is reported per file,
+    never a crash."""
     out: list[str | Image] = []
     for entry in files.get_page_files(get_backend(), page_id, object_id, max_chars):
         image_b64 = entry.pop("data_base64", None)
@@ -137,8 +183,9 @@ def get_current_context() -> str:
 
 @logged_tool()
 def create_section(parent_id: str, name: str) -> str:
-    """Create a section under ``parent_id`` — an existing notebook OR a section group —
-    inheriting its sync."""
+    """Create a new empty SECTION under parent_id — an existing notebook OR a section group —
+    inheriting its sync. For a new PAGE use create_page; there is no create_notebook (make
+    notebooks in the OneNote UI, then add sections here)."""
     return _json({"section_id": create.create_section(get_backend(), parent_id, name)})
 
 
@@ -146,7 +193,8 @@ def create_section(parent_id: str, name: str) -> str:
 def create_page(
     section_id: str, title: str, content: str | list[dict] = "", page_level: int = 1
 ) -> str:
-    """Create a page in a section. ``page_level`` (1/2/3) sets subpage indent. ``content``
+    """Create a new PAGE in a section. Use this to make a page; to add content to a page that
+    already exists, use update_page_content. page_level (1/2/3) sets subpage indent. content
     optionally adds initial paragraphs — same shapes as update_page_content (plain text with
     newlines, or styled paragraph dicts)."""
     return _json(
@@ -161,18 +209,24 @@ def create_page(
 def update_page_content(
     page_id: str,
     content: str | list[dict],
-    mode: str = "append",
+    mode: Literal["append", "insert_before", "insert_after", "replace"] = "append",
     target_object_id: str = "",
     force: bool = False,
 ) -> str:
-    """Edit page content surgically — untouched paragraphs keep their formatting verbatim.
+    """Edit a page's TEXT/paragraphs surgically — untouched paragraphs keep their formatting
+    verbatim. Use this to add, insert, or rewrite text and styled paragraphs, and to edit a
+    table CELL's text. NOT for creating a table (use create_table) or adding an image (use
+    insert_image). To remove a whole outline/image/attachment, use delete_page_content.
 
-    mode: "append" (add paragraphs at the end of an outline; target_object_id optionally
-    names an outline objectID, default = the page's last outline), "insert_before" /
-    "insert_after" (target_object_id = a paragraph objectID from get_page; new paragraphs
-    become its siblings), or "replace" (swap that paragraph's text, keeping its paragraph
-    style unless the new content overrides it). Table cell text is edited by targeting the
-    paragraph inside the cell with "replace".
+    mode (per value):
+      "append"        — add paragraphs at the end of an outline; target_object_id optionally
+                        names an outline objectID (default = the page's last outline).
+      "insert_before" — insert new paragraphs just before target_object_id (a paragraph
+                        objectID from get_page); they become its siblings.
+      "insert_after"  — same, just after the target paragraph.
+      "replace"       — swap target_object_id's text, keeping its paragraph style unless the
+                        new content overrides it. Editing one table cell = "replace" on the
+                        paragraph objectID inside that cell.
 
     content: plain text (newlines split paragraphs) OR a list of paragraph dicts —
     {"text": "...", "style": {...}} or {"runs": [{"text": "...", "style": {...}}, ...]},
@@ -181,7 +235,7 @@ def update_page_content(
     font-family, font-size.
 
     Concurrency-guarded: fails instead of clobbering if the page changed since it was read.
-    Set force=True only after explicit user confirmation."""
+    force=True overwrites anyway — DESTRUCTIVE, only after explicit user confirmation."""
     page_edit.edit_page_content(
         get_backend(), page_id, content, mode, target_object_id=target_object_id, force=force
     )
@@ -197,7 +251,9 @@ def create_table(
     target_object_id: str = "",
     force: bool = False,
 ) -> str:
-    """Add a table to a page, or append rows to an existing table.
+    """Create a NEW table on a page, or append rows to an existing table. Use this for table
+    STRUCTURE (new table, more rows). To edit the TEXT already in a table cell, use
+    update_page_content ("replace" on the cell's paragraph objectID) — not this.
 
     rows: cells are plain strings or dicts {"text" | "runs", "style", "shading_color",
     "alignment"} (short rows are padded). target_object_id: empty → new table at the end of
@@ -226,8 +282,10 @@ def insert_image(
     target_object_id: str = "",
     force: bool = False,
 ) -> str:
-    """Insert an image (base64 + media type, e.g. "image/png") into a page, appended to an
-    outline (target_object_id = outline objectID, default the page's last outline).
+    """Insert an IMAGE (base64 + media type, e.g. "image/png") into a page, appended to an
+    outline (target_object_id = outline objectID, default the page's last outline). This adds
+    a picture as page content — it is NOT for attaching a document file (there is no
+    insert_file tool this version) and NOT for adding text (use update_page_content).
     width/height are points; omit to let OneNote size it. Concurrency-guarded; force=True
     only after explicit user confirmation."""
     page_edit.insert_image(
@@ -248,20 +306,23 @@ def insert_image(
 
 @logged_tool()
 def copy_page(page_id: str, target_section_id: str) -> str:
-    """Faithfully copy a page (formatting, tables, inline images, attachments, pageLevel) to
-    a section. Returns the new page's ID. Attachments are carried by re-import (a staged copy
-    of the file); file_notes lists any attachment that could not be transferred faithfully —
-    surface those to the user instead of silently accepting the copy."""
+    """DUPLICATE a page into a section (formatting, tables, inline images, attachments,
+    pageLevel all preserved); the original stays put. This is a copy, NOT a move — to relocate
+    a page without duplicating it, use move_page. Returns the new page's ID. Attachments are
+    carried by re-import (a staged copy of the file); file_notes lists any attachment that
+    could not be transferred faithfully — surface those to the user, don't silently accept."""
     result = copy.transfer_page(get_backend(), page_id, target_section_id)
     return _json({"page_id": result.page_id, "file_notes": result.file_notes})
 
 
 @logged_tool()
 def copy_section(section_id: str, target_parent_id: str) -> str:
-    """Faithfully copy a whole section (pages in order, subpage levels kept) into a notebook
-    OR section group. The copy keeps the source name, de-collided with " (2)" if taken.
-    Returns the new section's ID; file_notes lists any page attachment that could not be
-    transferred faithfully — surface those to the user."""
+    """DUPLICATE a whole section (all pages in order, subpage levels kept) into a notebook OR
+    section group; the original stays put. The copy keeps the source name, de-collided with
+    " (2)" if taken. This is the largest copy unit (there is no copy_notebook — clone a whole
+    notebook by copy_section per section into a manually-created notebook). Returns the new
+    section's ID; file_notes lists any page attachment that could not be transferred
+    faithfully — surface those to the user."""
     result = copy.transfer_section(get_backend(), section_id, target_parent_id)
     return _json({"section_id": result.section_id, "file_notes": result.file_notes})
 
@@ -278,40 +339,47 @@ def copy_section(section_id: str, target_parent_id: str) -> str:
 
 @logged_tool()
 def restructure_section(section_id: str, ordered_pages: list[dict]) -> str:
-    """STRUCTURAL. Reorder ALL pages of a section in one batch and adjust subpage levels.
-    ordered_pages = the section's complete page list in target order, each entry
-    {"page_id": str, "page_level": 1|2|3}. Back up first (copy_section) and confirm the
-    target order with the user before applying."""
+    """STRUCTURAL. Reorder ALL pages WITHIN ONE section and adjust their subpage levels, in one
+    batch. Use this for page order/indent inside a single section. To move a page to a DIFFERENT
+    section use move_page; to reorder the sections themselves use reorder_sections; to rename a
+    page/section use rename_node. ordered_pages = the section's COMPLETE page list in target
+    order, each entry {"page_id": str, "page_level": 1|2|3} (a partial list is rejected). Propose
+    the target order and confirm with the user first; suggest a copy_section backup."""
     hierarchy_edit.restructure_section(get_backend(), section_id, ordered_pages)
     return f"section {section_id} restructured"
 
 
 @logged_tool()
 def reorder_sections(notebook_id: str, ordered_section_ids: list[str]) -> str:
-    """STRUCTURAL. Reorder a notebook's (or section group's) children in one batch.
-    ordered_section_ids = the COMPLETE child list in target order, including BOTH sections
-    and section groups exactly as list_sections shows them at that level (the hidden recycle
-    bin is handled automatically). Notebook-level ordering itself is not supported. Back up
-    first (copy_section) and confirm with the user before applying."""
+    """STRUCTURAL. Reorder the SECTIONS (and section groups) within a notebook or section group,
+    in one batch. Use this for the order of sections themselves — NOT for pages inside a section
+    (that's restructure_section) and NOT for renaming (rename_node). ordered_section_ids = the
+    COMPLETE child list in target order, including BOTH sections and section groups exactly as
+    list_sections shows them at that level (a partial list is rejected; the hidden recycle bin
+    is handled automatically). Ordering the top-level notebook list itself is not supported.
+    Propose the order and confirm with the user first; suggest a copy_section backup."""
     hierarchy_edit.reorder_sections(get_backend(), notebook_id, ordered_section_ids)
     return f"sections of {notebook_id} reordered"
 
 
 @logged_tool()
 def rename_node(parent_id: str, object_id: str, new_name: str) -> str:
-    """STRUCTURAL. Rename a page, section, or section group. parent_id = the containing
-    section/notebook ID. (A page rename edits its title — the hierarchy name follows it.)
-    Confirm with the user before applying."""
+    """STRUCTURAL. Change only the NAME of a page, section, or section group — nothing moves or
+    reorders. Not for moving a page (move_page), reordering pages (restructure_section), or
+    reordering sections (reorder_sections). parent_id = the containing section/notebook ID.
+    (A page rename edits its title; the hierarchy name follows it.) Confirm with the user
+    before applying."""
     hierarchy_edit.rename_node(get_backend(), parent_id, object_id, new_name)
     return f"{object_id} renamed to {new_name}"
 
 
 @logged_tool()
 def move_page(notebook_id: str, page_id: str, target_section_id: str) -> str:
-    """STRUCTURAL. Move a page to another section within the same notebook (it lands at the
-    end of the target section and its subpage level resets to 1). The moved page gets a NEW
-    page ID — returned here; use it for any follow-up calls. Confirm with the user before
-    applying."""
+    """STRUCTURAL. Move a page to a DIFFERENT section within the same notebook — the page leaves
+    its current section (this is a move, not a copy_page duplicate) and lands at the end of the
+    target section with its subpage level reset to 1. To reorder pages WITHIN their section
+    instead, use restructure_section. The moved page gets a NEW page ID — returned here; use it
+    for any follow-up calls. Confirm with the user before applying."""
     new_id = hierarchy_edit.move_page(get_backend(), notebook_id, page_id, target_section_id)
     return _json({"new_page_id": new_id, "section_id": target_section_id})
 
