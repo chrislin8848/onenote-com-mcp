@@ -144,20 +144,32 @@ cell-content), **never** flatten to one string. Build full `one:Table` XML for c
   `piBinaryData`. Read: `get_page_images` → `GetBinaryPageContent(callbackID)` → return as MCP
   image content. Insert: emit `one:Image` with inline base64 `one:Data`.
 
-### Attachments / embedded objects (`one:InsertedFile`) — DESIGN TARGET, pending VM dump
+### Attachments / embedded objects (`one:InsertedFile`) — GROUND TRUTH (VM dump 2026-06-12)
 
-⚠ Phase 5b: everything here must be confirmed against a real dump of an attachment page /
-embedded spreadsheet / file printout before the parser is trusted (SPEC v0612-2 §5).
+Confirmed against real dumps of the two attachment test pages (attachment icons, an embedded
+Excel sheet, a file printout):
 
-- Sketch: `<one:InsertedFile pathSource="..." pathCache="..." preferredName="..."
-  objectID="...">` with optional `Previews` / `Printout` children (these drive the `kind`
-  discrimination: attachment icon vs embedded preview vs printout — exact rule TBD on dump).
-- **Binary location differs from images:** content is the on-disk cache file at `pathCache`
-  (OneNote-managed), read directly — NOT `GetBinaryPageContent`. Cache may be absent
-  (unsynced/purged): degrade gracefully, report "cache unavailable".
-- Copy: old `pathCache` is a dead reference in the clone — copy the cache file aside, point
-  `pathSource` at the copy, drop `pathCache`, let OneNote re-import (mechanics VM-gated).
-- `Printout` renders as page images — burned-in pixels, same limits as images.
+- **Location: NOT a page-level object.** `one:InsertedFile` sits inside
+  `Page > Outline > OEChildren > OE` — same level as text paragraphs. It has **no `objectID`
+  of its own** (same pattern as `one:Image`); the deletable ID is on the enclosing `one:OE`.
+  - ⚠ Consequence (open VM question): `DeletePageContent` refuses paragraph OEs (0x8004200E,
+    Phase 4 ground truth). Whether an attachment-bearing OE is deletable that way is UNVERIFIED
+    — attachment delete may have to be an outline rewrite through the edit seam instead.
+  - Good news: the edit path needs NO `_CONTENT_TAGS` change — attachments ride inside
+    Outlines, so `changed_objects` pruning already protects untouched ones.
+- **`kind` discrimination (confirmed, clean):** no children = attachment icon; `one:Printout`
+  child (`xpsFileIndex="N"`) = file printout; `one:Previews` child (with `one:Preview
+  page="..." range="R1C1:..."` entries + `sourceDocument` GUID) = embedded object (e.g. Excel).
+- **Attributes:** attachment icons carry `pathCache` + `pathSource` + `preferredName`.
+  Embedded objects carry only `pathCache` + `preferredName` — **no `pathSource`**.
+- **`pathCache` verified live:** points at `%LOCALAPPDATA%\Temp\{GUID}.bin` on the *reading*
+  machine; files exist and are the real bytes (e.g. the .txt cache = the txt content).
+  `pathSource` is the *original author's* machine path — dead on any other machine, which is
+  exactly why clones must not carry it forward unchanged (copy cache aside → re-point
+  `pathSource` → drop `pathCache` → OneNote re-imports; mechanics still VM-gated).
+- **Printout bonus:** the printout's rendered pages are `one:Image`s (PNG via callback), AND
+  `GetBinaryPageContent` on the printout's callback returns the **original source file bytes**
+  (`%PDF` magic confirmed) — a printout retains its source document.
 - No write path (no `insert_file`) this round, by SPEC decision.
 
 ## Editing model (in-place tree mutation — SPEC §5, hard rule)
