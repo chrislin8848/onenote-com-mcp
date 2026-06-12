@@ -425,6 +425,11 @@ def main() -> None:
         action="store_true",
         help="register this server in Claude Desktop's config (both regular + Store) and exit",
     )
+    parser.add_argument(
+        "--selftest",
+        action="store_true",
+        help="bind OneNote via COM and list notebooks, then exit (install health check)",
+    )
     args = parser.parse_args()
 
     if args.configure:
@@ -437,6 +442,19 @@ def main() -> None:
             print("no Claude Desktop config location found", file=sys.stderr)
             raise SystemExit(1)
         print("Restart Claude Desktop to load the OneNote server.")
+        return
+
+    if args.selftest:
+        # Health check: exercise the real backend end to end (on a frozen build this also
+        # proves win32com's gen_py cache regenerates and OneNote binds via COM). Not the
+        # stdio server, so printing to stdout is fine here.
+        configure_logging()
+        try:
+            notebooks = read.list_notebooks(get_backend())
+        except Exception as exc:  # noqa: BLE001 — report any failure as a clean non-zero exit
+            print(f"SELFTEST FAIL: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        print(f"SELFTEST OK: connected to OneNote, {len(notebooks)} notebook(s) visible")
         return
 
     configure_logging()  # §7: reads ONENOTE_MCP_LOG_LEVEL/FILE; default OFF, never stdout

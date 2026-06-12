@@ -10,7 +10,15 @@
 # stdout MUST stay clean (JSON-RPC): console=True gives a console subsystem exe, but the
 # server itself writes only MCP protocol to stdout; logs go to stderr/file (§7/§8).
 
+import os
+
 from PyInstaller.utils.hooks import collect_submodules
+
+# SPECPATH is injected by PyInstaller = this spec's directory. Resolve our entry + runtime hook
+# against it so the build works regardless of the CWD pyinstaller is invoked from.
+_HERE = SPECPATH  # noqa: F821 (PyInstaller global)
+_ENTRY = os.path.join(_HERE, "onenote_mcp_entry.py")
+_RTHOOK = os.path.join(_HERE, "rthook_win32com_gen_py.py")
 
 hiddenimports = [
     # win32 COM core
@@ -36,13 +44,13 @@ hiddenimports += collect_submodules("pydantic")
 hiddenimports += collect_submodules("pydantic_core")
 
 a = Analysis(
-    ["onenote_mcp_entry.py"],
+    [_ENTRY],
     pathex=[],
     binaries=[],
     datas=[],
     hiddenimports=hiddenimports,
     hookspath=[],
-    runtime_hooks=["rthook_win32com_gen_py.py"],
+    runtime_hooks=[_RTHOOK],
     excludes=["tkinter", "matplotlib", "numpy", "PySide6", "PyQt5"],
     noarchive=False,
 )

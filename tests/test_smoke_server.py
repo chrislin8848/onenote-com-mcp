@@ -81,3 +81,21 @@ def test_server_instructions_present():
     # the cross-tool rules SPEC §4 asked for
     assert "objectID" in mcp.instructions
     assert "copy_section" in mcp.instructions
+
+
+def test_selftest_reports_failure_cleanly(monkeypatch, capsys):
+    """--selftest is the frozen-install health check (it binds COM on Windows). When the
+    backend can't be reached it must exit non-zero with a clear message, not a traceback."""
+    import sys
+
+    from onenote_com_mcp import server
+
+    def _boom():
+        raise RuntimeError("no backend here")
+
+    monkeypatch.setattr(server, "get_backend", _boom)
+    monkeypatch.setattr(sys, "argv", ["onenote-com-mcp", "--selftest"])
+    with pytest.raises(SystemExit) as excinfo:
+        server.main()
+    assert excinfo.value.code == 1
+    assert "SELFTEST FAIL" in capsys.readouterr().err
