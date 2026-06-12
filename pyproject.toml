@@ -22,6 +22,12 @@ dev = [
     "pytest>=8.2",
     "ruff>=0.6",
 ]
+# Build-only (Phase 6 Stage 5 packaging). Installed on the VM via `uv sync --group packaging`;
+# kept out of the normal dev/test loop. PyInstaller produces the Windows exe; the Inno Setup
+# compiler (iscc.exe) is a separate, non-pip install on the build VM (see packaging/README.md).
+packaging = [
+    "pyinstaller>=6.6",
+]
 
 [build-system]
 requires = ["hatchling"]

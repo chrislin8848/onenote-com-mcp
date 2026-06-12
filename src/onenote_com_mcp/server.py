@@ -412,7 +412,33 @@ def delete_page_content(page_id: str, object_id: str, force: bool = False) -> st
 
 
 def main() -> None:
-    """Console entry point. stdio transport; logs must stay on stderr."""
+    """Console entry point. With no args: the stdio MCP server (logs to stderr, never stdout).
+    With ``--configure``: register this server in Claude Desktop's config and exit (§8)."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="onenote-com-mcp",
+        description="COM-only OneNote MCP server. No args runs the stdio server.",
+    )
+    parser.add_argument(
+        "--configure",
+        action="store_true",
+        help="register this server in Claude Desktop's config (both regular + Store) and exit",
+    )
+    args = parser.parse_args()
+
+    if args.configure:
+        from onenote_com_mcp.configure import configure_claude_desktop
+
+        written = configure_claude_desktop()
+        for path in written:
+            print(f"configured: {path}")
+        if not written:
+            print("no Claude Desktop config location found", file=sys.stderr)
+            raise SystemExit(1)
+        print("Restart Claude Desktop to load the OneNote server.")
+        return
+
     configure_logging()  # §7: reads ONENOTE_MCP_LOG_LEVEL/FILE; default OFF, never stdout
     print("onenote-mcp starting (stdio)", file=sys.stderr)
     mcp.run(transport="stdio")
