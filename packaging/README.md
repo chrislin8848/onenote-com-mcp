@@ -25,9 +25,13 @@ OneNote installed (typelib registered), so this works without bundling a pre-gen
 ## VM prerequisites
 
 - **uv** — already present (the Tier-2 loop uses it).
-- **Inno Setup 6** — provides `iscc.exe`. NOT pip-installable; install once on the VM
-  (`winget install JRSoftware.InnoSetup`, or the installer from jrsoftware.org). `build.bat`
-  skips the installer step (exit code 2) if `iscc` is not on PATH.
+- **Inno Setup 6** — provides `iscc.exe`. NOT pip-installable; install once on the VM:
+  `winget install --id JRSoftware.InnoSetup --source winget --accept-package-agreements
+  --accept-source-agreements` (avoid the `msstore` source — its agreement prompt hangs a
+  non-interactive SSH session). winget installs it **per-user, NOT on PATH**, at
+  `%LocalAppData%\Programs\Inno Setup 6\ISCC.exe`; `build.bat` resolves `iscc` from PATH first,
+  then that known location (and `%ProgramFiles(x86)%`), and only skips the installer step
+  (exit code 2) if none is found.
 
 ## Build
 
