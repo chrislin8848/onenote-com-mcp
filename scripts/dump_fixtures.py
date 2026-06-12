@@ -56,9 +56,7 @@ def _resolve_page_ids_by_name(pages_xml: str, names: list[str]) -> list[str]:
             by_name.setdefault(name, pid)
     missing = [n for n in names if n not in by_name]
     if missing:
-        raise SystemExit(
-            f"pages not found in scope: {missing}; available: {sorted(by_name)}"
-        )
+        raise SystemExit(f"pages not found in scope: {missing}; available: {sorted(by_name)}")
     return [by_name[n] for n in names]
 
 
