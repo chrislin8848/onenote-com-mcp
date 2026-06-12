@@ -79,7 +79,10 @@ uv sync                         # install deps + dev group
 uv run pytest                   # Tier 1 (windows-marked tests auto-skip here)
 uv run ruff check . && uv run ruff format --check .
 ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_com_mcp   # run server on fixtures
+git config core.hooksPath .githooks   # once per clone: enable the pre-push Tier-1 gate
 ```
+The `.githooks/pre-push` hook runs the CI Tier-1 gate (ruff lint + format + pytest) before
+every push so a red CI is caught locally; `git push --no-verify` bypasses it for a one-off.
 
 ## Testing tiers (SPEC §2, §6)
 - **Tier 1 (host, every change):** pure logic + fixtures. Must stay green on Linux.
