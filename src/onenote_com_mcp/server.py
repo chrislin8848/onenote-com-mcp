@@ -17,7 +17,7 @@ import sys
 from mcp.server.fastmcp import FastMCP, Image
 
 from onenote_com_mcp.backend import get_backend
-from onenote_com_mcp.service import copy, create, files, hierarchy_edit, page_edit, read
+from onenote_com_mcp.service import copy, create, delete, files, hierarchy_edit, page_edit, read
 
 mcp = FastMCP("onenote")
 
@@ -306,16 +306,27 @@ def move_page(notebook_id: str, page_id: str, target_section_id: str) -> str:
 
 
 @mcp.tool()
-def delete_node(object_id: str) -> str:
-    """DESTRUCTIVE. Delete a hierarchy node (notebook / section group / section / page) to
-    the recycle bin."""
-    raise NotImplementedError("Phase 6")
+def delete_node(object_id: str, permanent: bool = False) -> str:
+    """DESTRUCTIVE. Delete a whole hierarchy NODE — a notebook, section group, section, or
+    page — via DeleteHierarchy. This removes the entire node and everything under it; to
+    remove an object from WITHIN a page (an outline, image, attachment) use
+    delete_page_content instead. Defaults to the recycle bin (permanent=False, the undo net);
+    permanent=True is unrecoverable. Confirm with the user before applying."""
+    delete.delete_node(get_backend(), object_id, permanent=permanent)
+    return f"deleted {object_id}" + (" permanently" if permanent else " to recycle bin")
 
 
 @mcp.tool()
-def delete_page_content(page_id: str, object_id: str) -> str:
-    """DESTRUCTIVE. Delete one page content object (image / table / outline) by ID."""
-    raise NotImplementedError("Phase 6")
+def delete_page_content(page_id: str, object_id: str, force: bool = False) -> str:
+    """DESTRUCTIVE. Delete ONE page-level content object from a page — a whole outline, a
+    page-level image, or a page-level attachment/embedded object — via DeletePageContent.
+    object_id comes from get_page / get_page_images / get_page_files_info. This removes a
+    PAGE-LEVEL object only; it does NOT delete a whole page/section (use delete_node) and
+    canNOT remove inline content (a single paragraph, or a table/image/attachment inside an
+    outline) — edit that with update_page_content instead. Concurrency-guarded; force=True
+    only after explicit user confirmation. Confirm with the user before applying."""
+    delete.delete_page_content(get_backend(), page_id, object_id, force=force)
+    return f"deleted content object {object_id} from {page_id}"
 
 
 def main() -> None:
