@@ -17,9 +17,23 @@ import sys
 from mcp.server.fastmcp import FastMCP, Image
 
 from onenote_com_mcp.backend import get_backend
+from onenote_com_mcp.logging_config import configure_logging, log_tool_call
 from onenote_com_mcp.service import copy, create, delete, files, hierarchy_edit, page_edit, read
 
 mcp = FastMCP("onenote")
+
+
+def logged_tool(*args, **kwargs):
+    """``@mcp.tool`` + the §7 per-call diagnostic log, in one decorator.
+
+    Composes so FastMCP sees the log-wrapped function (its signature/annotations are preserved
+    by functools.wraps, so the generated tool schema is unchanged) and every tool call is
+    logged at the seam, not in 22 hand-written facades."""
+
+    def decorate(func):
+        return mcp.tool(*args, **kwargs)(log_tool_call(func))
+
+    return decorate
 
 
 def _json(data: object) -> str:
@@ -30,32 +44,32 @@ def _json(data: object) -> str:
 # --- Read (Phase 2: wired to FixtureBackend on Linux) -----------------------
 
 
-@mcp.tool()
+@logged_tool()
 def list_notebooks() -> str:
     """List all open OneNote notebooks (name + ID)."""
     return _json(read.list_notebooks(get_backend()))
 
 
-@mcp.tool()
+@logged_tool()
 def list_sections(notebook_id: str) -> str:
     """List sections in a notebook (name + ID), preserving section-group nesting
     (one:SectionGroup containers appear as nested groups, not flattened)."""
     return _json(read.list_sections(get_backend(), notebook_id))
 
 
-@mcp.tool()
+@logged_tool()
 def list_pages(section_id: str) -> str:
     """List pages in a section, including each page's subpage level (pageLevel)."""
     return _json(read.list_pages(get_backend(), section_id))
 
 
-@mcp.tool()
+@logged_tool()
 def search_pages(query: str, scope_id: str = "") -> str:
     """Full-text search for pages. Scope to a notebook/section ID (recommended)."""
     return _json(read.search_pages(get_backend(), query, scope_id))
 
 
-@mcp.tool()
+@logged_tool()
 def get_page(page_id: str) -> str:
     """Read a page preserving rich text formatting, structure, tables, and object IDs."""
     return _json(read.get_page(get_backend(), page_id))
@@ -63,7 +77,7 @@ def get_page(page_id: str) -> str:
 
 # structured_output=False: the return is image content, not a JSON schema — FastMCP can't
 # build a pydantic output schema for Image, and we don't want one here.
-@mcp.tool(structured_output=False)
+@logged_tool(structured_output=False)
 def get_page_images(page_id: str) -> list[Image]:
     """Return a page's images (binary) as viewable image content. Per-image metadata
     (object IDs, dimensions, OCR text) is on get_page; this returns the pixels so they can
@@ -74,7 +88,7 @@ def get_page_images(page_id: str) -> list[Image]:
     ]
 
 
-@mcp.tool()
+@logged_tool()
 def get_page_files_info(page_id: str) -> str:
     """List a page's attachments and embedded objects (one:InsertedFile) — metadata only,
     any file type: display name, extension, size (from the local cache; flagged when the
@@ -85,7 +99,7 @@ def get_page_files_info(page_id: str) -> str:
 
 
 # structured_output=False: entries may be MCP image content (see get_page_images).
-@mcp.tool(structured_output=False)
+@logged_tool(structured_output=False)
 def get_page_files(page_id: str, object_id: str = "", max_chars: int = 50000) -> list[str | Image]:
     """Extract attachment CONTENT for the supported types only: text-class files (decoded
     text), image attachments (returned as viewable image content), and PDFs (server-side
@@ -103,7 +117,7 @@ def get_page_files(page_id: str, object_id: str = "", max_chars: int = 50000) ->
     return out
 
 
-@mcp.tool()
+@logged_tool()
 def get_current_context() -> str:
     """Where is the user right now? Returns the active OneNote window's current notebook /
     section group / section / page (IDs + names), so the user can say "this page" or
@@ -121,14 +135,14 @@ def get_current_context() -> str:
 # in the OneNote UI; create_section covers everything below them.
 
 
-@mcp.tool()
+@logged_tool()
 def create_section(parent_id: str, name: str) -> str:
     """Create a section under ``parent_id`` — an existing notebook OR a section group —
     inheriting its sync."""
     return _json({"section_id": create.create_section(get_backend(), parent_id, name)})
 
 
-@mcp.tool()
+@logged_tool()
 def create_page(
     section_id: str, title: str, content: str | list[dict] = "", page_level: int = 1
 ) -> str:
@@ -143,7 +157,7 @@ def create_page(
 # --- Modify (shared write core — service/page_edit.py) -----------------------
 
 
-@mcp.tool()
+@logged_tool()
 def update_page_content(
     page_id: str,
     content: str | list[dict],
@@ -174,7 +188,7 @@ def update_page_content(
     return f"updated {page_id}"
 
 
-@mcp.tool()
+@logged_tool()
 def create_table(
     page_id: str,
     rows: list[list[str | dict]],
@@ -202,7 +216,7 @@ def create_table(
     return f"table added to {page_id}"
 
 
-@mcp.tool()
+@logged_tool()
 def insert_image(
     page_id: str,
     image_base64: str,
@@ -232,7 +246,7 @@ def insert_image(
 # --- Copy (Phase 5: raw-XML faithful transfer) ------------------------------
 
 
-@mcp.tool()
+@logged_tool()
 def copy_page(page_id: str, target_section_id: str) -> str:
     """Faithfully copy a page (formatting, tables, inline images, attachments, pageLevel) to
     a section. Returns the new page's ID. Attachments are carried by re-import (a staged copy
@@ -242,7 +256,7 @@ def copy_page(page_id: str, target_section_id: str) -> str:
     return _json({"page_id": result.page_id, "file_notes": result.file_notes})
 
 
-@mcp.tool()
+@logged_tool()
 def copy_section(section_id: str, target_parent_id: str) -> str:
     """Faithfully copy a whole section (pages in order, subpage levels kept) into a notebook
     OR section group. The copy keeps the source name, de-collided with " (2)" if taken.
@@ -262,7 +276,7 @@ def copy_section(section_id: str, target_parent_id: str) -> str:
 # first, and present the target order for user confirmation before applying.
 
 
-@mcp.tool()
+@logged_tool()
 def restructure_section(section_id: str, ordered_pages: list[dict]) -> str:
     """STRUCTURAL. Reorder ALL pages of a section in one batch and adjust subpage levels.
     ordered_pages = the section's complete page list in target order, each entry
@@ -272,7 +286,7 @@ def restructure_section(section_id: str, ordered_pages: list[dict]) -> str:
     return f"section {section_id} restructured"
 
 
-@mcp.tool()
+@logged_tool()
 def reorder_sections(notebook_id: str, ordered_section_ids: list[str]) -> str:
     """STRUCTURAL. Reorder a notebook's (or section group's) children in one batch.
     ordered_section_ids = the COMPLETE child list in target order, including BOTH sections
@@ -283,7 +297,7 @@ def reorder_sections(notebook_id: str, ordered_section_ids: list[str]) -> str:
     return f"sections of {notebook_id} reordered"
 
 
-@mcp.tool()
+@logged_tool()
 def rename_node(parent_id: str, object_id: str, new_name: str) -> str:
     """STRUCTURAL. Rename a page, section, or section group. parent_id = the containing
     section/notebook ID. (A page rename edits its title — the hierarchy name follows it.)
@@ -292,7 +306,7 @@ def rename_node(parent_id: str, object_id: str, new_name: str) -> str:
     return f"{object_id} renamed to {new_name}"
 
 
-@mcp.tool()
+@logged_tool()
 def move_page(notebook_id: str, page_id: str, target_section_id: str) -> str:
     """STRUCTURAL. Move a page to another section within the same notebook (it lands at the
     end of the target section and its subpage level resets to 1). The moved page gets a NEW
@@ -305,7 +319,7 @@ def move_page(notebook_id: str, page_id: str, target_section_id: str) -> str:
 # --- Delete (Phase 6: destructive — conservative) ---------------------------
 
 
-@mcp.tool()
+@logged_tool()
 def delete_node(object_id: str, permanent: bool = False) -> str:
     """DESTRUCTIVE. Delete a whole hierarchy NODE — a notebook, section group, section, or
     page — via DeleteHierarchy. This removes the entire node and everything under it; to
@@ -316,7 +330,7 @@ def delete_node(object_id: str, permanent: bool = False) -> str:
     return f"deleted {object_id}" + (" permanently" if permanent else " to recycle bin")
 
 
-@mcp.tool()
+@logged_tool()
 def delete_page_content(page_id: str, object_id: str, force: bool = False) -> str:
     """DESTRUCTIVE. Delete ONE page-level content object from a page — a whole outline, a
     page-level image, or a page-level attachment/embedded object — via DeletePageContent.
@@ -331,6 +345,7 @@ def delete_page_content(page_id: str, object_id: str, force: bool = False) -> st
 
 def main() -> None:
     """Console entry point. stdio transport; logs must stay on stderr."""
+    configure_logging()  # §7: reads ONENOTE_MCP_LOG_LEVEL/FILE; default OFF, never stdout
     print("onenote-mcp starting (stdio)", file=sys.stderr)
     mcp.run(transport="stdio")
 
