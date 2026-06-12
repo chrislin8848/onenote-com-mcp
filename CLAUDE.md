@@ -86,8 +86,10 @@ ONENOTE_FIXTURES_DIR=tests/fixtures uv run python -m onenote_com_mcp   # run ser
 - **Tier 2 (VM, checkpoint):** `@pytest.mark.windows`, real COM round-trips. Auto-skipped off
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
-## Status (2026-06-11)
-Phases 0a, 0b, 1, 2, 3, 4, and **5 done**. The VM is up, the XML layer is TDD'd against real dumps,
+## Status (2026-06-12)
+Phases 0a, 0b, 1, 2, 3, 4, 5, and **5b done** (5b: see its own section below — 22-tool catalog
+complete, Tier-1 177 + Tier-2 36 green). Next: **Phase 6**.
+The VM is up, the XML layer is TDD'd against real dumps,
 the seven read tools run through `service/read.py` on `FixtureBackend` (Linux green), AND the
 live-COM read path is validated end-to-end on the VM: `tests/test_windows_read.py` (Tier 2,
 `@pytest.mark.windows`) passes all 7 read round-trips via the tar-based `scripts/remote_test.sh`
@@ -194,7 +196,7 @@ outlines render as nothing and are dropped on transplant (B≡A ignores them). V
 NEVER probe COM writes over plain SSH — a hung OpenHierarchy blocked OneNote's single-threaded
 COM for everything; writes only via the interactive Tier-2 task.
 
-## Phase 5b (IN PROGRESS — SPEC v0612-2 §5): attachments / embedded objects (`one:InsertedFile`)
+## Phase 5b DONE (2026-06-12 — SPEC v0612-2 §5): attachments / embedded objects (`one:InsertedFile`)
 New feature slice, deliberately BEFORE Phase 6 (the §4 description pass needs the final 22-tool
 catalog; adding tools after that pass would force a redo).
 
@@ -233,7 +235,20 @@ TRUTH: pathCache GUIDs are PER-READ ephemera** (basic vs binary dump of the same
 different Temp GUIDs) — never persist one across reads; cache fixtures exist under both
 dumps' GUIDs. Re-import mechanics + embedded clone behavior remain VM-gated → Stage 3.
 
-Remaining scope:
+**Stage 3 DONE (2026-06-12) — Tier-2 全綠 (36 passed + 3 probes, `tests/test_windows_files.py`):**
+both read tools round-trip live (kinds/sizes/caches; txt+PDF+jpg content; printout render
+visible via get_page_images); the rewritten copy payload is ACCEPTED live, and the VM-gated
+questions are now VM-ANSWERED (docs/com-api-reference.md "Phase 5b" section): **staged-
+pathSource re-import WORKS** (all 5 caches rebuilt on the copy within 45s), **embedded objects
+clone as embedded** (Previews honored, kind stays embedded_preview), **printout render PNGs
+are re-encoded on transplant** (dimensions identical, bytes not — semantic fidelity only,
+unlike normal images), `changed_objects` edits on a printout page merge cleanly. **Phase-6
+delete probes: page-level InsertedFile = DeletePageContent ACCEPTED; inline attachment-bearing
+OE = REFUSED** (same class as paragraph OEs) ⇒ inline-attachment delete must be an outline
+rewrite through the edit seam. Probes report via pytest.skip in -ra (never gate the run);
+Tier-2 assertions stay content-light (no live file text in tier2.log — PII policy).
+
+Original scope (all delivered):
 - **Two new read tools** — `get_page_files_info` (metadata for ANY InsertedFile: preferredName,
   type, size from the cache file, `objectID`, `kind` attachment-icon/embedded-preview/printout
   via `Previews`/`Printout` children — discrimination法待 VM dump; never parses content) and
@@ -262,11 +277,12 @@ Remaining scope:
   never straight into tests/fixtures; inspect for PII before moving — the first dump caught
   real flight tickets and was rejected; page 1 is being rebuilt with neutral files).
 
-## Phase 6 (after 5b — SPEC v0612)
-Deletes (`delete_node` hierarchy incl. section group + `delete_page_content` page-level objects:
-image/table/outline/InsertedFile — target the enclosing `one:OE`, recycle-bin default), error/retry
-hardening, smoke tests, then packaging (PyInstaller → Inno/NSIS `OneNoteMCP-Setup.exe`). Two new
-SPEC v0612 deliverables:
+## Phase 6 (NEXT — SPEC v0612)
+Deletes (`delete_node` hierarchy incl. section group + `delete_page_content` PAGE-LEVEL objects
+only — VM-verified semantics: outline/page-level Image/page-level InsertedFile are ACCEPTED;
+paragraph OEs AND inline attachment-bearing OEs are REFUSED, so inline content removal = outline
+rewrite through the edit seam; recycle-bin default), error/retry hardening, smoke tests, then
+packaging (PyInstaller → Inno/NSIS `OneNoteMCP-Setup.exe`). Two new SPEC v0612 deliverables:
 - **Diagnostic log (§7), default OFF.** Env switch `ONENOTE_MCP_LOG_LEVEL` (default `ERROR`;
   `DEBUG` on) + `ONENOTE_MCP_LOG_FILE`; rotating file (`%LOCALAPPDATA%\OneNoteMCP\logs\`) and/or
   stderr, **never stdout** (JSON-RPC). One record per tool call: name, params (large/base64

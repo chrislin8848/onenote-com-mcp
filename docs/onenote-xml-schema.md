@@ -152,12 +152,12 @@ Excel sheet, a file printout):
 - **TWO placements** (insertion method decides; both occur in the wild — fixtures have both):
   - **Inline**: inside `Page > Outline > OEChildren > OE`, same level as text paragraphs.
     **No `objectID` of its own** (like `one:Image`); the ID is on the enclosing `one:OE`.
-    ⚠ Open VM question: `DeletePageContent` refuses paragraph OEs (0x8004200E) — whether an
-    attachment-bearing OE is deletable that way is UNVERIFIED; inline-attachment delete may
-    have to be an outline rewrite through the edit seam.
+    **VERIFIED (Stage-3 probe, 2026-06-12): `DeletePageContent` REFUSES the attachment-bearing
+    OE** (same class as paragraph OEs) — inline-attachment delete must be an outline rewrite
+    through the edit seam (Phase 6).
   - **Page-level**: a direct `one:Page` child with `Position` + `Size` children and its **own
-    `objectID`** — likely directly deletable via `DeletePageContent` (page-level object), and
-    `InsertedFile` must join `page_edit._CONTENT_TAGS` so unchanged ones are pruned from
+    `objectID`** — **VERIFIED (Stage-3 probe): directly deletable via `DeletePageContent`**;
+    `InsertedFile` joined `page_edit._CONTENT_TAGS` so unchanged ones are pruned from
     `changed_objects` payloads. (Inline ones are already protected by Outline pruning.)
 - **`kind` discrimination (confirmed, clean):** no children (or only Position/Size) =
   attachment icon; `one:Printout` child (`xpsFileIndex="N"`) = file printout; `one:Previews`

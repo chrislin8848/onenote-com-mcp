@@ -180,6 +180,32 @@ any doc sketch above:
   fingerprints and byte-identical image pixels; section copies preserve page order and
   1/2/3 subpage levels; section copies land inside section groups.
 
+## VM-validated COM behaviors (Phase 5b Tier-2, 2026-06-12)
+
+- **Staged-pathSource re-import WORKS.** A clone whose `one:InsertedFile` carries
+  `pathSource` → a staged copy of the cache file (and NO `pathCache`) is accepted by
+  `UpdatePageContent`, and OneNote re-imports the file: all five attachments of the test
+  page had `pathCache` rebuilt on the copy within 45 s of the write.
+- **Embedded objects survive the clone as embedded objects** — the copied xlsx still reports
+  `kind=embedded_preview` with its `one:Previews`/`one:Preview page="工作表1"` intact (the
+  Previews structure rides verbatim and OneNote honors it).
+- **Printout render PNGs are RE-ENCODED on transplant** — unlike normal image inserts (which
+  round-trip byte-identical, Phase 5), the large render PNG comes back with identical pixel
+  dimensions but different bytes. Image fidelity for printout renders is therefore semantic
+  (dimensions/visual), not byte-level — consistent with the SPEC §6 boundary.
+- **`DeletePageContent` ACCEPTS a page-level `one:InsertedFile`** (its own objectID) — the
+  attachment disappears, siblings untouched. Phase 6 `delete_page_content` can target them
+  directly.
+- **`DeletePageContent` REFUSES an inline attachment-bearing `one:OE`** — same refusal class
+  as paragraph OEs (Phase 4, 0x8004200E). Inline-attachment deletion in Phase 6 must be an
+  outline rewrite through the edit seam, not a DeletePageContent call.
+- **Editing a printout-bearing page through `changed_objects` works live** — the pruned
+  payload (no InsertedFile/XPSFile/render, Phase 5b `_CONTENT_TAGS`) is accepted and the
+  merge leaves attachments, XPSFile carrier, and render untouched.
+- (Host-side, same date) **`pathCache` GUIDs are per-read ephemera** — basic vs piBinaryData
+  dumps of the same page carry different Temp GUIDs for the same attachments; never persist
+  a pathCache across reads.
+
 ## UpdateHierarchy has NO optimistic-concurrency protection (fact-finding, 2026-06-12)
 
 Triple-confirmed — type-library signature, Microsoft docs, AND live VM behavior all agree:

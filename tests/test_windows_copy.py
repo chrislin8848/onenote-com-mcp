@@ -167,7 +167,7 @@ def test_copy_page_b_equals_a(backend, fixture_pages, temp_section, page_name):
     if source_id is None:
         pytest.skip(f"{page_name} not present")
 
-    new_id = copy.transfer_page(backend, source_id, temp_section)
+    new_id = copy.transfer_page(backend, source_id, temp_section).page_id
 
     assert new_id != source_id
     assert [p["id"] for p in read.list_pages(backend, temp_section)] == [new_id]
@@ -198,7 +198,7 @@ def test_copy_section_preserves_order_levels_and_decollides_name(backend, notebo
     source = _find(read.list_sections(backend, notebook_id), TEST_SECTION)
     src_pages = read.list_pages(backend, source["id"])
 
-    new_section_id = copy.transfer_section(backend, source["id"], notebook_id)
+    new_section_id = copy.transfer_section(backend, source["id"], notebook_id).section_id
     try:
         cloned = next(
             n for n in read.list_sections(backend, notebook_id) if n["id"] == new_section_id
@@ -231,7 +231,7 @@ def test_copy_section_into_section_group_live(backend, notebook_id):
         pytest.skip("節群組 測試用/第2節 not present")
     source = _find(group["children"], "第2節")
 
-    new_id = copy.transfer_section(backend, source["id"], group["id"])
+    new_id = copy.transfer_section(backend, source["id"], group["id"]).section_id
     try:
         regroup = _find(read.list_sections(backend, notebook_id), "節群組 測試用")
         cloned = next(c for c in regroup["children"] if c["id"] == new_id)
