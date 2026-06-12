@@ -206,6 +206,22 @@ any doc sketch above:
   dumps of the same page carry different Temp GUIDs for the same attachments; never persist
   a pathCache across reads.
 
+## VM-validated COM behaviors (Phase 6 Stage 5 — PyInstaller freeze, 2026-06-12)
+
+- **The frozen exe binds OneNote via COM — the gen_py regeneration approach WORKS.** A
+  PyInstaller onedir build of the server, run as `OneNoteMCP.exe --selftest` in the autologon
+  interactive session, connected to OneNote and listed 3 notebooks (exit 0). This validates the
+  freeze recipe: keep `gencache.EnsureModule` (OneNote can't be late-bound — Phase 0b), bundle
+  the makepy machinery (spec `hiddenimports`: win32com.client.makepy/genpy/build/gencache/
+  selecttlb), and redirect `win32com.__gen_path__` to a writable temp dir via a runtime hook so
+  EnsureModule can generate the typelib module on first call. **SPEC §8's "use late-bound
+  Dispatch for freeze compatibility" does NOT apply here** — late-bound Dispatch never worked for
+  OneNote; the writable-gen_py path is the right fix and is now proven.
+- The freeze + `uv sync --group packaging` are COM-free and run over plain SSH (session 0); only
+  the `--selftest` COM smoke needs the interactive task (`onenote-selftest`, like the Tier-2
+  loop). Inno Setup (iscc.exe) is NOT on the VM yet — the installer build is gated on installing
+  it; the freeze + COM smoke are the validated parts.
+
 ## UpdateHierarchy has NO optimistic-concurrency protection (fact-finding, 2026-06-12)
 
 Triple-confirmed — type-library signature, Microsoft docs, AND live VM behavior all agree:
