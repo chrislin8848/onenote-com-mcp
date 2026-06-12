@@ -10,6 +10,8 @@ dependencies = [
     "lxml>=5.2",
     # pywin32 is the COM bridge — Windows only. Guarded import keeps Linux green.
     "pywin32>=306; sys_platform == 'win32'",
+    # PDF attachment text extraction (SPEC §5, Phase 5b) — pure Python, PyInstaller-safe
+    "pypdf>=5.0",
 ]
 
 [project.scripts]

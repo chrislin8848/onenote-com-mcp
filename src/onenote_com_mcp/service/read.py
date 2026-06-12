@@ -89,11 +89,13 @@ def _run_dict(run: Any) -> dict[str, Any]:
 def _oe_object_id(img: Image) -> str | None:
     """The deletable object's ID for an image.
 
-    Ground truth (real dump): a ``one:Image`` carries NO ``objectID`` of its own — the
-    enclosing ``one:OE`` holds it. ``delete_page_content`` (Phase 6) must target that OE.
+    Ground truth (real dump): an INLINE ``one:Image`` carries NO ``objectID`` of its own —
+    the enclosing ``one:OE`` holds it; ``delete_page_content`` (Phase 6) must target that OE.
+    A PAGE-LEVEL image (printout render, direct ``one:Page`` child) has its own objectID and
+    its parent (the page root) has none — fall through to the image's own.
     """
     parent = img.node.getparent()
-    return parent.get("objectID") if parent is not None else img.object_id
+    return (parent.get("objectID") if parent is not None else None) or img.object_id
 
 
 def _image_dict(img: Image) -> dict[str, Any]:
@@ -104,6 +106,7 @@ def _image_dict(img: Image) -> dict[str, Any]:
         "width": img.width,
         "height": img.height,
         "ocr_text": img.ocr_text,
+        "is_printout": img.is_printout,
     }
 
 
@@ -130,11 +133,20 @@ def _table_dict(table: Table) -> dict[str, Any]:
 
 
 def _paragraph_dict(para: Paragraph) -> dict[str, Any]:
-    """One ``one:OE`` → a block. An OE holds a table, an image, or text runs (+ nested OEs)."""
+    """One ``one:OE`` → a block. An OE holds a table, an image, a file, or text runs."""
     if para.table is not None:
         return _table_dict(para.table)
     if para.image is not None:
         return _image_dict(para.image)
+    if para.inserted_file is not None:
+        # presence + identity only — metadata/sizes via get_page_files_info, content (text/
+        # image/PDF) via get_page_files
+        return {
+            "type": "file",
+            "object_id": para.object_id,
+            "kind": para.inserted_file.kind,
+            "preferred_name": para.inserted_file.preferred_name,
+        }
     block: dict[str, Any] = {
         "type": "paragraph",
         "object_id": para.object_id,
@@ -208,7 +220,7 @@ def get_page_images(backend: OneNoteBackend, page_id: str) -> list[dict[str, Any
     """
     page = parse_page(backend.get_page_content(page_id, PageInfo.piBasic))
     out: list[dict[str, Any]] = []
-    for img in page.images:
+    for img in page.images:  # inline AND page-level (printout renders) — both have callbacks
         if not img.callback_id:
             continue
         data_b64 = backend.get_binary_page_content(page_id, img.callback_id)
@@ -222,6 +234,7 @@ def get_page_images(backend: OneNoteBackend, page_id: str) -> list[dict[str, Any
                 "width": img.width,
                 "height": img.height,
                 "ocr_text": img.ocr_text,
+                "is_printout": img.is_printout,
             }
         )
     return out

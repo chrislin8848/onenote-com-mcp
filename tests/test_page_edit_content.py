@@ -303,6 +303,38 @@ def test_whole_page_strategy_sends_everything_and_reads_binary(be, image_page):
     assert image.find(qn("CallbackID")) is None
 
 
+# --- Phase 5b: attachments must not ride into edit payloads ------------------------------
+
+
+@pytest.fixture
+def attachment_page(fixtures_dir) -> etree._Element:
+    return _page_root(fixtures_dir, "附件與嵌入物件-1")
+
+
+def test_edit_prunes_untouched_inserted_files_and_xps_carriers(be, attachment_page):
+    """changed_objects payloads must drop unchanged page-level InsertedFiles AND the printout's
+    one:XPSFile carrier (a read-side construct holding a CallbackID) AND the unchanged
+    page-level render Image — only the touched outline goes back."""
+    page_id = attachment_page.get("ID")
+    assert attachment_page.findall(qn("InsertedFile")), "fixture must have page-level files"
+    assert attachment_page.findall(qn("XPSFile")), "fixture must have an XPSFile carrier"
+
+    page_edit.edit_page_content(be, page_id, "附註一行")
+
+    kwargs, sent = _sent_payload(be)
+    assert sent.findall(qn("InsertedFile")) == []  # page-level ones pruned
+    assert sent.findall(qn("XPSFile")) == []
+    assert sent.findall(qn("Image")) == []  # the unchanged printout render too
+    outlines = sent.findall(qn("Outline"))
+    assert len(outlines) == 1
+    # nothing image-shaped left to inline → no one:Data in the payload at all
+    assert sent.findall(f".//{qn('Data')}") == []
+    # INLINE attachments live inside untouched outlines, which are pruned whole; the one
+    # touched outline carries no InsertedFile — so none appear above. (Inline protection
+    # comes from outline pruning, ground truth 2026-06-12.)
+    assert "附註一行" in kwargs["changes_xml"]
+
+
 # --- contract errors --------------------------------------------------------------------
 
 

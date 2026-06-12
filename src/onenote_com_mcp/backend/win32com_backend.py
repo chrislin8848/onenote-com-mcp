@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime as _dt
 import re
 import time
+from pathlib import Path
 
 from onenote_com_mcp.backend.base import CurrentWindowIds, OneNoteBackend
 from onenote_com_mcp.enums import (
@@ -267,6 +268,23 @@ class Win32ComBackend(OneNoteBackend):
             "GetBinaryPageContent",
             lambda: self.app.GetBinaryPageContent(page_id, callback_id),
         )
+
+    # --- Attachment cache files (Phase 5b) — plain disk IO, no COM ----------
+    # pathCache points at this machine's %LOCALAPPDATA%\Temp (the server runs next to
+    # OneNote). Missing/purged cache → None, never an exception (SPEC §5: graceful
+    # "cache unavailable").
+
+    def stat_cache_file(self, path: str) -> int | None:
+        try:
+            return Path(path).stat().st_size
+        except OSError:
+            return None
+
+    def read_cache_file(self, path: str) -> bytes | None:
+        try:
+            return Path(path).read_bytes()
+        except OSError:
+            return None
 
     def delete_page_content(
         self,

@@ -48,7 +48,12 @@ _PARSER = etree.XMLParser(strip_cdata=False)
 
 # Page-level content objects UpdatePageContent merges by. Direct page children NOT in this set
 # (QuickStyleDef, TagDef, PageSettings, ...) are definitions/settings and always ride along.
-_CONTENT_TAGS = frozenset({"Title", "Outline", "Image", "InkDrawing", "MediaFile"})
+# InsertedFile/XPSFile joined in Phase 5b (ground truth 2026-06-12: the page-level InsertedFile
+# variant and printout XPSFile carriers are direct page children) — pruning unchanged ones keeps
+# edits from re-submitting read-side constructs (XPSFile carries a CallbackID) untouched.
+_CONTENT_TAGS = frozenset(
+    {"Title", "Outline", "Image", "InkDrawing", "MediaFile", "InsertedFile", "XPSFile"}
+)
 
 _MODES = ("append", "insert_before", "insert_after", "replace")
 

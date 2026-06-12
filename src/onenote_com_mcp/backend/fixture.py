@@ -13,6 +13,9 @@ Filename convention (under ``fixtures_dir``):
   page_<sanitized id>.xml               GetPageContent (piBasic)
   page_<sanitized id>__binary.xml       GetPageContent (piBinaryData)
   binary_<sanitized callback>.b64       GetBinaryPageContent
+  cachefile_<sanitized basename>.bin    InsertedFile pathCache bytes (raw), keyed by the
+                                        Windows path's basename ({GUID}.bin — unique); a
+                                        missing file replays "cache unavailable" (None)
   find__<sanitized query>.xml           FindPages
   current_window.json                   Windows.CurrentWindow Current*Id quadruple (JSON
                                         object; literal "null" = no open window)
@@ -91,6 +94,20 @@ class FixtureBackend(OneNoteBackend):
 
     def find_pages(self, start_node_id: str, query: str, include_unindexed: bool = False) -> str:
         return self._read(f"find__{_sanitize(query)}.xml")
+
+    def _cache_fixture(self, path: str) -> Path:
+        # key by the Windows path's basename — pathCache is always ...\Temp\{GUID}.bin
+        # (ground truth), so the GUID basename is unique and host-OS-agnostic
+        basename = re.split(r"[\\/]", path)[-1]
+        return self.fixtures_dir / f"cachefile_{_sanitize(basename)}.bin"
+
+    def stat_cache_file(self, path: str) -> int | None:
+        fixture = self._cache_fixture(path)
+        return fixture.stat().st_size if fixture.exists() else None
+
+    def read_cache_file(self, path: str) -> bytes | None:
+        fixture = self._cache_fixture(path)
+        return fixture.read_bytes() if fixture.exists() else None
 
     def get_hierarchy_parent(self, object_id: str) -> str:
         return self._read(f"parent_{_sanitize(object_id)}.txt").strip()

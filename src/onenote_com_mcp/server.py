@@ -17,7 +17,7 @@ import sys
 from mcp.server.fastmcp import FastMCP, Image
 
 from onenote_com_mcp.backend import get_backend
-from onenote_com_mcp.service import copy, create, hierarchy_edit, page_edit, read
+from onenote_com_mcp.service import copy, create, files, hierarchy_edit, page_edit, read
 
 mcp = FastMCP("onenote")
 
@@ -72,6 +72,35 @@ def get_page_images(page_id: str) -> list[Image]:
         Image(data=base64.b64decode(img["data_base64"]), format=img["media_type"].split("/")[-1])
         for img in read.get_page_images(get_backend(), page_id)
     ]
+
+
+@mcp.tool()
+def get_page_files_info(page_id: str) -> str:
+    """List a page's attachments and embedded objects (one:InsertedFile) — metadata only,
+    any file type: display name, extension, size (from the local cache; flagged when the
+    cache is unavailable), kind (attachment_icon / printout / embedded_preview), and the
+    objectID needed to delete it. Never parses file content — get_page_files extracts
+    content for the supported types."""
+    return _json(files.get_page_files_info(get_backend(), page_id))
+
+
+# structured_output=False: entries may be MCP image content (see get_page_images).
+@mcp.tool(structured_output=False)
+def get_page_files(page_id: str, object_id: str = "", max_chars: int = 50000) -> list[str | Image]:
+    """Extract attachment CONTENT for the supported types only: text-class files (decoded
+    text), image attachments (returned as viewable image content), and PDFs (server-side
+    text extraction). Other types (docx/xlsx/pptx/…) report metadata + "unsupported" — use
+    get_page_files_info first to see what a page has. object_id narrows to one attachment;
+    text is truncated at max_chars. Unavailable caches are reported per file, never crash."""
+    out: list[str | Image] = []
+    for entry in files.get_page_files(get_backend(), page_id, object_id, max_chars):
+        image_b64 = entry.pop("data_base64", None)
+        out.append(_json(entry))
+        if image_b64 is not None:
+            out.append(
+                Image(data=base64.b64decode(image_b64), format=entry["media_type"].split("/")[-1])
+            )
+    return out
 
 
 @mcp.tool()

@@ -120,6 +120,20 @@ class OneNoteBackend(ABC):
     ) -> None:
         """Delete one page content object (outline / image / table) by ID."""
 
+    # --- Attachment cache files (Phase 5b) ------------------------------------
+    # InsertedFile content is NOT served by GetBinaryPageContent (that is the image callback
+    # path) — it lives in the pathCache file on the OneNote machine's disk. The cache may be
+    # missing (unsynced / purged): both methods return None then, never raise for that.
+    # Living behind the backend keeps the service layer Linux-testable (FixtureBackend replays).
+
+    @abstractmethod
+    def stat_cache_file(self, path: str) -> int | None:
+        """Size in bytes of an InsertedFile ``pathCache`` file, or None if unavailable."""
+
+    @abstractmethod
+    def read_cache_file(self, path: str) -> bytes | None:
+        """Raw bytes of an InsertedFile ``pathCache`` file, or None if unavailable."""
+
     # --- Navigation ---------------------------------------------------------
 
     @abstractmethod

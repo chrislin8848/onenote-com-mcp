@@ -18,7 +18,17 @@ from onenote_com_mcp.xmllayer.spans import Run
 if TYPE_CHECKING:
     from lxml import etree
 
-__all__ = ["Cell", "Image", "Outline", "Page", "Paragraph", "QuickStyleDef", "Run", "Table"]
+__all__ = [
+    "Cell",
+    "Image",
+    "InsertedFile",
+    "Outline",
+    "Page",
+    "Paragraph",
+    "QuickStyleDef",
+    "Run",
+    "Table",
+]
 
 
 @dataclass
@@ -63,6 +73,30 @@ class Image:
     height: float | None = None
     data_b64: str | None = None  # inline one:Data — absent unless dumped with piBinaryData
     ocr_text: str | None = None
+    is_printout: bool = False  # page-level render of a file printout (isPrintOut="true")
+
+
+@dataclass
+class InsertedFile:
+    """One ``one:InsertedFile`` — attachment icon, file printout, or embedded object.
+
+    Ground truth (VM dumps 2026-06-12, docs/onenote-xml-schema.md): TWO placements —
+    *inline* (inside an Outline OE, no objectID of its own; the enclosing OE carries it)
+    and *page-level* (direct ``one:Page`` child with Position/Size and its OWN objectID).
+    ``kind`` discrimination: no children = attachment icon; a ``one:Printout`` child =
+    file printout; a ``one:Previews`` child = embedded object (which has NO ``pathSource``).
+    """
+
+    node: etree._Element
+    placement: str  # "inline" | "page_level"
+    kind: str  # "attachment_icon" | "printout" | "embedded_preview"
+    object_id: str | None = None  # own objectID — page-level only (inline: enclosing OE's)
+    path_cache: str | None = None  # OneNote's local cache file (%LOCALAPPDATA%\Temp\{GUID}.bin)
+    path_source: str | None = None  # the AUTHOR's machine path — dead on any other machine
+    preferred_name: str | None = None
+    last_modified_time: str | None = None
+    xps_file_index: int | None = None  # printout: joins the page-level one:XPSFile carriers
+    preview_pages: list[str] = field(default_factory=list)  # embedded: one:Preview page names
 
 
 @dataclass
@@ -99,6 +133,7 @@ class Paragraph:
     runs: list[Run] = field(default_factory=list)
     table: Table | None = None
     image: Image | None = None
+    inserted_file: InsertedFile | None = None  # inline attachment/embedded object
     children: list[Paragraph] = field(default_factory=list)  # nested one:OEChildren
 
     @property
@@ -125,6 +160,10 @@ class Page:
     quick_styles: dict[int, QuickStyleDef] = field(default_factory=dict)
     title: Paragraph | None = None
     outlines: list[Outline] = field(default_factory=list)
+    # direct one:Page children (NOT inside any outline) — printout renders land here as
+    # page-level Images, and the page-level InsertedFile variant has Position/Size + own ID
+    page_images: list[Image] = field(default_factory=list)
+    page_files: list[InsertedFile] = field(default_factory=list)
 
     def _walk(self, paragraphs: list[Paragraph]):
         for p in paragraphs:
@@ -146,4 +185,11 @@ class Page:
 
     @property
     def images(self) -> list[Image]:
-        return [p.image for p in self.paragraphs if p.image is not None]
+        """All images: inline (inside outlines) first, then page-level (printout renders)."""
+        return [p.image for p in self.paragraphs if p.image is not None] + self.page_images
+
+    @property
+    def inserted_files(self) -> list[InsertedFile]:
+        """All attachments/embedded objects: inline ones first, then page-level ones."""
+        inline = [p.inserted_file for p in self.paragraphs if p.inserted_file is not None]
+        return inline + self.page_files

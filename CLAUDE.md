@@ -194,9 +194,29 @@ outlines render as nothing and are dropped on transplant (B≡A ignores them). V
 NEVER probe COM writes over plain SSH — a hung OpenHierarchy blocked OneNote's single-threaded
 COM for everything; writes only via the interactive Tier-2 task.
 
-## Phase 5b (next — SPEC v0612-2 §5): attachments / embedded objects (`one:InsertedFile`)
+## Phase 5b (IN PROGRESS — SPEC v0612-2 §5): attachments / embedded objects (`one:InsertedFile`)
 New feature slice, deliberately BEFORE Phase 6 (the §4 description pass needs the final 22-tool
-catalog; adding tools after that pass would force a redo). Scope:
+catalog; adding tools after that pass would force a redo).
+
+**Stage 1 DONE (2026-06-12, Tier-1 173 green):** the read slice. `xmllayer` parses
+InsertedFile (both placements; kind = attachment_icon/printout/embedded_preview per the
+children rule) and now collects PAGE-LEVEL objects: `Page.page_files` + `Page.page_images` —
+fixing a real gap: printout render images (direct page children) were invisible to
+`get_page_images`, and `_oe_object_id` returned None for them (page-level objects carry their
+OWN objectID; inline ones use the enclosing OE's). Backend grew `stat_cache_file`/
+`read_cache_file` (pathCache disk reads; None = cache unavailable, never raise; Win32 = plain
+file IO, FixtureBackend replays `cachefile_<sanitized {GUID}.bin>.bin` — those fixtures are
+HAND-AUTHORED neutral bytes from `scripts/make_cache_fixtures.py`, not dumps; docx cache
+deliberately absent = unavailable replay). `service/files.py`: `get_page_files_info` (metadata
+any type, deletable object_id, media_class) + `get_page_files` (text decode utf-8-sig→cp950→
+lossy; image base64; PDF text via **pypdf** [new runtime dep]; office types explicit
+"unsupported"; 20MB cap + max_chars truncate; per-file status, never crash). `get_page` shows
+inline attachments as `type:"file"` blocks; `_CONTENT_TAGS` += InsertedFile/XPSFile (unchanged
+ones pruned from edit payloads — guard-tested in test_page_edit_content). Server: 22-tool
+catalog complete (`get_page_files` emits mixed JSON + MCP image content). Tier-2 validation of
+all of this = Stage 3.
+
+Remaining scope:
 - **Two new read tools** — `get_page_files_info` (metadata for ANY InsertedFile: preferredName,
   type, size from the cache file, `objectID`, `kind` attachment-icon/embedded-preview/printout
   via `Previews`/`Printout` children — discrimination法待 VM dump; never parses content) and

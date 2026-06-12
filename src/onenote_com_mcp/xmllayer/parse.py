@@ -22,6 +22,7 @@ from lxml import etree
 from onenote_com_mcp.xmllayer.models import (
     Cell,
     Image,
+    InsertedFile,
     Outline,
     Page,
     Paragraph,
@@ -133,6 +134,41 @@ def parse_image(el: etree._Element) -> Image:
         height=float(size_el.get("height")) if size_el is not None else None,
         data_b64=(data_el.text or None) if data_el is not None else None,
         ocr_text=ocr_el.text if ocr_el is not None else None,
+        is_printout=_bool(el.get("isPrintOut")),
+    )
+
+
+def parse_inserted_file(el: etree._Element, placement: str) -> InsertedFile:
+    """``one:InsertedFile`` element → :class:`InsertedFile`.
+
+    Kind rule (ground truth, VM dumps 2026-06-12): a ``one:Printout`` child = file printout,
+    a ``one:Previews`` child = embedded object (no ``pathSource``), no children (beyond the
+    page-level variant's Position/Size) = plain attachment icon.
+    """
+    printout_el = el.find(qn("Printout"))
+    previews_el = el.find(qn("Previews"))
+    if printout_el is not None:
+        kind = "printout"
+    elif previews_el is not None:
+        kind = "embedded_preview"
+    else:
+        kind = "attachment_icon"
+    xps_index = printout_el.get("xpsFileIndex") if printout_el is not None else None
+    return InsertedFile(
+        node=el,
+        placement=placement,
+        kind=kind,
+        object_id=el.get("objectID"),
+        path_cache=el.get("pathCache"),
+        path_source=el.get("pathSource"),
+        preferred_name=el.get("preferredName"),
+        last_modified_time=el.get("lastModifiedTime"),
+        xps_file_index=int(xps_index) if xps_index is not None else None,
+        preview_pages=(
+            [p.get("page") for p in previews_el.findall(qn("Preview")) if p.get("page")]
+            if previews_el is not None
+            else []
+        ),
     )
 
 
@@ -175,6 +211,7 @@ def parse_oe(el: etree._Element, quick_styles: dict[int, QuickStyleDef]) -> Para
         run.style = _effective_style(quick_styles, quick_style_index, oe_style, run.span_style)
     table_el = el.find(qn("Table"))
     image_el = el.find(qn("Image"))
+    file_el = el.find(qn("InsertedFile"))
     return Paragraph(
         node=el,
         object_id=el.get("objectID"),
@@ -184,6 +221,7 @@ def parse_oe(el: etree._Element, quick_styles: dict[int, QuickStyleDef]) -> Para
         runs=runs,
         table=parse_table(table_el, quick_styles) if table_el is not None else None,
         image=parse_image(image_el) if image_el is not None else None,
+        inserted_file=parse_inserted_file(file_el, "inline") if file_el is not None else None,
         children=[
             parse_oe(child, quick_styles) for child in el.findall(f"{qn('OEChildren')}/{qn('OE')}")
         ],
@@ -238,5 +276,12 @@ def parse_page(xml: str) -> Page:
                 ],
             )
             for outline_el in root.findall(qn("Outline"))
+        ],
+        # page-level objects: direct one:Page children, OUTSIDE any outline (ground truth:
+        # printout renders are page-level Images; the page-level InsertedFile variant carries
+        # its own objectID). Document order preserved.
+        page_images=[parse_image(el) for el in root.findall(qn("Image"))],
+        page_files=[
+            parse_inserted_file(el, "page_level") for el in root.findall(qn("InsertedFile"))
         ],
     )
