@@ -66,29 +66,49 @@ TXT_CONTENT = (
     "備註:本檔為 fixture,內容為虛構。\n"
 )
 
-CACHE_FILES: dict[str, bytes] = {
+# GROUND TRUTH (found while building Stage 2): pathCache GUIDs are PER-READ ephemera —
+# the basic and piBinaryData dumps of the SAME page, seconds apart, carry entirely different
+# Temp GUIDs for the same attachments. So every fixture file exists under BOTH dumps' GUIDs:
+# the basic-dump GUID serves the read tools, the binary-dump GUID serves the copy path.
+CACHE_FILES: dict[str, tuple[str, ...]] = {
     # 附件與嵌入物件-1: inline txt icon (濁水溪發電之旅.txt)
-    "F5154E7A_7DFD_40B1_9FB8_8C73704C7B7D": TXT_CONTENT.encode("utf-8"),
+    "txt": ("F5154E7A_7DFD_40B1_9FB8_8C73704C7B7D", "471A3F82_27BE_4DEE_87E2_6F5AF25C6EF0"),
     # 附件與嵌入物件-1: inline pdf icon (丘山行問卷_中英對照.pdf)
-    "C92D9F98_3937_4BC3_B249_8472FE6402D1": minimal_pdf("Sample questionnaire PDF fixture"),
+    "pdf_icon": ("C92D9F98_3937_4BC3_B249_8472FE6402D1", "9BDDBC97_4903_4D16_A8D5_7CCE09429775"),
     # 附件與嵌入物件-1: inline pdf printout (A4文宣-25.7.8月分享會.pdf)
-    "52EBD52B_8E38_4E7A_8809_772E897B2150": minimal_pdf("Sample flyer PDF fixture"),
+    "pdf_printout": (
+        "52EBD52B_8E38_4E7A_8809_772E897B2150",
+        "A2E64D31_7173_43BA_8005_A50C3C353A54",
+    ),
     # 附件與嵌入物件-1: page-level xlsx icon (2026 客人問卷_NEW.xlsx) — unsupported class
-    "13FD92E1_C84F_463D_AB1F_3A1EAABB9821": FAKE_OFFICE_ZIP,
+    "xlsx_page": ("13FD92E1_C84F_463D_AB1F_3A1EAABB9821", "D57C7FFB_F507_476B_B7B3_9EF394BE2840"),
     # 附件與嵌入物件-2: inline jpg icon (捷斯山屋.jpg)
-    "DBC4674A_857C_476E_8A5F_5BD55E5C5D3A": TINY_JPEG,
+    "jpg": ("DBC4674A_857C_476E_8A5F_5BD55E5C5D3A", "462FD9A3_D436_466F_A709_A482D66FF1AA"),
     # 附件與嵌入物件-2: inline embedded xlsx (Previews) — unsupported class
-    "D5798D78_4196_4CD1_8476_7A011607D137": FAKE_OFFICE_ZIP,
-    # 1020C5EC_2CA7_4461_B119_0222B5E0D6BC (page-level docx) deliberately ABSENT:
-    # replays "cache unavailable"
+    "xlsx_embedded": (
+        "D5798D78_4196_4CD1_8476_7A011607D137",
+        "74A10165_D7AB_4253_8A80_8B5121E011C5",
+    ),
+    # page-level docx (1020C5EC… basic / 947BD637… binary) deliberately ABSENT under
+    # BOTH GUIDs: replays "cache unavailable"
+}
+
+PAYLOADS: dict[str, bytes] = {
+    "txt": TXT_CONTENT.encode("utf-8"),
+    "pdf_icon": minimal_pdf("Sample questionnaire PDF fixture"),
+    "pdf_printout": minimal_pdf("Sample flyer PDF fixture"),
+    "xlsx_page": FAKE_OFFICE_ZIP,
+    "jpg": TINY_JPEG,
+    "xlsx_embedded": FAKE_OFFICE_ZIP,
 }
 
 
 def main() -> None:
-    for guid, payload in CACHE_FILES.items():
-        path = FIXTURES / f"cachefile_{guid}_bin.bin"
-        path.write_bytes(payload)
-        print(f"wrote {path.name} ({len(payload)} bytes)")
+    for key, guids in CACHE_FILES.items():
+        for guid in guids:
+            path = FIXTURES / f"cachefile_{guid}_bin.bin"
+            path.write_bytes(PAYLOADS[key])
+            print(f"wrote {path.name} ({len(PAYLOADS[key])} bytes, {key})")
 
 
 if __name__ == "__main__":

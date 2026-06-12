@@ -33,7 +33,10 @@ here using the filename convention documented in `src/onenote_com_mcp/backend/fi
 - `cachefile_<sanitized {GUID}.bin>.bin` — InsertedFile `pathCache` bytes. **NOT dumps:**
   hand-authored NEUTRAL files from `scripts/make_cache_fixtures.py` (the read path is a plain
   disk read, so synthetic bytes are faithful — and the PII policy forbids committing real user
-  files). The docx cache is deliberately absent: replays "cache unavailable".
+  files). The docx cache is deliberately absent: replays "cache unavailable". Each file exists
+  under TWO GUIDs — pathCache GUIDs are per-read ephemera (basic vs binary dump of the same
+  page differ), so the basic-dump GUID serves the read tools and the binary-dump GUID the
+  copy path.
 - `find__root.xml` — a FindPages sample (note: `_sanitize` maps non-ASCII queries to `root`).
 - `current_window.json` — the Current*Id quadruple for `get_current_context`.
 

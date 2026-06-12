@@ -134,6 +134,18 @@ class OneNoteBackend(ABC):
     def read_cache_file(self, path: str) -> bytes | None:
         """Raw bytes of an InsertedFile ``pathCache`` file, or None if unavailable."""
 
+    @abstractmethod
+    def stage_cache_copy(self, path: str, preferred_name: str) -> str | None:
+        """Copy a ``pathCache`` file to a staging location for re-import; return its path.
+
+        Used by the copy path (SPEC §5): a clone must not carry the source's ``pathCache``
+        (a dead reference owned by OneNote) — instead the cache bytes are copied aside and
+        the clone's ``pathSource`` points at the copy so OneNote re-imports it. Staged files
+        are NOT auto-deleted (OneNote's re-import timing is asynchronous/unknown). Returns
+        None when the source cache is unavailable — the caller must report that attachment
+        explicitly, never skip it silently.
+        """
+
     # --- Navigation ---------------------------------------------------------
 
     @abstractmethod

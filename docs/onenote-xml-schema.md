@@ -173,6 +173,12 @@ Excel sheet, a file printout):
   Embedded objects carry only `pathCache` + `preferredName` — **no `pathSource`**.
 - **`pathCache` verified live:** points at `%LOCALAPPDATA%\Temp\{GUID}.bin` on the *reading*
   machine; files exist and are the real bytes (e.g. the .txt cache = the txt content).
+  **And it is PER-READ ephemera (found 2026-06-12 building Stage 2):** the basic and
+  piBinaryData dumps of the SAME page, seconds apart, carry entirely different Temp GUIDs for
+  the same attachments — OneNote re-materializes the cache per GetPageContent. Consequences:
+  never persist a pathCache across reads (consume it immediately after the read that produced
+  it), and cache-file fixtures must exist under BOTH dumps' GUIDs (see
+  `scripts/make_cache_fixtures.py`).
   `pathSource` is the *original author's* machine path — dead on any other machine, which is
   exactly why clones must not carry it forward unchanged (copy cache aside → re-point
   `pathSource` → drop `pathCache` → OneNote re-imports; mechanics still VM-gated).

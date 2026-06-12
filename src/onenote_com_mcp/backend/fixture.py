@@ -57,6 +57,7 @@ class FixtureBackend(OneNoteBackend):
         self.fixtures_dir = Path(fixtures_dir)
         self.calls: list[RecordedCall] = []
         self._fake_id_seq = 0
+        self._stage_seq = 0
 
     # --- helpers ------------------------------------------------------------
 
@@ -108,6 +109,14 @@ class FixtureBackend(OneNoteBackend):
     def read_cache_file(self, path: str) -> bytes | None:
         fixture = self._cache_fixture(path)
         return fixture.read_bytes() if fixture.exists() else None
+
+    def stage_cache_copy(self, path: str, preferred_name: str) -> str | None:
+        self._record("stage_cache_copy", path=path, preferred_name=preferred_name)
+        if not self._cache_fixture(path).exists():  # replay "cache unavailable"
+            return None
+        # own counter — must not shift the _fake_id_seq node IDs replay fixtures rely on
+        self._stage_seq += 1
+        return f"C:\\FixtureStaging\\{self._stage_seq}\\{preferred_name}"
 
     def get_hierarchy_parent(self, object_id: str) -> str:
         return self._read(f"parent_{_sanitize(object_id)}.txt").strip()

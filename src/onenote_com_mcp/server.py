@@ -234,17 +234,22 @@ def insert_image(
 
 @mcp.tool()
 def copy_page(page_id: str, target_section_id: str) -> str:
-    """Faithfully copy a page (formatting, tables, inline images, pageLevel) to a section.
-    Returns the new page's ID."""
-    return _json({"page_id": copy.transfer_page(get_backend(), page_id, target_section_id)})
+    """Faithfully copy a page (formatting, tables, inline images, attachments, pageLevel) to
+    a section. Returns the new page's ID. Attachments are carried by re-import (a staged copy
+    of the file); file_notes lists any attachment that could not be transferred faithfully —
+    surface those to the user instead of silently accepting the copy."""
+    result = copy.transfer_page(get_backend(), page_id, target_section_id)
+    return _json({"page_id": result.page_id, "file_notes": result.file_notes})
 
 
 @mcp.tool()
 def copy_section(section_id: str, target_parent_id: str) -> str:
     """Faithfully copy a whole section (pages in order, subpage levels kept) into a notebook
     OR section group. The copy keeps the source name, de-collided with " (2)" if taken.
-    Returns the new section's ID."""
-    return _json({"section_id": copy.transfer_section(get_backend(), section_id, target_parent_id)})
+    Returns the new section's ID; file_notes lists any page attachment that could not be
+    transferred faithfully — surface those to the user."""
+    result = copy.transfer_section(get_backend(), section_id, target_parent_id)
+    return _json({"section_id": result.section_id, "file_notes": result.file_notes})
 
 
 # NOTE: there is deliberately no copy_notebook tool — same ground truth as create_notebook

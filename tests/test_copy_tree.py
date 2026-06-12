@@ -87,8 +87,9 @@ def section_be(fixtures_dir, tmp_path) -> FixtureBackend:
 
 def test_transfer_section_orchestration(section_be):
     be = section_be
-    new_id = copy.transfer_section(be, _SRC_SECTION, _TARGET_NB)
-    assert new_id == _NEW_SECTION
+    result = copy.transfer_section(be, _SRC_SECTION, _TARGET_NB)
+    assert result.section_id == _NEW_SECTION
+    assert result.file_notes == []
 
     # the section is created under the target with a DE-COLLIDED name
     (sec_call,) = [c for c in be.calls if c.method == "open_hierarchy"]

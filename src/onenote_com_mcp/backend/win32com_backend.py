@@ -286,6 +286,28 @@ class Win32ComBackend(OneNoteBackend):
         except OSError:
             return None
 
+    def stage_cache_copy(self, path: str, preferred_name: str) -> str | None:
+        # Staged copies live under %TEMP%\OneNoteMCP\staging\<uuid>\<name> and are NOT
+        # auto-deleted: OneNote re-imports pathSource asynchronously and there is no signal
+        # for "import finished" (Stage-3 VM question). The uuid dir keeps the real filename
+        # (extension drives re-import) while avoiding collisions.
+        import shutil  # noqa: PLC0415
+        import tempfile  # noqa: PLC0415
+        import uuid  # noqa: PLC0415
+
+        src = Path(path)
+        if not src.is_file():
+            return None
+        safe_name = re.sub(r'[\\/:*?"<>|]', "_", preferred_name) or "attachment"
+        dest = Path(tempfile.gettempdir()) / "OneNoteMCP" / "staging" / uuid.uuid4().hex[:12]
+        try:
+            dest.mkdir(parents=True, exist_ok=True)
+            target = dest / safe_name
+            shutil.copyfile(src, target)
+            return str(target)
+        except OSError:
+            return None
+
     def delete_page_content(
         self,
         page_id: str,

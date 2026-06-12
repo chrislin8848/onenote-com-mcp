@@ -216,6 +216,23 @@ ones pruned from edit payloads — guard-tested in test_page_edit_content). Serv
 catalog complete (`get_page_files` emits mixed JSON + MCP image content). Tier-2 validation of
 all of this = Stage 3.
 
+**Stage 2 DONE (2026-06-12, Tier-1 177 green):** copy-path attachment fidelity, inside the
+copy seam. New backend method `stage_cache_copy(path, preferred_name)` (copy the cache file
+to `%TEMP%\OneNoteMCP\staging\<uuid>\<name>`, NOT auto-deleted — re-import timing unknown;
+FixtureBackend returns deterministic `C:\FixtureStaging\<n>\<name>` on its OWN counter so
+node-ID replay fixtures don't shift). `transfer_page` now: pops `pathCache` from EVERY
+InsertedFile (never rides — dead reference), re-points `pathSource` at the staged copy
+(embedded objects GAIN a pathSource; Previews ride verbatim), and FLATTENS printouts —
+page-level `one:XPSFile` carriers (read-side CallbackID constructs) are stripped, the
+`one:Printout` child dropped (its xpsFileIndex would dangle), printout bookkeeping attrs
+(`xpsFileIndex`/`isPrintOut`/`originalPageNumber`) removed from the render images, which
+survive as plain inlined images. Returns `PageCopyResult(page_id, file_notes)` /
+`SectionCopyResult` — every fidelity loss (unavailable cache, flattening) reported
+explicitly, never silent (SPEC §5); copy_page/copy_section emit `file_notes`. **NEW GROUND
+TRUTH: pathCache GUIDs are PER-READ ephemera** (basic vs binary dump of the same page carry
+different Temp GUIDs) — never persist one across reads; cache fixtures exist under both
+dumps' GUIDs. Re-import mechanics + embedded clone behavior remain VM-gated → Stage 3.
+
 Remaining scope:
 - **Two new read tools** — `get_page_files_info` (metadata for ANY InsertedFile: preferredName,
   type, size from the cache file, `objectID`, `kind` attachment-icon/embedded-preview/printout

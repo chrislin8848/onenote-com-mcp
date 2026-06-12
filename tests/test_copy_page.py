@@ -56,9 +56,10 @@ def _sent_payload(be: FixtureBackend) -> tuple[dict, etree._Element]:
 def test_transfer_mixed_page_is_byte_faithful_with_fresh_identity(be, fixtures_dir):
     source_id, source = _page_by_name(fixtures_dir, "混合樣式頁")
 
-    new_id = copy.transfer_page(be, source_id, _TARGET_SECTION)
+    result = copy.transfer_page(be, source_id, _TARGET_SECTION)
 
-    assert new_id == _NEW_PAGE_ID
+    assert result.page_id == _NEW_PAGE_ID
+    assert result.file_notes == []  # no attachments on this page — fully faithful
     # source read is raw piBinaryData; the blank page is created title-less in the target
     first_read = next(c for c in be.calls if c.method == "create_new_page")
     assert first_read.kwargs == {

@@ -14,6 +14,8 @@ enforces both that rule and that the source read uses ``piBinaryData``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from lxml import etree
 
 from onenote_com_mcp.backend.base import OneNoteBackend
@@ -32,23 +34,89 @@ _PARSER = etree.XMLParser(strip_cdata=False)
 # OneNote tolerates them on input, Phase-4 evidence.)
 _STRIP_ATTRS = ("objectID", "lastModifiedTime", "creationTime", "selected", "isCurrentlyViewed")
 
+# Printout bookkeeping on render images — dangling once their one:XPSFile carrier is stripped
+# (see _rewrite_inserted_files); the render survives as a plain inlined image.
+_PRINTOUT_IMAGE_ATTRS = ("xpsFileIndex", "isPrintOut", "originalPageNumber")
 
-def transfer_page(backend: OneNoteBackend, page_id: str, target_section_id: str) -> str:
-    """Faithfully copy one page into a section, returning the new page ID."""
+
+@dataclass
+class PageCopyResult:
+    page_id: str  # the copy's ID in the target section
+    # one line per attachment that could NOT be transferred faithfully (SPEC §5: report
+    # explicitly, never skip silently) or whose structure was changed (printout flattening)
+    file_notes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SectionCopyResult:
+    section_id: str
+    file_notes: list[str] = field(default_factory=list)  # aggregated, prefixed per page
+
+
+def transfer_page(backend: OneNoteBackend, page_id: str, target_section_id: str) -> PageCopyResult:
+    """Faithfully copy one page into a section, returning the new page ID + file notes."""
     # The direct path: RAW source XML — no structured parse. piBinaryData asks for inline
     # binaries; what it doesn't inline (ground truth: usually nothing) is fetched below.
     raw_xml = backend.get_page_content(page_id, PageInfo.piBinaryData)
     return _transplant_raw_page(backend, raw_xml, page_id, target_section_id)
 
 
+def _rewrite_inserted_files(backend: OneNoteBackend, tree: etree._Element) -> list[str]:
+    """Re-point every one:InsertedFile at a staged copy of its cache (SPEC §5 clone rule).
+
+    The source's ``pathCache`` is a dead reference in a clone (OneNote owns it) — it never
+    rides along. The cache bytes are copied aside via ``stage_cache_copy`` and ``pathSource``
+    re-pointed at the copy so OneNote re-imports it. Printouts are flattened: their page-level
+    ``one:XPSFile`` carriers hold read-side CallbackIDs that cannot ride into a write, so the
+    carrier and the ``one:Printout`` child are stripped — the rendered pages survive as plain
+    inlined images and the source file as a normal attachment. Returns one note per attachment
+    that lost fidelity (unavailable cache, printout flattening); an empty list = fully faithful.
+    """
+    notes: list[str] = []
+    xps_files = tree.findall(qn("XPSFile"))
+    if xps_files:
+        for xps in xps_files:
+            tree.remove(xps)
+        for img in tree.iter(qn("Image")):
+            for attr in _PRINTOUT_IMAGE_ATTRS:
+                img.attrib.pop(attr, None)
+    for f in tree.iter(qn("InsertedFile")):
+        name = f.get("preferredName") or "attachment"
+        printout = f.find(qn("Printout"))
+        if printout is not None:
+            f.remove(printout)
+            notes.append(
+                f"{name}: printout flattened — rendered pages copied as plain images, the "
+                "source file re-attached as a normal attachment"
+            )
+        path_cache = f.attrib.pop("pathCache", None)
+        staged = backend.stage_cache_copy(path_cache, name) if path_cache else None
+        if staged:
+            f.set("pathSource", staged)
+        elif f.get("pathSource"):
+            notes.append(
+                f"{name}: source cache unavailable — kept the original pathSource "
+                f"({f.get('pathSource')}); OneNote can only re-import it if that path "
+                "still exists on this machine"
+            )
+        else:
+            notes.append(
+                f"{name}: source cache unavailable and no pathSource — the file content "
+                "could not be transferred (only the attachment entry was copied)"
+            )
+    return notes
+
+
 def _transplant_raw_page(
     backend: OneNoteBackend, raw_xml: str, source_page_id: str, target_section_id: str
-) -> str:
+) -> PageCopyResult:
     tree = etree.fromstring(raw_xml.encode("utf-8"), parser=_PARSER)
     source_level = tree.get("pageLevel")
 
     # 1. pixels: every one:Image gets inline one:Data (callbacks resolve against the SOURCE)
     inline_image_binaries(backend, source_page_id, tree)
+    # 1b. attachments: stage cache copies, re-point pathSource, flatten printouts (Phase 5b)
+    file_notes = _rewrite_inserted_files(backend, tree)
     # 2. reset identity/state — QuickStyleDef/TagDef tables, spans, tables, author attrs all
     #    stay verbatim; only IDs/stamps/view-state go
     for el in tree.iter():
@@ -84,7 +152,7 @@ def _transplant_raw_page(
 
         apply_hierarchy_restructure(backend, target_section_id, HierarchyScope.hsPages, set_level)
 
-    return new_page_id
+    return PageCopyResult(page_id=new_page_id, file_notes=file_notes)
 
 
 def _find_node(tree: etree._Element, node_id: str) -> etree._Element:
@@ -116,21 +184,26 @@ def _unique_child_name(backend: OneNoteBackend, parent_id: str, name: str) -> st
     return f"{name} ({n})"
 
 
-def transfer_section(backend: OneNoteBackend, section_id: str, target_parent_id: str) -> str:
+def transfer_section(
+    backend: OneNoteBackend, section_id: str, target_parent_id: str
+) -> SectionCopyResult:
     """Faithfully copy a whole section into a notebook OR section group.
 
     The new section takes the source's name (de-collided); pages are copied in document
     order via ``transfer_page``, each keeping its ``pageLevel`` (subpage nesting survives).
-    Returns the new section ID."""
+    Returns the new section ID plus per-page attachment notes (prefixed with the page name)."""
     tree = etree.fromstring(
         backend.get_hierarchy(section_id, HierarchyScope.hsPages).encode("utf-8")
     )
     source = _find_node(tree, section_id)
     name = _unique_child_name(backend, target_parent_id, source.get("name") or "Section")
     new_section_id = create_section(backend, target_parent_id, name)
+    file_notes: list[str] = []
     for page in source.findall(qn("Page")):
-        transfer_page(backend, page.get("ID"), new_section_id)
-    return new_section_id
+        result = transfer_page(backend, page.get("ID"), new_section_id)
+        page_name = page.get("name") or page.get("ID")
+        file_notes.extend(f"page '{page_name}': {note}" for note in result.file_notes)
+    return SectionCopyResult(section_id=new_section_id, file_notes=file_notes)
 
 
 # NOTE: there is deliberately no transfer_notebook. VM ground truth (2026-06-11): this M365
