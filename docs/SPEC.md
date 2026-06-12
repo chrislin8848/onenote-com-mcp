@@ -8,10 +8,10 @@
 
 建立一個 **COM-only** 的 OneNote MCP server,讓 Claude(在 Windows 上的 Claude Desktop)能對 OneNote 桌面版做完整 CRUD:
 
-- 讀取:筆記本/節/頁清單、頁面文字、**表格(保留結構)**、**圖片(二進位)**、文字搜尋、**使用者目前檢視位置**(目前停留的筆記本/節/頁)。
+- 讀取:筆記本/節/頁清單、頁面文字、**表格(保留結構)**、**圖片(二進位)**、文字搜尋、**使用者目前檢視位置**(目前停留的筆記本/節/頁)、**附件/嵌入物件**(中繼資料一律可得;內容抽取**僅限**文字類/圖片/PDF,見 §5「附件與嵌入物件」)。
 - 寫入:**新增節/頁**、**附加或就地修改內容(含表格)**、**新增表格**、**插入圖片**。(COM 不能在本地新增筆記本,見 §4/§5。)
 - 刪除:刪頁/節/筆記本(層級節點);刪頁面內容物件——圖片、表格、大綱。
-- 複製:忠實克隆節/頁(保留格式、表格、圖片、子頁階層);搭配既有編輯工具做「複製後改寫」(見 §4 複製工具、§5)。**無整本克隆**(COM 不能建本);要克隆整本須先手動建好目標本再逐節 `copy_section`(見 §5)。
+- 複製:忠實克隆節/頁(保留格式、表格、圖片、**附件/嵌入物件**、子頁階層);搭配既有編輯工具做「複製後改寫」(見 §4 複製工具、§5)。**無整本克隆**(COM 不能建本);要克隆整本須先手動建好目標本再逐節 `copy_section`(見 §5)。
 - 整理:重排頁/節順序、調整頁面階層(`pageLevel`)、改名、跨節搬頁——支援「請 Claude 重整雜亂筆記本」情境(見 §4 結構工具、§5 層級重排紀律)。
 
 文字一律**完整保真**(字型/字級/顏色、粗斜底、螢光等):讀得出、編輯不擾動既有格式、可對新內容設定格式(規則見 §5「格式保真」)。
@@ -148,6 +148,8 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 | `search_pages` | 跨/範圍文字搜尋 | `FindPages` |
 | `get_page` | 取單頁內容(**保真富文字** + 結構化表格) | `GetPageContent(pageId)` |
 | `get_page_images` | 取頁面圖片(二進位) | `GetPageContent` → `GetBinaryPageContent(callbackId)` |
+| `get_page_files_info` | 列頁面**附件/嵌入物件**(如 Excel 試算表)中繼資料:名稱/大小/型別/objectID,**不解析內容** | `GetPageContent` 解析 `one:InsertedFile` + 讀 `pathCache` 檔案屬性 |
+| `get_page_files` | 取**附件內容**供 Claude 分析(**僅限**:文字類解碼/圖片/PDF 抽文字;其餘型別回中繼資料並明示不支援) | 讀 `pathCache` 本機快取檔(**非** `GetBinaryPageContent`)+ server 端型別感知抽取 |
 | `get_current_context` | 取使用者目前檢視位置(筆記本/節群組/節/頁,ID+名稱) | `Windows.CurrentWindow` 的 `CurrentNotebookId/CurrentSectionGroupId/CurrentSectionId/CurrentPageId` + 範圍化 `GetHierarchy` 解名稱 |
 | `create_section` | 在指定本(或節群組)建立節 | `OpenHierarchy(name+".one", parentId, out id, cftSection)`(parent 可為 notebook 或節群組) |
 | `create_page` | 在指定節建新頁(可設 `pageLevel` 子頁) | `CreateNewPage` (+ `UpdateHierarchy` 設 pageLevel) + `UpdatePageContent` |
@@ -179,16 +181,16 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
    - `delete_node`(刪整個頁/節/節群組/筆記本節點) vs `delete_page_content`(只刪頁面**內**物件:圖/表/大綱,頁面保留)。
    - `update_page_content`(加/改文字) vs `create_table`(加表格) vs `insert_image`(插圖)——`update_page_content` 描述須註明「若加的是表格或圖片,改用對應工具」。
    - `restructure_section`(**同節內**重排頁 + `pageLevel`) vs `reorder_sections`(**一本內**節順序) vs `move_page`(把頁搬到**別節**) vs `rename_node`(只改名)。
-   - `get_page`(文字 + 結構化表格) vs `get_page_images`(取圖片二進位供視覺辨識)。
+   - `get_page`(文字 + 結構化表格) vs `get_page_images`(取圖片二進位供視覺辨識) vs `get_page_files_info`(附件/嵌入物件**中繼資料**,任何型別) vs `get_page_files`(附件**內容**抽取,僅文字類/圖片/PDF)——info 是 files 的前置;非支援型別(docx/xlsx 等)只能取 info,不能取內容。
    - 命名小疙瘩:`restructure_section` 與 `reorder_sections` 的動詞/單複數不一致,若描述尚未對外凍結可考慮統一,降低模型猶豫。
 2. **把程式碼強制不了的行為契約寫進描述文字**(那是唯一落地處):
    - 破壞性工具(`delete_node`、`delete_page_content`、覆蓋式 `update_page_content`)醒目標 **DESTRUCTIVE**。
    - 結構性工具(`restructure_section` / `reorder_sections` / `move_page` / `rename_node`)註明「呼叫前先向使用者提案並取得確認;建議先 `copy_section` 備份」(呼應 §5 層級重排紀律的 propose-confirm)。
 3. **參數 schema 也要導引選擇:** `update_page_content` 的 append/insert/replace 做成 **enum 並逐值描述**;必填/選填清楚;參數名自解釋。
 
-**Server 層 `instructions`(跨工具總則):** 在 MCP `initialize` 的 `instructions` 放不屬於任何單一工具的總則——本 server 操作 live OneNote、讀取一律範圍化、**刪頁面內物件前先用 `get_page` / `get_page_images` 取 `objectID`**、以及標竿流程「日期改寫 = 手動建本 B → `copy_section` 克隆 → `search_pages` 找日期頁 → `get_page` 讀 → `update_page_content(replace)` 改」。Claude Desktop 對 `instructions` 的採用程度須**實測確認**。
+**Server 層 `instructions`(跨工具總則):** 在 MCP `initialize` 的 `instructions` 放不屬於任何單一工具的總則——本 server 操作 live OneNote、讀取一律範圍化、**刪頁面內物件前先用 `get_page` / `get_page_images` / `get_page_files_info` 取 `objectID`**、以及標竿流程「日期改寫 = 手動建本 B → `copy_section` 克隆 → `search_pages` 找日期頁 → `get_page` 讀 → `update_page_content(replace)` 改」。Claude Desktop 對 `instructions` 的採用程度須**實測確認**。
 
-**讀取工具須回傳下一步要用的 ID:** `get_page` / `get_page_images` 帶各內容物件的 `objectID`,否則模型選對 `delete_page_content` 也缺參數可帶(見 §5「刪內容物件」)。選對工具但缺參數 = 等於選錯。
+**讀取工具須回傳下一步要用的 ID:** `get_page` / `get_page_images` / `get_page_files_info` 帶各內容物件的 `objectID`,否則模型選對 `delete_page_content` 也缺參數可帶(見 §5「刪內容物件」)。選對工具但缺參數 = 等於選錯。
 
 **驗收(用真實 Claude Desktop,不用 sub-agent / API):** 建一組代表性使用者說法(例:「刪掉這個表格」「把這頁搬到另一節」「整理這節」「我現在在哪一頁」「把這張圖換掉」),在**接好 server 的真實 Claude Desktop**(production 消費端本人)上逐句輸入(用拋棄式測試筆記本,因 Desktop 會真的執行),用 §7 診斷日誌看它**選了哪個工具、帶什麼參數**;挑錯的回去改該條描述,每句重複幾次(有非決定性)迭代到穩,輸出「說法 → 工具」對照表。**不要**改用 CC 的 sub-agent 代測:那是 CC 的 harness/語境且 CC 知道設計意圖,會污染結果(測到「被暗示過的 Claude」而非「只看描述的天真 Claude」),且 agent 會動手/自我修正、蓋掉描述缺陷。
 
@@ -217,8 +219,20 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 - **插入圖片** → `insert_image` 接收 base64 影像 + media type(可選位置 x/y 與大小),組 `<one:Image>` 含 `<one:Data>` base64 → `UpdatePageContent` 寫入(COM 文件明載 `UpdatePageContent` 可加入 images)。
 - **讀表格** → 解析 `one:Table` 成結構化 rows(list of list of cell text),不要攤平成單一字串。
 - **新增/改表格** → 組 `one:Table` XML(列、欄、儲存格),經 `UpdatePageContent` 寫入。
-- **刪內容物件(圖片/表格/大綱)** → `delete_page_content(pageId, objectId)` 走 `DeletePageContent`。**不是 `DeleteHierarchy`**(那只刪頁/節/筆記本層級),**也不能靠 `UpdatePageContent` 省略物件來刪**(它合併式、不會移除未指定物件)。`objectId` 由 `get_page` / `get_page_images` 取得(讀取工具須一併回傳各內容物件的 objectID);同帶 `dateExpectedLastModified` 做並發保護,預設不 `force`。
+- **刪內容物件(圖片/表格/大綱/附件/嵌入物件)** → `delete_page_content(pageId, objectId)` 走 `DeletePageContent`。**不是 `DeleteHierarchy`**(那只刪頁/節/筆記本層級),**也不能靠 `UpdatePageContent` 省略物件來刪**(它合併式、不會移除未指定物件)。`objectId` 由 `get_page` / `get_page_images` / `get_page_files_info` 取得(讀取工具須一併回傳各內容物件的 objectID);同帶 `dateExpectedLastModified` 做並發保護,預設不 `force`。
 - **手寫墨跡** → 視為已知限制:除非 OneNote 已做墨跡辨識存了文字,否則本期不支援;明確記在限制清單。
+
+### 附件與嵌入物件(`one:InsertedFile`)
+
+頁面上的「插入檔案」(附件圖示)與「嵌入物件」(如 Excel 試算表)在頁面 XML 中是 `one:InsertedFile` 元素,帶 `pathSource`(原始來源路徑)、`pathCache`(OneNote 本機快取檔路徑,由 OneNote 自行填寫與管理)、`preferredName`(UI 顯示名)、`objectID`;schema 上可帶 `Previews` 或 `Printout` 子元素(檔案列印/預覽影像)。本期範圍(刻意收斂):
+
+- **二進位位置與圖片不同:** 附件內容是磁碟上 `pathCache` 指向的快取檔——讀內容**直接讀該檔**,**不是** `GetBinaryPageContent`(那是圖片的 callback 路徑)。快取檔可能不存在(尚未同步、快取被清),工具須優雅回報「快取不可用」,不得崩潰。
+- **`get_page_files_info`(任何型別都支援):** 回傳每個附件/嵌入物件的 `preferredName`、副檔名/型別、大小(由快取檔取得;無快取則註明不可得)、`objectID`(供 `delete_page_content` 用)、**`kind`(呈現形態:附件圖示/嵌入預覽/檔案列印——依 `Previews`/`Printout` 子元素判別,確切判別法待 VM dump 實證)**。**不解析內容。**附件與嵌入物件(如 Excel 試算表)在 XML 同為 `one:InsertedFile` 家族,**統一由本工具涵蓋,不拆分**;以 `kind` 區分即可。
+- **`get_page_files`(內容抽取,僅限三類):** 文字類(txt/csv/json/md/程式碼)解碼回傳;圖片附件以 MCP image content(base64)回傳供視覺辨識;PDF 在 server 端抽出文字(用純 Python 輕量庫,顧 PyInstaller 凍結相容)。**docx/xlsx/pptx 與其他型別一律不解析**,回中繼資料並明示不支援。大型附件設大小上限並截斷回報。
+- **克隆保留(`copy_page`/`copy_section` 必達):** 沿用舊 `pathCache` 等於指向來源快取的死引用,不可照抄;克隆時把快取檔複製到暫存位置,改寫元素為 `pathSource` 指向副本、移除舊 `pathCache`,讓 OneNote 重匯並重建自己的快取。**重匯機制與嵌入物件(試算表)克隆後的行為待 VM 實機驗證。**來源快取不可用時,該附件無法保真複製,須在結果中明確回報(不可默默略過)。
+- **嵌入式試算表等物件的確切 XML 形態**(`InsertedFile`+`Previews` 或其他)**待 VM dump 實證**;不論形態,原則一致:**info 可得、可刪、克隆保留、不抽內容、不寫**。
+- **不支援寫入(無 `insert_file` 工具):** 插入附件技術上走 `pathSource` 重匯可行,但本期刻意不納入;明確記在限制清單。
+- **檔案列印(`Printout`)呈現為頁面影像** → 與圖片同限制:燒進像素的內容(含日期)不可改。
 
 ### 格式保真(完整保真,必達)
 
@@ -234,7 +248,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 
 ### 複製/克隆(忠實克隆 + 複製後改寫)
 
-`copy_*` 工具做的是**忠實克隆**,內部用「整頁原始 XML 克隆」:讀來源頁完整 XML(`GetPageContent`),**把圖片 binary 以 `GetBinaryPageContent` 取出 inline 進去**、**連同該頁的 `QuickStyleDef` 一起帶過去**(否則 `quickStyleIndex` 失準、格式跑掉)、**重設 object ID**、**依來源設定目標頁 `pageLevel`**(保留子頁階層),再寫到目標節。`copy_section` 則是先建好目標節、再逐頁套用 `copy_page`(保留 `pageLevel`);節是複製的最大單位(無整本克隆,見下「硬限制」)。
+`copy_*` 工具做的是**忠實克隆**,內部用「整頁原始 XML 克隆」:讀來源頁完整 XML(`GetPageContent`),**把圖片 binary 以 `GetBinaryPageContent` 取出 inline 進去**、**連同該頁的 `QuickStyleDef` 一起帶過去**(否則 `quickStyleIndex` 失準、格式跑掉)、**附件/嵌入物件以「複製 `pathCache` 快取檔 → 改用 `pathSource` 指向副本重匯」帶過去**(見 §5「附件與嵌入物件」)、**重設 object ID**、**依來源設定目標頁 `pageLevel`**(保留子頁階層),再寫到目標節。`copy_section` 則是先建好目標節、再逐頁套用 `copy_page`(保留 `pageLevel`);節是複製的最大單位(無整本克隆,見下「硬限制」)。
 
 ⚠️ **克隆走「接近原始的 XML 直通」(讀 → 重設 ID／inline 圖片／帶樣式 → 寫),嚴禁繞經 `get_page` 的結構化/富文字表示再重建。** `get_page` 那條路是給 Claude 閱讀與編輯用的,對整頁複製會有損(理由同 §5 格式保真的「嚴禁有損模型」)。換言之複製**不是** §4「多對一共用核心」那條手術式 merge 路徑,而是自己一條整頁 create 路徑。
 
@@ -315,9 +329,9 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 2. 產出一份**分階段開發計畫**,建議的分期方向(可調整):
    - **Phase 0** — 專案骨架、`OneNoteBackend` 介面、pywin32 守護匯入、host 端 CI(lint + 單元測試)跑得起來;**並行**把 §2 的 Windows VM、autologon 互動 session 執行器、`remote_test` 迴圈建起來(這是後續所有整合測試的前提)。**並在 VM 實機先確認 COM 可喚得起來**(`Dispatch("OneNote.Application")` + 一次 `GetHierarchy` 成功)再往下做——確保裝的是有 COM 的桌面版 OneNote、互動 session 正常,環境問題在此一次清掉。
    - **Phase 1** — OneNote XML 層(parse + build)純函式 + 對 fixtures 的單元測試;先做讀取相關(hierarchy、page text、table、image callback id)。**保真要求:解析 inline span 樣式 + 解析 `quickStyleIndex`→`QuickStyleDef`;build 端能帶樣式(見 §5 格式保真)。**
-   - **Phase 2** — 讀取類 MCP 工具(list_*、get_page、get_page_images、search_pages、get_current_context)接到 `FixtureBackend`,Linux 全綠。
+   - **Phase 2** — 讀取類 MCP 工具(list_*、get_page、get_page_images、get_page_files_info、get_page_files、search_pages、get_current_context)接到 `FixtureBackend`,Linux 全綠(附件的型別感知抽取——文字解碼/PDF 抽文字——是純函式,host 可測;讀 `pathCache` 檔案收在 backend 後面)。
    - **Phase 3** — `Win32ComBackend` 實作 + `dump_fixtures.py`;經 `remote_test` 迴圈在 VM 跑讀取整合測試(不再手動搬機器)。
    - **Phase 4** — 寫入類(create_section、create_page〔可設 `pageLevel`〕、update_page_content〔含 append/insert/replace〕、create_table、insert_image)+ **層級結構類(restructure_section、reorder_sections、rename_node;`move_page` 跨節搬移先在 VM 實證可靠才轉正)** + 並發保護 + **手術式就地修改(保真)** + Windows round-trip 整合測試 + **格式保真回歸測試**。
-   - **Phase 5** — 複製/克隆:raw-XML 克隆核心(inline 圖片 binary、帶 `QuickStyleDef`、重設 object ID、設 `pageLevel`)+ `copy_page`/`copy_section`;整合測試驗節層級「B≡A」忠實度。「複製後改寫」沿用既有 `get_page` + `update_page_content`,不另開工具。
+   - **Phase 5** — 複製/克隆:raw-XML 克隆核心(inline 圖片 binary、帶 `QuickStyleDef`、**附件 `pathCache`→`pathSource` 重匯**、重設 object ID、設 `pageLevel`)+ `copy_page`/`copy_section`;整合測試驗節層級「B≡A」忠實度(**含附件/嵌入物件保留**;嵌入試算表克隆行為在此實證)。「複製後改寫」沿用既有 `get_page` + `update_page_content`,不另開工具。
    - **Phase 6** — 刪除(`delete_node` 層級 + `delete_page_content` 內容物件:圖片/表格/大綱)、錯誤/重試強化、**診斷日誌(§7,環境變數 `ONENOTE_MCP_LOG_LEVEL` 開關、參數截斷、不碰 stdout)**、**工具描述強化(§4,跨全套對比式描述 + 行為契約 + server `instructions` + 真實 Desktop 選擇驗收)**、煙霧測試;**打包:PyInstaller 凍結 → Inno Setup/NSIS installer(含自動寫入 Claude Desktop 設定的 `--configure`,獨立偵測並處理 Store + 一般版兩種設定檔路徑),在 VM 內建置產出 `OneNoteMCP-Setup.exe`**。
 3. 每個 Phase 標明:在 Linux 可完成/驗證的部分 vs. 必須在 Windows 驗證的部分。
