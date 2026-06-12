@@ -210,14 +210,15 @@ catalog; adding tools after that pass would force a redo). Scope:
   the cache file aside, rewrite the element to `pathSource` → the copy, drop `pathCache`, let
   OneNote re-import. Re-import mechanics + embedded-spreadsheet clone behavior are VM-gated.
   Source cache unavailable ⇒ report that attachment explicitly in the result, never skip silently.
-- **Ground truth IS IN (dump 2026-06-12, docs/onenote-xml-schema.md InsertedFile section):**
-  InsertedFile lives INSIDE `Outline>OEChildren>OE` (NOT page-level), has NO own objectID (ID
-  on the enclosing OE); kind rule confirmed (no children=icon / Printout=printout /
-  Previews=embedded; embedded has NO pathSource); pathCache verified live (`Temp\{GUID}.bin`);
-  printout callback returns the ORIGINAL source bytes. ⇒ `_CONTENT_TAGS` needs NO change
-  (attachments ride inside Outlines). NEW open VM question: DeletePageContent refuses paragraph
-  OEs — is an attachment-bearing OE deletable, or is attachment delete an outline rewrite via
-  the edit seam?
+- **Ground truth IS IN (dumps 2026-06-12, docs/onenote-xml-schema.md InsertedFile section;
+  fixtures committed):** InsertedFile has TWO placements — inline in `Outline>OEChildren>OE`
+  (no own objectID; enclosing OE has it) AND page-level (direct Page child, Position+Size,
+  OWN objectID). Kind rule: no children=icon / Printout=printout / Previews=embedded (embedded
+  has NO pathSource). pathCache verified live (`Temp\{GUID}.bin`); printout = InsertedFile +
+  page-level one:XPSFile (callback → ORIGINAL source bytes) + page-level one:Image renders;
+  deleting the InsertedFile leaves XPSFile/Image orphans, deleting the render GC's the XPSFile.
+  ⇒ page-level variant must join `_CONTENT_TAGS`; inline delete = open VM question
+  (DeletePageContent refuses paragraph OEs — outline rewrite may be needed).
 - **No `insert_file` tool** (deliberate, in the limits list). `Printout` renders as page images
   → same burned-in-pixels limits as images.
 - Fixtures: dumped via `scripts/remote_dump.sh` (onenote-dump /it task → test-results/dump,
