@@ -367,6 +367,94 @@ def test_modify_table_refuses_deleting_every_row(be, table_page):
     assert not [c for c in be.calls if c.method == "update_page_content"]
 
 
+# --- modify_table set_rows: bulk CONTENT replace, fixed shape, cell identity kept -----
+
+
+def test_modify_table_set_rows_replaces_content_and_keeps_cell_ids(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    cells_before = table.findall(qn("Row"))[0].findall(qn("Cell"))
+    n_cols = len(cells_before)
+    ids_before = [c.get("objectID") for c in cells_before]
+    n_rows_before = len(table.findall(qn("Row")))
+
+    page_edit.modify_table(
+        be,
+        table_page.get("ID"),
+        table.get("objectID"),
+        "set_rows",
+        rows=[["甲" + str(i) for i in range(n_cols)]],
+    )
+    _, sent = _sent_payload(be)
+    sent_table = next(sent.iter(qn("Table")))
+    sent_cells = sent_table.findall(qn("Row"))[0].findall(qn("Cell"))
+    # content replaced...
+    assert "甲0" in _cdata(sent_cells[0].find(f"{qn('OEChildren')}/{qn('OE')}"))
+    # ...shape unchanged, cell identities preserved
+    assert len(sent_table.findall(qn("Row"))) == n_rows_before
+    assert [c.get("objectID") for c in sent_cells] == ids_before
+
+
+def test_modify_table_set_rows_single_row_at_index_leaves_other_rows(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    rows_before = table.findall(qn("Row"))
+    n_cols = len(rows_before[0].findall(qn("Cell")))
+    first_row_before = etree.tostring(rows_before[0], with_tail=False)
+
+    page_edit.modify_table(
+        be,
+        table_page.get("ID"),
+        table.get("objectID"),
+        "set_rows",
+        rows=[["乙"] * n_cols],
+        at_index=1,
+    )
+    _, sent = _sent_payload(be)
+    sent_rows = next(sent.iter(qn("Table"))).findall(qn("Row"))
+    assert etree.tostring(sent_rows[0], with_tail=False) == first_row_before, "row 0 untouched"
+    changed = sent_rows[1].findall(qn("Cell"))[0].find(f"{qn('OEChildren')}/{qn('OE')}")
+    assert "乙" in _cdata(changed)
+
+
+def test_modify_table_set_rows_short_row_leaves_trailing_columns(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    last_cell_before = etree.tostring(
+        table.findall(qn("Row"))[0].findall(qn("Cell"))[-1], with_tail=False
+    )
+
+    page_edit.modify_table(
+        be, table_page.get("ID"), table.get("objectID"), "set_rows", rows=[["只改第一格"]]
+    )
+    _, sent = _sent_payload(be)
+    sent_cells = next(sent.iter(qn("Table"))).findall(qn("Row"))[0].findall(qn("Cell"))
+    assert "只改第一格" in _cdata(sent_cells[0].find(f"{qn('OEChildren')}/{qn('OE')}"))
+    assert etree.tostring(sent_cells[-1], with_tail=False) == last_cell_before, "trailing cell kept"
+
+
+def test_modify_table_set_rows_rejects_writing_past_last_row(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    n_rows = len(table.findall(qn("Row")))
+    n_cols = len(table.findall(qn("Row"))[0].findall(qn("Cell")))
+    with pytest.raises(ValueError, match="insert_rows"):
+        page_edit.modify_table(
+            be,
+            table_page.get("ID"),
+            table.get("objectID"),
+            "set_rows",
+            rows=[["x"] * n_cols] * (n_rows + 1),  # one row too many
+        )
+    assert not [c for c in be.calls if c.method == "update_page_content"]
+
+
+def test_modify_table_set_rows_rejects_rows_wider_than_table(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    n_cols = len(table.findall(qn("Row"))[0].findall(qn("Cell")))
+    with pytest.raises(ValueError, match="columns"):
+        page_edit.modify_table(
+            be, table_page.get("ID"), table.get("objectID"), "set_rows", rows=[["x"] * (n_cols + 1)]
+        )
+    assert not [c for c in be.calls if c.method == "update_page_content"]
+
+
 # --- nested tables (a table inside a cell — the 業務塔斯作業 PAYMENT layout) --------------
 
 _ONE_NS = "http://schemas.microsoft.com/office/onenote/2013/onenote"
@@ -445,6 +533,95 @@ def test_modify_table_rejects_non_table_target(be, mixed):
     oe = next(o for o in mixed.iter(qn("OE")) if o.get("objectID"))
     with pytest.raises(ValueError, match="not a table"):
         page_edit.modify_table(be, mixed.get("ID"), oe.get("objectID"), "delete_rows", indices=[0])
+
+
+# --- delete_inline_content: remove a table / paragraph from INSIDE an outline ---------
+
+
+def _inject(tmp_path, page_id: str, body: str) -> FixtureBackend:
+    """Write a one:Page fixture (body = the page's child XML) and return a FixtureBackend on it."""
+    from onenote_com_mcp.backend.fixture import _sanitize
+
+    (tmp_path / f"page_{_sanitize(page_id)}.xml").write_text(
+        '<?xml version="1.0"?>'
+        f'<one:Page xmlns:one="{_ONE_NS}" ID="{page_id}" '
+        f'lastModifiedTime="2026-06-13T00:00:00.000Z">{body}</one:Page>',
+        encoding="utf-8",
+    )
+    return FixtureBackend(tmp_path)
+
+
+def test_delete_inline_content_removes_table_but_keeps_sibling_paragraphs(tmp_path):
+    page_id = "{P}{1}{D0}"
+    body = (
+        '<one:Outline objectID="OUT"><one:OEChildren>'
+        '<one:OE objectID="PARA-A"><one:T><![CDATA[保留我]]></one:T></one:OE>'
+        '<one:OE objectID="OE-TBL"><one:Table objectID="TBL">'
+        '<one:Columns><one:Column index="0" width="100"/></one:Columns>'
+        '<one:Row><one:Cell objectID="C1"><one:OEChildren>'
+        '<one:OE objectID="CP1"><one:T><![CDATA[格子]]></one:T></one:OE>'
+        "</one:OEChildren></one:Cell></one:Row>"
+        "</one:Table></one:OE>"
+        "</one:OEChildren></one:Outline>"
+    )
+    be = _inject(tmp_path, page_id, body)
+    page_edit.delete_inline_content(be, page_id, "TBL")
+    _, sent = _sent_payload(be)
+    assert sent.find(f".//{qn('Table')}") is None, "the table is gone"
+    survivors = [o.get("objectID") for o in sent.iter(qn("OE")) if o.get("objectID")]
+    assert "PARA-A" in survivors, "the sibling paragraph is kept"
+    assert "OE-TBL" not in survivors, "the table's now-empty wrapping OE is pruned"
+
+
+def test_delete_inline_content_removes_a_paragraph(tmp_path):
+    page_id = "{P}{1}{D1}"
+    body = (
+        '<one:Outline objectID="OUT"><one:OEChildren>'
+        '<one:OE objectID="KEEP"><one:T><![CDATA[留]]></one:T></one:OE>'
+        '<one:OE objectID="DROP"><one:T><![CDATA[刪]]></one:T></one:OE>'
+        "</one:OEChildren></one:Outline>"
+    )
+    be = _inject(tmp_path, page_id, body)
+    page_edit.delete_inline_content(be, page_id, "DROP")
+    _, sent = _sent_payload(be)
+    survivors = [o.get("objectID") for o in sent.iter(qn("OE")) if o.get("objectID")]
+    assert survivors == ["KEEP"]
+
+
+def test_delete_inline_content_keeps_table_cell_valid(tmp_path):
+    """A nested table lives in a cell. Deleting it must leave the cell valid (OEChildren > OE),
+    never an empty <one:Cell/> (rejected by COM with hrInvalidXML)."""
+    page_id = "{P}{1}{D2}"
+    inner = (
+        '<one:Table objectID="T-INNER">'
+        '<one:Columns><one:Column index="0" width="50"/></one:Columns>'
+        '<one:Row><one:Cell objectID="IC1"><one:OEChildren>'
+        '<one:OE objectID="IP1"><one:T><![CDATA[x]]></one:T></one:OE>'
+        "</one:OEChildren></one:Cell></one:Row></one:Table>"
+    )
+    body = (
+        '<one:Outline objectID="OUT"><one:OEChildren><one:OE objectID="OE-OUTER">'
+        '<one:Table objectID="T-OUTER">'
+        '<one:Columns><one:Column index="0" width="100"/></one:Columns>'
+        f'<one:Row><one:Cell objectID="C2"><one:OEChildren><one:OE objectID="P2">{inner}'
+        "</one:OE></one:OEChildren></one:Cell></one:Row>"
+        "</one:Table></one:OE></one:OEChildren></one:Outline>"
+    )
+    be = _inject(tmp_path, page_id, body)
+    page_edit.delete_inline_content(be, page_id, "T-INNER")
+    _, sent = _sent_payload(be)
+    inner_tables = [t for t in sent.iter(qn("Table")) if t.get("objectID") == "T-INNER"]
+    assert not inner_tables, "the inner table is gone"
+    cell = next(c for c in sent.iter(qn("Cell")) if c.get("objectID") == "C2")
+    assert cell.find(f"{qn('OEChildren')}/{qn('OE')}") is not None, "cell stays valid, not empty"
+
+
+def test_delete_inline_content_rejects_page_level_object(be, mixed):
+    # the page-level outline is delete_page_content's job, not this tool's
+    outline = mixed.find(qn("Outline"))
+    with pytest.raises(ValueError, match="delete_page_content"):
+        page_edit.delete_inline_content(be, mixed.get("ID"), outline.get("objectID"))
+    assert not [c for c in be.calls if c.method == "update_page_content"], "no write on refusal"
 
 
 # --- images ---------------------------------------------------------------------------

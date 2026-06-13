@@ -91,6 +91,31 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 
 ## Status (2026-06-13)
 
+**v1.0.4 — inline delete + bulk table-content replace (24-tool catalog). Tier-1 246 green;
+Tier-2 NOT yet run (the two new live round-trips are written, awaiting the VM task).** Closes
+two real gaps found in hands-on use, both built INSIDE the edit seam (`apply_page_edit`) — no new
+COM, no new invariant:
+- **`delete_inline_content`** (NEW tool, #24): delete ONE object from INSIDE an outline — a table,
+  a paragraph, or an inline image/attachment — by objectID, via the edit seam (NOT
+  DeletePageContent, which COM refuses for inline OEs). The exact gap reported: `delete_page_content`
+  is page-level-only, so it could not drop a table while keeping the surrounding paragraphs. Reuses
+  `remove_content_element` (prunes the emptied OE/OEChildren/Outline; a table cell is replenished,
+  never emptied). Sibling paragraphs survive. A page-level objectID is refused here with a pointer
+  to `delete_page_content` (the symmetric complement). Lives in `service/page_edit.py` (it composes
+  a Mutator, so it must); `delete.py`'s inline-refusal guidance now points at it. §4 delete trio is
+  now node / page-level / inline, cross-named both ways (guard-tested in test_smoke_server.py).
+- **`modify_table` `set_rows`** (NEW operation): OVERWRITE the content of existing rows with a 2-D
+  array from `at_index` (one row = "replace this row", every row = "refresh the whole table"),
+  fixed-shape — no row/column added/removed, every cell keeps its objectID, a short input row leaves
+  trailing columns untouched. Only rewrites EXISTING rows (add rows = `insert_rows`); out-of-range /
+  too-wide is refused. Reuses `_cell_runs` + `_replace_oe_text`. Distinct from update_page_content
+  "replace" (ONE cell) and create_table (NEW table) — borders added to all three descriptions.
+- Tier-1: `test_page_edit_content.py` (+set_rows ×5, +delete_inline_content ×4 incl. keep-siblings,
+  cell-stays-valid, page-level-refused); `test_smoke_server.py` 23→24 + both-way border assert;
+  Tier-2 `test_windows_write.py` (+set_rows + delete-inline-keeps-paragraphs round-trips, await VM).
+- Text-paragraph edits confirmed WHOLE-OE replacement (a fresh one:T swapped in), never
+  character-level — `_replace_oe_text`, untouched paragraphs stay byte-identical.
+
 **v1.0.3 — table-shape editing + hyperlinks (23-tool catalog).** Two text/table-editing
 capabilities added inside the existing seams + VM-validated:
 - **`modify_table`** (NEW tool, #23): change an EXISTING table's shape in place — `insert_rows`

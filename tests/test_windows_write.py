@@ -337,6 +337,54 @@ def test_modify_table_shape_roundtrips(backend, temp_section):
     ]
 
 
+def test_modify_table_set_rows_roundtrip(backend, temp_section):
+    page_id = create.create_page(backend, temp_section, "表格內容替換頁")
+    page_edit.add_table(backend, page_id, [["a", "b"], ["c", "d"], ["e", "f"]])
+
+    def table():
+        return next(
+            b
+            for o in read.get_page(backend, page_id)["outlines"]
+            for b in o["blocks"]
+            if b["type"] == "table"
+        )
+
+    tid = table()["object_id"]
+    cell_ids_before = [[c["object_id"] for c in r] for r in table()["rows"]]
+
+    # overwrite ONE row in place; the other rows and the shape are untouched
+    page_edit.modify_table(backend, page_id, tid, "set_rows", rows=[["X", "Y"]], at_index=1)
+    t = table()
+    assert [[c["text"] for c in r] for r in t["rows"]] == [["a", "b"], ["X", "Y"], ["e", "f"]]
+    assert [[c["object_id"] for c in r] for r in t["rows"]] == cell_ids_before, "cell IDs kept"
+
+    # refresh the WHOLE table content in one call (still fixed shape)
+    page_edit.modify_table(
+        backend, page_id, tid, "set_rows", rows=[["1", "2"], ["3", "4"], ["5", "6"]]
+    )
+    assert [[c["text"] for c in r] for r in table()["rows"]] == [
+        ["1", "2"],
+        ["3", "4"],
+        ["5", "6"],
+    ]
+
+
+def test_delete_inline_content_drops_table_keeps_paragraphs(backend, temp_section):
+    page_id = create.create_page(backend, temp_section, "刪除行內表格頁", "段落一\n段落二")
+    page_edit.add_table(backend, page_id, [["a", "b"], ["c", "d"]])
+
+    def blocks():
+        return [b for o in read.get_page(backend, page_id)["outlines"] for b in o["blocks"]]
+
+    tbl = next(b for b in blocks() if b["type"] == "table")
+    page_edit.delete_inline_content(backend, page_id, tbl["object_id"])
+
+    after = blocks()
+    assert not any(b["type"] == "table" for b in after), "the inline table is gone"
+    texts = [b["text"] for b in after if b["type"] == "paragraph"]
+    assert "段落一" in texts and "段落二" in texts, "surrounding paragraphs survive the delete"
+
+
 def test_hyperlink_write_and_readback(backend, temp_section):
     page_id = create.create_page(backend, temp_section, "超連結頁")
     url = "https://example.com/path?x=1&y=2"

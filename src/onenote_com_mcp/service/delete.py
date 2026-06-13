@@ -10,9 +10,9 @@ Two deletes that must not be confused (a §4 contrastive pair):
   (Phase 4/5b): ``DeletePageContent`` ACCEPTS page-level ``one:Outline`` / ``one:Image`` /
   ``one:InsertedFile``, but REFUSES an inline ``one:OE`` — a paragraph OE (0x8004200E) and an
   attachment-bearing OE alike. So inline content (a paragraph, or a table/image/attachment
-  *inside* an outline) is removed by editing its outline through ``update_page_content``, not
-  here. This module validates the target is page-level BEFORE the COM call, turning that COM
-  refusal into a clear, actionable error.
+  *inside* an outline) is removed by ``delete_inline_content`` (``service.page_edit``) through the
+  edit seam, not here. This module validates the target is page-level BEFORE the COM call, turning
+  that COM refusal into a clear, actionable error.
 
 Concurrency: ``delete_page_content`` carries the stamp from the page it reads to validate the
 target (matching ``apply_page_edit``'s read-then-act guard); ``force`` defaults False.
@@ -66,8 +66,8 @@ def _inline_guidance(target: etree._Element) -> str:
     return (
         f"{what} (inline content inside an outline). delete_page_content removes PAGE-LEVEL "
         "objects only — a whole outline, a page-level image, or a page-level attachment. To "
-        "remove inline content, edit its outline with update_page_content (replace its text, "
-        "or delete the whole containing outline if that is what you want)."
+        "remove inline content, use delete_inline_content (it removes a table / inline image / "
+        "inline attachment / paragraph through the edit seam)."
     )
 
 

@@ -38,8 +38,14 @@ EXPECTED_TOOLS = {
     "move_page",
     "delete_node",
     "delete_page_content",
+    "delete_inline_content",
 }
-DESTRUCTIVE_TOOLS = {"delete_node", "delete_page_content", "modify_table"}
+DESTRUCTIVE_TOOLS = {
+    "delete_node",
+    "delete_page_content",
+    "delete_inline_content",
+    "modify_table",
+}
 
 
 @pytest.fixture(scope="module")
@@ -47,9 +53,9 @@ def tools():
     return {t.name: t for t in asyncio.run(mcp.list_tools())}
 
 
-def test_catalog_is_the_23_expected_tools(tools):
+def test_catalog_is_the_24_expected_tools(tools):
     assert set(tools) == EXPECTED_TOOLS
-    assert len(tools) == 23
+    assert len(tools) == 24
 
 
 def test_every_tool_has_a_real_description(tools):
@@ -70,6 +76,9 @@ def test_contrastive_borders_present(tools):
     assert "restructure_section" in tools["move_page"].description  # move vs reorder-within
     assert "get_page_files" in tools["get_page_images"].description  # image vs file reads
     assert "delete_page_content" in tools["delete_node"].description  # node vs in-page
+    # the inline-vs-page-level delete border names both neighbours
+    assert "delete_page_content" in tools["delete_inline_content"].description
+    assert "delete_inline_content" in tools["delete_page_content"].description
 
 
 def test_update_mode_is_a_per_value_enum(tools):

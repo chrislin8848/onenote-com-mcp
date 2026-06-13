@@ -29,7 +29,13 @@ from lxml import etree
 from onenote_com_mcp.backend.base import OneNoteBackend
 from onenote_com_mcp.enums import PageInfo
 from onenote_com_mcp.errors import NodeNotFoundError, OneNoteComError
-from onenote_com_mcp.xmllayer.build import make_image, make_table, make_table_row, make_text_oe
+from onenote_com_mcp.xmllayer.build import (
+    _cell_runs,
+    make_image,
+    make_table,
+    make_table_row,
+    make_text_oe,
+)
 from onenote_com_mcp.xmllayer.namespaces import local_name, qn
 from onenote_com_mcp.xmllayer.spans import build_spans
 
@@ -415,6 +421,57 @@ def _delete_table_columns(table: etree._Element, indices: list[int]) -> None:
     _renumber_columns(columns)
 
 
+def _set_cell_content(
+    cell: etree._Element, runs: list[Any], shading_color: str | None, alignment: str | None
+) -> None:
+    """Replace a cell's text content in place: rewrite the cell's FIRST one:OE runs (keeping its
+    objectID), drop any extra paragraph OEs, and set shadingColor only when given. The enclosing
+    one:Cell keeps its objectID — this is a content edit, never a structural one."""
+    children = cell.find(qn("OEChildren"))
+    if children is None:
+        children = etree.SubElement(cell, qn("OEChildren"))
+    oes = children.findall(qn("OE"))
+    if oes:
+        _replace_oe_text(oes[0], {"runs": runs, "quick_style_index": None, "alignment": alignment})
+        for extra in oes[1:]:
+            children.remove(extra)
+    else:
+        children.append(make_text_oe(runs, alignment=alignment))
+    if shading_color:
+        cell.set("shadingColor", shading_color)
+
+
+def _set_table_rows(table: etree._Element, rows: list[list[Any]], at_index: int | None) -> None:
+    """Replace the CONTENT of existing rows from ``at_index`` (None = row 0), one input row per
+    existing row. Fixed-shape: rows/columns are never added or removed — every one:Cell keeps its
+    objectID. A short input row leaves the trailing columns untouched. Out-of-range writes are
+    refused (point at insert_rows / add_columns) so a content edit never silently grows it."""
+    existing = table.findall(qn("Row"))
+    n_rows = len(existing)
+    n_cols = len(_table_columns_el(table).findall(qn("Column")))
+    if at_index is None:
+        at_index = 0
+    if not (0 <= at_index < n_rows):
+        raise ValueError(f"at_index {at_index} is out of range 0..{n_rows - 1}")
+    end = at_index + len(rows)
+    if end > n_rows:
+        raise ValueError(
+            f"set_rows would write rows {at_index}..{end - 1} but the table has only {n_rows} "
+            "rows — add rows first (modify_table operation='insert_rows')"
+        )
+    widest = max((len(r) for r in rows), default=0)
+    if widest > n_cols:
+        raise ValueError(
+            f"a row has {widest} cells but the table has {n_cols} columns — "
+            "add columns first (modify_table operation='add_columns')"
+        )
+    for j, row_input in enumerate(rows):
+        cells = existing[at_index + j].findall(qn("Cell"))
+        for k, cell_input in enumerate(row_input):
+            runs, shading_color, alignment = _cell_runs(cell_input)
+            _set_cell_content(cells[k], runs, shading_color, alignment)
+
+
 # --- Composable mutators + the facades the MCP write tools delegate to ---------------
 # Each facade builds a Mutator and hands it to the single core above. ``content_mutator``
 # and ``set_title`` are public so other services (create_page) can compose them into ONE
@@ -530,8 +587,8 @@ def add_table(
     apply_page_edit(backend, page_id, mutate, force=force)
 
 
-_TABLE_OPS = ("add_columns", "insert_rows", "delete_columns", "delete_rows")
-TableOp = Literal["add_columns", "insert_rows", "delete_columns", "delete_rows"]
+_TABLE_OPS = ("add_columns", "insert_rows", "delete_columns", "delete_rows", "set_rows")
+TableOp = Literal["add_columns", "insert_rows", "delete_columns", "delete_rows", "set_rows"]
 
 
 def modify_table(
@@ -555,6 +612,12 @@ def modify_table(
       * ``add_columns``  — insert ``count`` empty columns at ``at_index`` (omit = append at the
         end); ``width`` defaults to the last column's. Every row gets an empty cell so the table
         stays rectangular. Fill the new cells afterwards with update_page_content (replace).
+      * ``set_rows``     — REPLACE the content of existing rows with ``rows`` (cell content, same
+        shape as create_table), starting at ``at_index`` (omit = row 0), one input row per existing
+        row. Fixed-shape: no row/column is added or removed and every cell keeps its objectID; a
+        short input row leaves trailing columns untouched. Give one row + ``at_index`` to replace a
+        single row. Writing past the last row / wider than the table is refused (grow it first with
+        insert_rows / add_columns).
       * ``delete_rows``    — remove the rows at ``indices`` (0-based). DESTRUCTIVE.
       * ``delete_columns`` — remove the columns at ``indices`` (0-based) and the matching cell in
         every row. DESTRUCTIVE.
@@ -564,8 +627,8 @@ def modify_table(
         raise ValueError(f"operation must be one of {_TABLE_OPS}, got {operation!r}")
     if not table_object_id:
         raise ValueError("table_object_id is required (a one:Table objectID from get_page)")
-    if operation == "insert_rows" and not rows:
-        raise ValueError("insert_rows requires non-empty rows")
+    if operation in ("insert_rows", "set_rows") and not rows:
+        raise ValueError(f"{operation} requires non-empty rows")
     if operation in ("delete_rows", "delete_columns") and not indices:
         raise ValueError(f"{operation} requires non-empty indices")
 
@@ -580,10 +643,51 @@ def modify_table(
             _insert_table_rows(table, rows, at_index)
         elif operation == "add_columns":
             _add_table_columns(table, at_index, count, width)
+        elif operation == "set_rows":
+            _set_table_rows(table, rows, at_index)
         elif operation == "delete_rows":
             _delete_table_rows(table, indices)
         else:  # delete_columns
             _delete_table_columns(table, indices)
+
+    apply_page_edit(backend, page_id, mutate, force=force)
+
+
+# Inline objects delete_inline_content can remove (an inline table is the one:Table; an inline
+# image/attachment/paragraph is the enclosing one:OE — get_page reports the OE's objectID for
+# those, the Table's own objectID for a table).
+_INLINE_DELETABLE = frozenset({"Table", "OE", "Image", "InsertedFile", "InkDrawing", "MediaFile"})
+
+
+def delete_inline_content(
+    backend: OneNoteBackend, page_id: str, object_id: str, *, force: bool = False
+) -> None:
+    """Delete ONE inline object from inside an outline — a table, an inline image/attachment, or a
+    paragraph — by objectID, via the edit seam (NOT DeletePageContent, which COM refuses for inline
+    OEs). The deleted element's emptied OE/OEChildren/Outline ancestors are pruned (a table cell is
+    kept valid, never emptied); sibling paragraphs in the same outline are untouched — so "delete
+    the table, keep the paragraphs" just works. The complement of delete_page_content (page-level
+    objects): a page-level objectID is refused here with a pointer to that tool."""
+    if not object_id:
+        raise ValueError("object_id is required (an inline objectID from get_page)")
+
+    def mutate(tree: etree._Element) -> None:
+        target = _find_content_object(tree, object_id)
+        parent = target.getparent()
+        name = local_name(target.tag)
+        if parent is not None and local_name(parent.tag) == "Page":
+            raise ValueError(
+                f"{object_id!r} is a page-level one:{name} — delete_inline_content removes content "
+                "INSIDE an outline; use delete_page_content for a whole outline, a page-level "
+                "image, or a page-level attachment"
+            )
+        if name not in _INLINE_DELETABLE:
+            raise ValueError(
+                f"{object_id!r} is a one:{name}; delete_inline_content removes an inline table, "
+                "image, attachment, or paragraph — pass a table's objectID, or the paragraph/OE "
+                "objectID get_page reports (an inline image/attachment uses its enclosing OE's ID)"
+            )
+        remove_content_element(target)
 
     apply_page_edit(backend, page_id, mutate, force=force)
 

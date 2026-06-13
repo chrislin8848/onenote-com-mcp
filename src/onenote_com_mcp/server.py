@@ -1,11 +1,12 @@
-"""FastMCP server — the full 22-tool OneNote catalog (SPEC §4).
+"""FastMCP server — the full 24-tool OneNote catalog (SPEC §4).
 
 Every tool is a thin facade over ``onenote_com_mcp.service`` (the shared write core, the copy
 core, the hierarchy core); the orchestration lives there, not here. Descriptions carry the §4
 contract the LLM reads: contrastive borders on confusable pairs (get_page vs get_page_images vs
 get_page_files_info vs get_page_files; update_page_content vs create_table vs insert_image;
 restructure_section vs reorder_sections vs move_page vs rename_node; delete_node vs
-delete_page_content; copy vs move), DESTRUCTIVE + propose-then-confirm contracts in text, and
+delete_page_content vs delete_inline_content; copy vs move), DESTRUCTIVE + propose-then-confirm
+contracts in text, and
 ``mode`` as a per-value enum. Cross-tool rules that belong to no single tool live in
 ``_SERVER_INSTRUCTIONS`` (MCP ``initialize`` instructions). ``logged_tool`` adds the §7 per-call
 diagnostic log at the decorator seam.
@@ -52,10 +53,10 @@ raw ID when the user explicitly asks for it, when names alone are genuinely ambi
 (two pages share a title and the user must disambiguate), or when the user will paste it \
 back into another tool call.
 
-Destructive and structural operations (delete_node, delete_page_content, modify_table's \
-delete_rows/delete_columns, force overwrites, restructure_section, reorder_sections, move_page, \
-rename_node) are propose-then-confirm: tell the user exactly what will change and get their \
-go-ahead before calling. For risky restructures, \
+Destructive and structural operations (delete_node, delete_page_content, delete_inline_content, \
+modify_table's delete_rows/delete_columns, force overwrites, restructure_section, \
+reorder_sections, move_page, rename_node) are propose-then-confirm: tell the user exactly what \
+will change and get their go-ahead before calling. For risky restructures, \
 suggest a clone backup with copy_section first.
 
 Benchmark workflow for "copy these pages and change the dates" (faithful copy, then edit the \
@@ -265,10 +266,10 @@ def create_table(
     target_object_id: str = "",
     force: bool = False,
 ) -> str:
-    """Create a NEW table on a page. Use this ONLY to make a brand-new table. To change an
-    EXISTING table's shape (add/insert rows, add columns, delete rows/columns) use modify_table;
-    to edit the TEXT already in a cell use update_page_content ("replace" on the cell's paragraph
-    objectID).
+    """Create a NEW table on a page. Use this ONLY to make a brand-new table — NOT to change a
+    table that already exists. On an EXISTING table: change its shape (add/insert rows, add columns,
+    delete rows/columns) or overwrite whole rows of content with modify_table (set_rows); edit the
+    TEXT of ONE cell with update_page_content ("replace" on that cell's paragraph objectID).
 
     rows: cells are plain strings or dicts {"text" | "runs", "style", "shading_color",
     "alignment"} (short rows are padded). target_object_id: empty → new table at the end of the
@@ -291,7 +292,7 @@ def create_table(
 def modify_table(
     page_id: str,
     table_object_id: str,
-    operation: Literal["add_columns", "insert_rows", "delete_columns", "delete_rows"],
+    operation: Literal["add_columns", "insert_rows", "set_rows", "delete_columns", "delete_rows"],
     rows: list[list[str | dict]] | None = None,
     indices: list[int] | None = None,
     at_index: int | None = None,
@@ -299,10 +300,10 @@ def modify_table(
     width: float | None = None,
     force: bool = False,
 ) -> str:
-    """Change an EXISTING table's SHAPE in place (row/column count) — the table's objectID and
-    every untouched cell's content/identity are preserved. Pair with create_table (which only
-    makes NEW tables) and update_page_content ("replace" to edit a cell's TEXT). Get
-    table_object_id and the row/column layout from get_page first.
+    """Change an EXISTING table in place — its SHAPE (row/column count) or, with set_rows, the
+    bulk CONTENT of whole rows — keeping the table's objectID and every untouched cell's identity.
+    Pair with create_table (which only makes NEW tables) and update_page_content ("replace" to edit
+    ONE cell's TEXT). Get table_object_id and the row/column layout from get_page first.
 
     operation (row and column edits are symmetric):
       "insert_rows"    — insert rows at 0-based at_index (omit at_index → append at the end).
@@ -310,6 +311,14 @@ def modify_table(
       "add_columns"    — insert count empty columns at 0-based at_index (omit → append at the
                          end); width defaults to the last column's. Every row gains an empty cell.
                          Fill the new cells afterwards with update_page_content ("replace").
+      "set_rows"       — OVERWRITE the content of rows that ALREADY exist with rows (cell content,
+                         same shape as create_table) from at_index (omit → row 0), one input row per
+                         existing row. set_rows only rewrites existing rows — to ADD new rows use
+                         insert_rows. Fixed-shape: no row/column added or removed, every cell keeps
+                         its ID; a short input row leaves trailing columns untouched. Pass one row +
+                         at_index to overwrite a single row; pass every row to refresh the whole
+                         table at once (vs update_page_content "replace", which rewrites ONE cell).
+                         Writing past the last row, or a row wider than the table, is refused.
       "delete_rows"    — DESTRUCTIVE: remove the rows at indices (0-based list).
       "delete_columns" — DESTRUCTIVE: remove the columns at indices (0-based) plus the matching
                          cell in every row.
@@ -485,11 +494,30 @@ def delete_page_content(page_id: str, object_id: str, force: bool = False) -> st
     object_id comes from get_page / get_page_images / get_page_files_info. This removes a
     PAGE-LEVEL object only; it does NOT delete a whole page/section (use delete_node) and
     canNOT remove inline content (a single paragraph, or a table/image/attachment inside an
-    outline) — edit that with update_page_content, or to drop a table ROW/COLUMN use
+    outline) — use delete_inline_content for that, or to drop a table ROW/COLUMN use
     modify_table (delete_rows / delete_columns). Concurrency-guarded; force=True only after
     explicit user confirmation. Confirm with the user before applying."""
     delete.delete_page_content(get_backend(), page_id, object_id, force=force)
     return f"deleted content object {object_id} from {page_id}"
+
+
+@logged_tool()
+def delete_inline_content(page_id: str, object_id: str, force: bool = False) -> str:
+    """DESTRUCTIVE. Delete ONE object from INSIDE an outline — a table, a single paragraph, or an
+    inline image/attachment — by its objectID from get_page. A whole table or a paragraph is ALWAYS
+    inside an outline, so removing one ALWAYS uses THIS tool, never delete_page_content. This is the
+    complement of delete_page_content: that tool removes PAGE-LEVEL objects (a whole outline, or a
+    page-level — i.e. printout — image/attachment); this one removes content nested inside an
+    outline, which DeletePageContent refuses. Sibling paragraphs in the same outline are kept, so
+    "delete the table but keep the surrounding text" just works. objectID: pass the table's OWN
+    objectID to drop a whole table; pass a paragraph's objectID to drop that paragraph (an inline
+    image/attachment is dropped via its enclosing paragraph's objectID, which is what get_page
+    reports for it). To remove only SOME of a table's rows/columns use modify_table (delete_rows /
+    delete_columns) instead of this; to delete a whole page or section use delete_node.
+    Concurrency-guarded; force=True only after explicit user confirmation. Confirm with the user
+    before applying."""
+    page_edit.delete_inline_content(get_backend(), page_id, object_id, force=force)
+    return f"deleted inline object {object_id} from {page_id}"
 
 
 def main() -> None:
