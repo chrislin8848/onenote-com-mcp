@@ -157,6 +157,21 @@ def test_get_page_images_empty_when_no_images(fixtures_dir):
     assert read.get_page_images(_be(fixtures_dir), MIXED_PAGE_ID) == []
 
 
+def test_get_page_images_skips_unfetchable_images(fixtures_dir):
+    """OCR-processed images return 0x8004200F from GetBinaryPageContent (VM ground truth).
+    get_page_images must SKIP them, not crash — get_page remains the authority on what's there.
+    """
+    from onenote_com_mcp.errors import OneNoteComError
+
+    class _NoBinaryBackend(FixtureBackend):
+        def get_binary_page_content(self, page_id, callback_id):
+            raise OneNoteComError("GetBinaryPageContent failed", hresult=0x8004200F)
+
+    be = _NoBinaryBackend(fixtures_dir)
+    # the image page has one image; with its binary un-fetchable the result is empty, not an error
+    assert read.get_page_images(be, IMAGE_PAGE_ID) == []
+
+
 # --- get_current_context (real window IDs + scoped GetHierarchy for names) -------------
 
 

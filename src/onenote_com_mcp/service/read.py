@@ -18,6 +18,7 @@ from typing import Any
 
 from onenote_com_mcp.backend.base import OneNoteBackend
 from onenote_com_mcp.enums import HierarchyScope, PageInfo
+from onenote_com_mcp.errors import OneNoteComError
 from onenote_com_mcp.xmllayer.models import Image, Paragraph, Table
 from onenote_com_mcp.xmllayer.parse import parse_hierarchy, parse_page
 
@@ -217,13 +218,22 @@ def get_page_images(backend: OneNoteBackend, page_id: str) -> list[dict[str, Any
     come from ``GetBinaryPageContent(callbackID)`` (SPEC §4 — no inline ``one:Data`` on a basic
     dump). ``get_page`` exposes the per-image metadata; this returns the pixels for the MCP
     image-content facade so Claude can recognize them visually.
+
+    Some images cannot be served by COM — OCR-processed images return 0x8004200F from
+    ``GetBinaryPageContent`` (VM ground truth; the same wall the copy path hits). Their pixels
+    are simply unavailable, so they are SKIPPED here rather than crashing the whole read; the
+    image still exists in ``get_page`` (object_id, dimensions, OCR text), which is the authority
+    on what a page contains, so nothing is hidden — only the unviewable pixels are dropped.
     """
     page = parse_page(backend.get_page_content(page_id, PageInfo.piBasic))
     out: list[dict[str, Any]] = []
     for img in page.images:  # inline AND page-level (printout renders) — both have callbacks
         if not img.callback_id:
             continue
-        data_b64 = backend.get_binary_page_content(page_id, img.callback_id)
+        try:
+            data_b64 = backend.get_binary_page_content(page_id, img.callback_id)
+        except OneNoteComError:
+            continue  # un-fetchable (e.g. OCR'd image) — see get_page for its metadata
         media_type = _sniff_media_type(base64.b64decode(data_b64))
         out.append(
             {

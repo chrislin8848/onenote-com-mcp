@@ -89,13 +89,24 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 - **Tier 2 (VM, checkpoint):** `@pytest.mark.windows`, real COM round-trips. Auto-skipped off
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
-## Status (2026-06-12)
+## Status (2026-06-13)
 Phases 0a, 0b, 1, 2, 3, 4, 5, **5b done**, and **Phase 6 COMPLETE through Stage 5** (deletes +
 diagnostic log + §4 descriptions + Tier-2 deletes; PyInstaller freeze AND the Inno Setup
 installer both VM-validated end-to-end — silent install → `--configure` registers Claude
-Desktop → installed exe `--selftest` binds OneNote, 3 notebooks, exit 0; version 0.9.9). Tier-1
-212 + Tier-2 43 green. Remaining: only Chris's real-Claude-Desktop §4 acceptance pass (by hand,
+Desktop → installed exe `--selftest` binds OneNote, exit 0; **version 1.0.0**). Tier-1
+214 + Tier-2 47 green. Remaining: only Chris's real-Claude-Desktop §4 acceptance pass (by hand,
 NOT CC sub-agents) — packaging is done.
+
+**Real-data resilience (2026-06-13, VM-validated on Chris's actual 測試章節1/測試章節2 sections,
+`tests/test_windows_realdata.py`):** OneNote will NOT serve an **OCR-processed** image's binary
+via COM — `GetBinaryPageContent` returns `0x8004200F` (not a sync artifact; `NavigateTo` doesn't
+help; un-extractable, full stop). This hits BOTH content paths and BOTH now degrade gracefully
+instead of crashing the whole operation: the **copy path** (`page_edit.inline_image_binaries`)
+substitutes a 1×1 transparent-PNG placeholder + a `file_notes` line per page; the **read path**
+(`read.get_page_images`) SKIPS the un-fetchable image (`get_page` stays the authority on what
+images a page has — object_id/dimensions/OCR text — so nothing is hidden, only unviewable pixels
+are dropped). Real-data smoke = read all 4 tools over every page + copy section to a throwaway +
+delete-and-confirm-gone, all green on both real sections.
 The VM is up, the XML layer is TDD'd against real dumps,
 the seven read tools run through `service/read.py` on `FixtureBackend` (Linux green), AND the
 live-COM read path is validated end-to-end on the VM: `tests/test_windows_read.py` (Tier 2,
@@ -328,12 +339,13 @@ InsertedFile ACCEPTED; inline OEs REFUSED.
   prompt hangs non-interactive SSH). `packaging/build.bat` now resolves iscc from PATH→that
   location; the `.iss` anchors Source/OutputDir with `{#SourcePath}..\` (freeze writes repo-root
   `dist\`, but iscc resolves relatives against the script's `packaging\` dir). Output filename
-  carries the version: `dist/installer/OneNoteMCP-Setup_<AppVersion>.exe` (built
-  `OneNoteMCP-Setup_0.9.9.exe`, ~22.8 MB). Validated full chain: silent install
-  (`/VERYSILENT`, per-user, no admin) → exe lands at `%LocalAppData%\Programs\OneNoteMCP\` →
-  post-install `--configure` registers the `onenote` entry in `claude_desktop_config.json`
-  pointing at the INSTALLED exe → the installed exe's `--selftest` bound OneNote (3 notebooks,
-  exit 0) via the interactive task. Version is 0.9.9 (pyproject + __init__ + .iss + uv.lock).
+  carries the version: `dist/installer/OneNoteMCP-Setup_<AppVersion>.exe` (`OneNoteMCP-Setup_
+  1.0.0.exe` as of the 2026-06-13 real-data-resilience rebuild, ~22.8 MB). Validated full chain:
+  silent install (`/VERYSILENT`, per-user, no admin) → exe lands at
+  `%LocalAppData%\Programs\OneNoteMCP\` → post-install `--configure` registers the `onenote`
+  entry in `claude_desktop_config.json` pointing at the INSTALLED exe → the installed exe's
+  `--selftest` bound OneNote, exit 0, via the interactive task. Version is 1.0.0 (pyproject +
+  __init__ + .iss + uv.lock).
 - **Still pending (Chris, NOT a packaging blocker):** the §4 real-Claude-Desktop acceptance pass
   — install the .exe (or the source server) and exercise the 22-tool catalog by hand in real
   Claude Desktop (SPEC §4 — NOT CC sub-agents).

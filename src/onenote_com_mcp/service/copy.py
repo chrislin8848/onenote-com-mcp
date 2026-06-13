@@ -113,10 +113,11 @@ def _transplant_raw_page(
     tree = etree.fromstring(raw_xml.encode("utf-8"), parser=_PARSER)
     source_level = tree.get("pageLevel")
 
-    # 1. pixels: every one:Image gets inline one:Data (callbacks resolve against the SOURCE)
-    inline_image_binaries(backend, source_page_id, tree)
+    # 1. pixels: every one:Image gets inline one:Data (callbacks resolve against the SOURCE).
+    #    Un-fetchable images (OneNote won't serve their binary) are dropped + reported, never fatal.
+    image_notes = inline_image_binaries(backend, source_page_id, tree)
     # 1b. attachments: stage cache copies, re-point pathSource, flatten printouts (Phase 5b)
-    file_notes = _rewrite_inserted_files(backend, tree)
+    file_notes = image_notes + _rewrite_inserted_files(backend, tree)
     # 2. reset identity/state — QuickStyleDef/TagDef tables, spans, tables, author attrs all
     #    stay verbatim; only IDs/stamps/view-state go
     for el in tree.iter():

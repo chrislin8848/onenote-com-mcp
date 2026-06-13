@@ -28,7 +28,7 @@ from lxml import etree
 
 from onenote_com_mcp.backend.base import OneNoteBackend
 from onenote_com_mcp.enums import PageInfo
-from onenote_com_mcp.errors import NodeNotFoundError
+from onenote_com_mcp.errors import NodeNotFoundError, OneNoteComError
 from onenote_com_mcp.xmllayer.build import make_image, make_table, make_table_row, make_text_oe
 from onenote_com_mcp.xmllayer.namespaces import local_name, qn
 from onenote_com_mcp.xmllayer.spans import build_spans
@@ -56,6 +56,14 @@ _CONTENT_TAGS = frozenset(
 )
 
 _MODES = ("append", "insert_before", "insert_after", "replace")
+
+# A 1x1 fully-transparent PNG. Used as the Data for an image whose real binary OneNote won't
+# serve via COM (see inline_image_binaries): an Image needs Data OR CallbackID to be valid XML,
+# so a placeholder keeps the payload accepted and the layout box intact instead of failing the
+# whole copy. Reported via file_notes — never a silent substitution.
+_PLACEHOLDER_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="
+)
 
 
 def parse_onenote_datetime(value: str | None) -> _dt.datetime | None:
@@ -107,13 +115,23 @@ def _prune_unchanged_content(tree: etree._Element, before: dict[etree._Element, 
             tree.remove(child)
 
 
-def inline_image_binaries(backend: OneNoteBackend, page_id: str, tree: etree._Element) -> None:
+def inline_image_binaries(backend: OneNoteBackend, page_id: str, tree: etree._Element) -> list[str]:
     """Ensure every one:Image in the payload carries inline one:Data, never a CallbackID.
 
     Public: the copy path (service/copy.py) needs the same guarantee — even a piBinaryData
     read serves CallbackID without inline Data (VM ground truth), so any tree heading into
-    UpdatePageContent must have its pixels fetched via GetBinaryPageContent first."""
-    for image in tree.iter(qn("Image")):
+    UpdatePageContent must have its pixels fetched via GetBinaryPageContent first.
+
+    GRACEFUL DEGRADATION (VM ground truth 2026-06-13): some images' binaries are simply not
+    retrievable via COM — OCR-processed images return 0x8004200F from BOTH GetBinaryPageContent
+    and piBinaryData inline, and NavigateTo (force-open/download) does not help. Rather than let
+    one un-fetchable image abort a whole page/section copy, fill it with a 1x1 transparent
+    placeholder (an Image needs Data OR CallbackID to be valid XML; a Size-only image AND a
+    dropped element both make UpdatePageContent fail with hrInvalidXML) and report it (SPEC §5:
+    losses are explicit, never silent). Returns one note per page summarizing how many images
+    lost their pixels (empty list = every image carried)."""
+    dropped = 0
+    for image in list(tree.iter(qn("Image"))):
         callback = image.find(qn("CallbackID"))
         if image.find(qn("Data")) is None:
             callback_id = (
@@ -121,8 +139,13 @@ def inline_image_binaries(backend: OneNoteBackend, page_id: str, tree: etree._El
             )
             if not callback_id:
                 continue  # nothing to fetch — leave untouched rather than invent data
+            try:
+                binary = backend.get_binary_page_content(page_id, callback_id)
+            except OneNoteComError:
+                binary = _PLACEHOLDER_PNG_B64  # un-fetchable: keep a valid (blank) Image box
+                dropped += 1
             data = etree.Element(qn("Data"))
-            data.text = backend.get_binary_page_content(page_id, callback_id)
+            data.text = binary
             ocr = image.find(qn("OCRData"))
             anchor = callback if callback is not None else ocr
             if anchor is not None:
@@ -132,6 +155,13 @@ def inline_image_binaries(backend: OneNoteBackend, page_id: str, tree: etree._El
         if callback is not None:
             image.remove(callback)
         image.attrib.pop("callbackID", None)
+    if dropped:
+        return [
+            f"{dropped} image(s) could not be copied: OneNote did not return their binary "
+            "(0x8004200F — typically OCR-processed images, not retrievable via COM); they appear "
+            "as blank placeholders in the copy."
+        ]
+    return []
 
 
 # --- in-place mutation helpers ------------------------------------------------------
