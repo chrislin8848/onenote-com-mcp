@@ -115,21 +115,24 @@ def _prune_unchanged_content(tree: etree._Element, before: dict[etree._Element, 
             tree.remove(child)
 
 
-def inline_image_binaries(backend: OneNoteBackend, page_id: str, tree: etree._Element) -> list[str]:
+def inline_image_binaries(backend: OneNoteBackend, page_id: str, tree: etree._Element) -> int:
     """Ensure every one:Image in the payload carries inline one:Data, never a CallbackID.
 
     Public: the copy path (service/copy.py) needs the same guarantee — even a piBinaryData
     read serves CallbackID without inline Data (VM ground truth), so any tree heading into
     UpdatePageContent must have its pixels fetched via GetBinaryPageContent first.
 
-    GRACEFUL DEGRADATION (VM ground truth 2026-06-13): some images' binaries are simply not
-    retrievable via COM — OCR-processed images return 0x8004200F from BOTH GetBinaryPageContent
-    and piBinaryData inline, and NavigateTo (force-open/download) does not help. Rather than let
-    one un-fetchable image abort a whole page/section copy, fill it with a 1x1 transparent
-    placeholder (an Image needs Data OR CallbackID to be valid XML; a Size-only image AND a
-    dropped element both make UpdatePageContent fail with hrInvalidXML) and report it (SPEC §5:
-    losses are explicit, never silent). Returns one note per page summarizing how many images
-    lost their pixels (empty list = every image carried)."""
+    GRACEFUL DEGRADATION: an image's binary may not be fetchable — GetBinaryPageContent returns
+    0x8004200F (hrBinaryObjectDoesNotExist). VM-confirmed root cause (2026-06-13): the image is
+    not yet downloaded to THIS machine (OneDrive files-on-demand hydrates image binaries lazily,
+    per page); a fully-synced machine serves them fine. (The earlier "OCR-processed images" theory
+    was wrong — the OCR'd photos were simply the large, last-to-hydrate ones.) Rather than let one
+    un-fetchable image abort a whole page/section copy, fill it with a 1x1 transparent placeholder
+    (an Image needs Data OR CallbackID to be valid XML; a Size-only image AND a dropped element
+    both make UpdatePageContent fail with hrInvalidXML). The caller reports the gap (SPEC §5:
+    losses are explicit, never silent). NOTE: unlike the live original, a copied placeholder does
+    NOT self-heal — the fix is to fully sync the source before copying. Returns the COUNT of images
+    that fell back to the placeholder (0 = every image carried real pixels)."""
     dropped = 0
     for image in list(tree.iter(qn("Image"))):
         callback = image.find(qn("CallbackID"))
@@ -155,13 +158,7 @@ def inline_image_binaries(backend: OneNoteBackend, page_id: str, tree: etree._El
         if callback is not None:
             image.remove(callback)
         image.attrib.pop("callbackID", None)
-    if dropped:
-        return [
-            f"{dropped} image(s) could not be copied: OneNote did not return their binary "
-            "(0x8004200F — typically OCR-processed images, not retrievable via COM); they appear "
-            "as blank placeholders in the copy."
-        ]
-    return []
+    return dropped
 
 
 # --- in-place mutation helpers ------------------------------------------------------

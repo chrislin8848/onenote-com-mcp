@@ -308,11 +308,21 @@ def insert_image(
 def copy_page(page_id: str, target_section_id: str) -> str:
     """DUPLICATE a page into a section (formatting, tables, inline images, attachments,
     pageLevel all preserved); the original stays put. This is a copy, NOT a move — to relocate
-    a page without duplicating it, use move_page. Returns the new page's ID. Attachments are
-    carried by re-import (a staged copy of the file); file_notes lists any attachment that
-    could not be transferred faithfully — surface those to the user, don't silently accept."""
+    a page without duplicating it, use move_page. Returns the new page's ID. If the source is not
+    fully downloaded on this machine (OneDrive files-on-demand), some images/files/embedded
+    objects cannot be copied and come out blank/empty — sync_warning summarizes how many, and
+    file_notes lists each. ALWAYS surface a non-null sync_warning to the user and suggest they
+    fully sync the source in OneNote, then copy again (the blanks do NOT self-heal)."""
     result = copy.transfer_page(get_backend(), page_id, target_section_id)
-    return _json({"page_id": result.page_id, "file_notes": result.file_notes})
+    return _json(
+        {
+            "page_id": result.page_id,
+            "sync_warning": copy.sync_warning(
+                result.missing_images, result.missing_files, result.missing_objects
+            ),
+            "file_notes": result.file_notes,
+        }
+    )
 
 
 @logged_tool()
@@ -321,10 +331,21 @@ def copy_section(section_id: str, target_parent_id: str) -> str:
     section group; the original stays put. The copy keeps the source name, de-collided with
     " (2)" if taken. This is the largest copy unit (there is no copy_notebook — clone a whole
     notebook by copy_section per section into a manually-created notebook). Returns the new
-    section's ID; file_notes lists any page attachment that could not be transferred
-    faithfully — surface those to the user."""
+    section's ID. If the source is not fully downloaded on this machine (OneDrive files-on-demand),
+    images/files/embedded objects come out blank — sync_warning summarizes how many across all
+    pages, file_notes details each (prefixed by page). ALWAYS surface a non-null sync_warning and
+    tell the user to fully sync the source section in OneNote, then copy again (blanks do NOT
+    self-heal)."""
     result = copy.transfer_section(get_backend(), section_id, target_parent_id)
-    return _json({"section_id": result.section_id, "file_notes": result.file_notes})
+    return _json(
+        {
+            "section_id": result.section_id,
+            "sync_warning": copy.sync_warning(
+                result.missing_images, result.missing_files, result.missing_objects
+            ),
+            "file_notes": result.file_notes,
+        }
+    )
 
 
 # NOTE: there is deliberately no copy_notebook tool — same ground truth as create_notebook

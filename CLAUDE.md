@@ -90,6 +90,15 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
 ## Status (2026-06-13)
+
+**Post-1.0 (IN PROGRESS) — see [docs/HANDOFF-copy-sync.md](docs/HANDOFF-copy-sync.md):** the
+long-standing "OCR images can't be copied" issue was RE-DIAGNOSED as OneDrive files-on-demand
+UNDER-SYNC (NOT OCR, NOT a COM limitation — a fully-synced machine copies fine). `copy_page`/
+`copy_section` now DETECT + REPORT un-synced images / files / embedded objects via a
+`sync_warning` (Tier-1 green, `tests/test_copy_sync.py`). Tier-2 validation + doc hygiene (the
+"Real-data resilience" paragraph below still says OCR images are "not retrievable via COM" — now
+known to be a sync artifact, not OCR) are open TODOs in that handoff file.
+
 Phases 0a, 0b, 1, 2, 3, 4, 5, **5b done**, and **Phase 6 COMPLETE through Stage 5** (deletes +
 diagnostic log + §4 descriptions + Tier-2 deletes; PyInstaller freeze AND the Inno Setup
 installer both VM-validated end-to-end — silent install → `--configure` registers Claude

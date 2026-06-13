@@ -112,7 +112,8 @@ def test_clone_reports_unavailable_cache_explicitly(be):
     )
     assert docx.get("pathSource") is None and docx.get("pathCache") is None
     [note] = [n for n in result.file_notes if "docx" in n]
-    assert "could not be transferred" in note
+    assert "not downloaded to this machine" in note  # under-synced source, reported (SPEC §5)
+    assert result.missing_files == 1  # categorized as a file (no one:Previews → not embedded)
 
 
 def test_clone_embedded_object_gets_staged_source_and_keeps_previews(be):

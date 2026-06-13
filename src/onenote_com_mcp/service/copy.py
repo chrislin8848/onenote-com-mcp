@@ -42,15 +42,48 @@ _PRINTOUT_IMAGE_ATTRS = ("xpsFileIndex", "isPrintOut", "originalPageNumber")
 @dataclass
 class PageCopyResult:
     page_id: str  # the copy's ID in the target section
-    # one line per attachment that could NOT be transferred faithfully (SPEC §5: report
+    # one line per piece of content that could NOT be transferred faithfully (SPEC §5: report
     # explicitly, never skip silently) or whose structure was changed (printout flattening)
     file_notes: list[str] = field(default_factory=list)
+    # counts of content the copy could not carry because it is not yet downloaded to THIS
+    # machine (OneDrive files-on-demand) — fed into the user-facing sync_warning below
+    missing_images: int = 0
+    missing_files: int = 0
+    missing_objects: int = 0
 
 
 @dataclass
 class SectionCopyResult:
     section_id: str
     file_notes: list[str] = field(default_factory=list)  # aggregated, prefixed per page
+    missing_images: int = 0
+    missing_files: int = 0
+    missing_objects: int = 0
+
+
+def sync_warning(missing_images: int, missing_files: int, missing_objects: int) -> str | None:
+    """A user-facing warning when a copy hit content not yet downloaded to this machine.
+
+    A failed image fetch (0x8004200F) or an unavailable attachment cache during copy means
+    OneDrive has not hydrated that content locally (files-on-demand). Unlike the live original
+    (which OneNote fills in on demand), the copied placeholders/empty references do NOT
+    self-heal. The remedy is to fully sync the source first — so we surface this, never silently
+    ship blanks (SPEC §5). Returns None when nothing was missing."""
+    if not (missing_images or missing_files or missing_objects):
+        return None
+    parts = []
+    if missing_images:
+        parts.append(f"{missing_images} image(s)")
+    if missing_files:
+        parts.append(f"{missing_files} file(s)")
+    if missing_objects:
+        parts.append(f"{missing_objects} embedded object(s)")
+    return (
+        "Source is NOT fully synced: " + " + ".join(parts) + " could not be copied — their "
+        "content is not yet downloaded to this machine. They appear blank/empty in the copy and "
+        "will NOT auto-download later (unlike the live original). Open and fully sync the source "
+        "section in OneNote, then run the copy again for a faithful copy."
+    )
 
 
 def transfer_page(backend: OneNoteBackend, page_id: str, target_section_id: str) -> PageCopyResult:
@@ -61,7 +94,9 @@ def transfer_page(backend: OneNoteBackend, page_id: str, target_section_id: str)
     return _transplant_raw_page(backend, raw_xml, page_id, target_section_id)
 
 
-def _rewrite_inserted_files(backend: OneNoteBackend, tree: etree._Element) -> list[str]:
+def _rewrite_inserted_files(
+    backend: OneNoteBackend, tree: etree._Element
+) -> tuple[int, int, list[str]]:
     """Re-point every one:InsertedFile at a staged copy of its cache (SPEC §5 clone rule).
 
     The source's ``pathCache`` is a dead reference in a clone (OneNote owns it) — it never
@@ -71,10 +106,16 @@ def _rewrite_inserted_files(backend: OneNoteBackend, tree: etree._Element) -> li
     carrier and the ``one:Printout`` child are stripped — the rendered pages survive as plain
     inlined images and the source file as a normal attachment. Flattening is treated as expected
     normalization, NOT a fidelity loss (the visible pages are preserved), so it is intentionally
-    NOT reported (user decision 2026-06-12). Returns one note per attachment whose CONTENT could
-    not be transferred (unavailable cache); an empty list = nothing was dropped.
+    NOT reported (user decision 2026-06-12).
+
+    Returns ``(missing_files, missing_objects, notes)``: counts of attachments (file icons /
+    printouts) and embedded objects (e.g. Excel, marked by a ``one:Previews`` child) whose
+    content could not be carried because the cache is unavailable locally — VM-confirmed cause
+    is an under-synced source (OneDrive files-on-demand), NOT OCR. ``(0, 0, [])`` = all carried.
     """
     notes: list[str] = []
+    missing_files = 0
+    missing_objects = 0
     xps_files = tree.findall(qn("XPSFile"))
     if xps_files:
         for xps in xps_files:
@@ -84,6 +125,7 @@ def _rewrite_inserted_files(backend: OneNoteBackend, tree: etree._Element) -> li
                 img.attrib.pop(attr, None)
     for f in tree.iter(qn("InsertedFile")):
         name = f.get("preferredName") or "attachment"
+        is_embedded = f.find(qn("Previews")) is not None  # embedded object vs plain file icon
         printout = f.find(qn("Printout"))
         if printout is not None:
             # Flatten (strip the printout structure); the rendered pages survive as images, so
@@ -93,18 +135,20 @@ def _rewrite_inserted_files(backend: OneNoteBackend, tree: etree._Element) -> li
         staged = backend.stage_cache_copy(path_cache, name) if path_cache else None
         if staged:
             f.set("pathSource", staged)
-        elif f.get("pathSource"):
-            notes.append(
-                f"{name}: source cache unavailable — kept the original pathSource "
-                f"({f.get('pathSource')}); OneNote can only re-import it if that path "
-                "still exists on this machine"
-            )
+            continue
+        # cache not available locally → the content is not synced to this machine; the element
+        # is left as an empty/broken reference, counted + reported so the user can sync + re-copy.
+        if is_embedded:
+            missing_objects += 1
+            kind = "embedded object"
         else:
-            notes.append(
-                f"{name}: source cache unavailable and no pathSource — the file content "
-                "could not be transferred (only the attachment entry was copied)"
-            )
-    return notes
+            missing_files += 1
+            kind = "file"
+        notes.append(
+            f"{name}: {kind} content not downloaded to this machine (source not fully synced) "
+            "— copied as an empty reference; it will NOT auto-download"
+        )
+    return missing_files, missing_objects, notes
 
 
 def _transplant_raw_page(
@@ -114,10 +158,16 @@ def _transplant_raw_page(
     source_level = tree.get("pageLevel")
 
     # 1. pixels: every one:Image gets inline one:Data (callbacks resolve against the SOURCE).
-    #    Un-fetchable images (OneNote won't serve their binary) are dropped + reported, never fatal.
-    image_notes = inline_image_binaries(backend, source_page_id, tree)
+    #    Images whose binary isn't downloaded locally get a placeholder + are counted, never fatal.
+    missing_images = inline_image_binaries(backend, source_page_id, tree)
     # 1b. attachments: stage cache copies, re-point pathSource, flatten printouts (Phase 5b)
-    file_notes = image_notes + _rewrite_inserted_files(backend, tree)
+    missing_files, missing_objects, file_notes = _rewrite_inserted_files(backend, tree)
+    if missing_images:
+        file_notes.insert(
+            0,
+            f"{missing_images} image(s) not downloaded to this machine (source not fully synced) "
+            "— copied as blank 1x1 placeholders that will NOT auto-download",
+        )
     # 2. reset identity/state — QuickStyleDef/TagDef tables, spans, tables, author attrs all
     #    stay verbatim; only IDs/stamps/view-state go
     for el in tree.iter():
@@ -153,7 +203,13 @@ def _transplant_raw_page(
 
         apply_hierarchy_restructure(backend, target_section_id, HierarchyScope.hsPages, set_level)
 
-    return PageCopyResult(page_id=new_page_id, file_notes=file_notes)
+    return PageCopyResult(
+        page_id=new_page_id,
+        file_notes=file_notes,
+        missing_images=missing_images,
+        missing_files=missing_files,
+        missing_objects=missing_objects,
+    )
 
 
 def _find_node(tree: etree._Element, node_id: str) -> etree._Element:
@@ -200,11 +256,21 @@ def transfer_section(
     name = _unique_child_name(backend, target_parent_id, source.get("name") or "Section")
     new_section_id = create_section(backend, target_parent_id, name)
     file_notes: list[str] = []
+    missing_images = missing_files = missing_objects = 0
     for page in source.findall(qn("Page")):
         result = transfer_page(backend, page.get("ID"), new_section_id)
         page_name = page.get("name") or page.get("ID")
         file_notes.extend(f"page '{page_name}': {note}" for note in result.file_notes)
-    return SectionCopyResult(section_id=new_section_id, file_notes=file_notes)
+        missing_images += result.missing_images
+        missing_files += result.missing_files
+        missing_objects += result.missing_objects
+    return SectionCopyResult(
+        section_id=new_section_id,
+        file_notes=file_notes,
+        missing_images=missing_images,
+        missing_files=missing_files,
+        missing_objects=missing_objects,
+    )
 
 
 # NOTE: there is deliberately no transfer_notebook. VM ground truth (2026-06-11): this M365
