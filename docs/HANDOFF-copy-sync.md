@@ -46,9 +46,16 @@ silently shipping blanks:
 
 ## TODO (continuing session)
 
-1. **Tier-2 validate `sync_warning` live.** Copy an under-synced section on the VM; confirm the
-   warning lists images + files + embedded objects, including attachments (the D1 `GFK…pdf`).
-   COM must run in the autologon interactive session (schtasks `/it`, like `scripts/run_tier2.bat`),
+1. **Tier-2 validate `sync_warning` live.** ✅ **Image path DONE (2026-06-13):** copied the
+   un-synced `測試章節2(同步測試)` section live — `transfer_section` returned `missing_images=148`,
+   `missing_files=0`, `missing_objects=0`, the correct `sync_warning` ("148 image(s) … not yet
+   downloaded …"), correct per-page notes, NO regression; and a now-synced attachment (the D1 PDF)
+   was correctly NOT flagged. ⏳ **File/object path still OPEN live:** the PDF synced before the run
+   so the un-synced-attachment branch wasn't exercised (it IS covered at Tier-1 —
+   `test_copy_sync.py`, `test_copy_files.py`). To finish: copy a section while an attachment is
+   still un-downloaded (or clear OneNote's local cache to force it). Re-run helper left on the VM at
+   `C:\onenote-mcp\scripts\tier2_sync_validate.py` — register an interactive schtasks task (`/it`,
+   like `scripts/run_tier2.bat`) to run it. COM must run in the autologon interactive session,
    NEVER plain SSH (a hung COM call blocks OneNote's single-threaded server). VM =
    `dev@192.168.122.13` (DHCP — `virsh domifaddr --source agent win11-onenote`); repo at
    `C:\onenote-mcp` with a synced `.venv`.
