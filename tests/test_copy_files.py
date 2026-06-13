@@ -4,8 +4,9 @@ SPEC §5 clone rule: a clone must NOT carry the source's ``pathCache`` (a dead r
 OneNote owns) — the cache bytes are staged aside and the clone's ``pathSource`` re-pointed
 at the copy so OneNote re-imports it. Printouts are flattened (their page-level one:XPSFile
 carriers hold read-side CallbackIDs that cannot ride into a write): renders survive as plain
-inlined images, the source file as a normal attachment. Anything that loses fidelity lands
-in ``file_notes`` — explicitly, never silently (SPEC §5).
+inlined images, the source file as a normal attachment — this is expected normalization, not a
+loss, so it is NOT reported (user decision 2026-06-12). Anything whose CONTENT could not be
+transferred (an unavailable cache) lands in ``file_notes`` — explicitly, never silently (SPEC §5).
 
 Source pages are the real attachment dumps (附件與嵌入物件-1/-2); cache bytes are the neutral
 hand-authored fixtures (the docx cache is deliberately absent = unavailable).
@@ -70,7 +71,7 @@ def test_clone_restages_caches_and_never_carries_path_cache(be):
     assert result.page_id == _NEW_PAGE_ID
 
 
-def test_clone_flattens_printouts_and_reports_it(be):
+def test_clone_flattens_printouts_silently(be):
     result = copy.transfer_page(be, PAGE_1_ID, _TARGET_SECTION)
     sent = _sent_payload(be)
 
@@ -92,7 +93,10 @@ def test_clone_flattens_printouts_and_reports_it(be):
     for attr in ("xpsFileIndex", "isPrintOut", "originalPageNumber"):
         assert render.get(attr) is None
 
-    assert any("printout" in note and "A4文宣" in note for note in result.file_notes)
+    # Flattening is expected normalization (the render pages survive as images), NOT a fidelity
+    # loss — it is deliberately NOT reported (user decision 2026-06-12). file_notes carries only
+    # CONTENT-transfer losses (see test_clone_reports_unavailable_cache_explicitly).
+    assert not any("printout" in note for note in result.file_notes)
 
 
 def test_clone_reports_unavailable_cache_explicitly(be):

@@ -97,6 +97,13 @@ def test_configure_writes_merged_config_to_all_targets(fake_env):
         assert data["mcpServers"]["onenote"] == {"command": "onenote.exe"}
 
 
+def test_repair_onenote_typelib_is_guarded_on_host():
+    # On Linux/macOS (no winreg) the repair must no-op cleanly: return a list, never raise.
+    # The real registry behavior is VM-validated (Tier 2), not host-testable.
+    result = configure.repair_onenote_typelib()
+    assert isinstance(result, list)
+
+
 def test_configure_does_not_write_log_level(fake_env):
     [
         *_,

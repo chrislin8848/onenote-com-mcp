@@ -26,6 +26,107 @@ from pathlib import Path
 SERVER_NAME = "onenote"
 _CONFIG_FILENAME = "claude_desktop_config.json"
 
+# OneNote 15.0 type library + its Application coclass. Win32ComBackend binds this libid.
+_ONENOTE_LIBID = "{0EA692EE-BB50-4E3C-AEF0-356D91732725}"
+_ONENOTE_COCLSID = "{DC67E480-C3CB-49F8-8232-60B0C2056C8E}"
+
+
+def _reg_default(root: int, subkey: str) -> str | None:
+    """Read a registry key's default value from the 64-bit view, or None. Guarded."""
+    try:
+        import winreg  # noqa: PLC0415 — Windows-only; configure.py must import on Linux too
+
+        with winreg.OpenKey(root, subkey, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as k:
+            value, _ = winreg.QueryValueEx(k, "")
+            return value or None
+    except (OSError, ImportError):
+        return None
+
+
+def repair_onenote_typelib() -> list[str]:
+    """Shim any broken OneNote typelib version subkey under HKCU (no admin). Returns notes.
+
+    FIELD BUG (VM-reproduced 2026-06-12): a stale version subkey under the OneNote libid with NO
+    ``0\\win32`` or ``0\\win64`` mapping (a PIA-only leftover, e.g. ``...\\1.0``) poisons
+    ``LoadRegTypeLib`` for the whole libid, so the COM call fails with TYPE_E_LIBNOTREGISTERED
+    (0x8002801D) when OneNote is launched fresh by CoCreateInstance. We repair it WITHOUT admin by
+    writing the missing mapping under ``HKCU\\Software\\Classes`` (which overrides HKLM in the
+    merged HKCR view), pointing the broken version at the same typelib file a healthy version
+    uses. Per-user and reversible. No-op off Windows or when the registration is healthy; fully
+    guarded — a repair failure must never break --configure's real job (registering Claude)."""
+    try:
+        import winreg  # noqa: PLC0415
+    except ImportError:
+        return []
+
+    notes: list[str] = []
+    try:
+        base = rf"TypeLib\{_ONENOTE_LIBID}"
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CLASSES_ROOT, base, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY
+            ) as root_key:
+                versions, i = [], 0
+                while True:
+                    try:
+                        versions.append(winreg.EnumKey(root_key, i))
+                    except OSError:
+                        break
+                    i += 1
+        except OSError:
+            return []  # OneNote typelib not registered at all — nothing for us to repair
+
+        good_win32 = good_win64 = None
+        broken: list[str] = []
+        for ver in versions:
+            w32 = _reg_default(winreg.HKEY_CLASSES_ROOT, rf"{base}\{ver}\0\win32")
+            w64 = _reg_default(winreg.HKEY_CLASSES_ROOT, rf"{base}\{ver}\0\win64")
+            good_win32 = good_win32 or w32
+            good_win64 = good_win64 or w64
+            if not w32 and not w64:
+                broken.append(ver)
+
+        if not broken:
+            return []
+
+        # Fall back to deriving the typelib file from the coclass LocalServer32 (+ resource \3,
+        # OneNote's typelib resource) when no healthy version exists to copy from.
+        if not good_win32 and not good_win64:
+            server = _reg_default(
+                winreg.HKEY_CLASSES_ROOT, rf"CLSID\{_ONENOTE_COCLSID}\LocalServer32"
+            )
+            if server:
+                good_win32 = server.strip('"').rstrip("\\") + r"\3"
+
+        if not good_win32 and not good_win64:
+            notes.append(
+                f"OneNote typelib version(s) {broken} are broken (no win32/win64 mapping) but no "
+                "healthy mapping was found to shim — needs a manual fix (delete the stale subkey)."
+            )
+            return notes
+
+        for ver in broken:
+            for platform, path in (("win32", good_win32), ("win64", good_win64)):
+                if not path:
+                    continue
+                try:
+                    with winreg.CreateKeyEx(
+                        winreg.HKEY_CURRENT_USER,
+                        rf"SOFTWARE\Classes\{base}\{ver}\0\{platform}",
+                        0,
+                        winreg.KEY_WRITE | winreg.KEY_WOW64_64KEY,
+                    ) as wk:
+                        winreg.SetValueEx(wk, "", 0, winreg.REG_SZ, path)
+                    notes.append(
+                        rf"repaired OneNote typelib {_ONENOTE_LIBID}\{ver}: per-user HKCU shim "
+                        rf"{platform} -> {path}"
+                    )
+                except OSError as exc:
+                    notes.append(rf"could not shim typelib {ver}\{platform}: {exc}")
+    except Exception as exc:  # noqa: BLE001 — repair must never break --configure
+        notes.append(f"OneNote typelib repair skipped (unexpected error: {exc!r})")
+    return notes
+
 
 def _looks_like_claude(package_name: str) -> bool:
     low = package_name.lower()

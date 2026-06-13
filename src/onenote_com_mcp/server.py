@@ -433,7 +433,12 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.configure:
-        from onenote_com_mcp.configure import configure_claude_desktop
+        from onenote_com_mcp.configure import configure_claude_desktop, repair_onenote_typelib
+
+        # Auto-repair a broken OneNote typelib registration (per-user HKCU shim, no admin) so a
+        # cold OneNote launch doesn't fail with TYPE_E_LIBNOTREGISTERED. No-op when healthy.
+        for note in repair_onenote_typelib():
+            print(note)
 
         written = configure_claude_desktop()
         for path in written:
@@ -450,11 +455,73 @@ def main() -> None:
         # stdio server, so printing to stdout is fine here.
         configure_logging()
         try:
-            notebooks = read.list_notebooks(get_backend())
+            backend = get_backend()
+            notebooks = read.list_notebooks(backend)
         except Exception as exc:  # noqa: BLE001 — report any failure as a clean non-zero exit
             print(f"SELFTEST FAIL: {exc}", file=sys.stderr)
+            # Surface the actual HRESULT + underlying com_error: "GetHierarchy failed" alone is
+            # undiagnosable. On a frozen build a bind-OK-but-call-fails almost always means the
+            # bundled gen_py (makepy) was generated for a DIFFERENT OneNote typelib version than
+            # this machine's, so also report which OneNote type libraries are registered here.
+            hresult = getattr(exc, "hresult", None)
+            if hresult is not None:
+                print(f"  HRESULT: {hresult} ({hresult & 0xFFFFFFFF:#010x})", file=sys.stderr)
+            cause = exc.__cause__ or exc.__context__
+            if cause is not None:
+                print(f"  cause: {cause!r}", file=sys.stderr)
+            try:
+                from win32com.client import selecttlb  # noqa: PLC0415
+
+                for t in selecttlb.EnumTlbs():
+                    if "onenote" in t.desc.lower():
+                        print(
+                            f"  typelib: {t.desc!r} ver {t.major}.{t.minor} "
+                            f"lcid={t.lcid} clsid={t.clsid}",
+                            file=sys.stderr,
+                        )
+            except Exception as diag:  # noqa: BLE001 — diagnostics must never mask the real error
+                print(f"  (typelib enumeration failed: {diag!r})", file=sys.stderr)
+            # Known field trap (Phase 0b on the VM, again on Chris's PC 2026-06-12): a stale
+            # version subkey under the OneNote libid with NO win32/win64 mapping (e.g. a
+            # PIA-only "1.0" left by an interop installer) poisons LoadRegTypeLib in the COM
+            # marshaling/server layer → TYPE_E_LIBNOTREGISTERED on the FIRST method call, even
+            # though our client side never touches the registry (vendored makepy module). Name
+            # the broken key and the exact fix instead of leaving an opaque HRESULT.
+            try:
+                import winreg  # noqa: PLC0415 — Windows-only stdlib; selftest runs on Windows
+
+                libid = "{0EA692EE-BB50-4E3C-AEF0-356D91732725}"
+                with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"TypeLib\{libid}") as root:
+                    index = 0
+                    while True:
+                        try:
+                            ver = winreg.EnumKey(root, index)
+                        except OSError:
+                            break
+                        index += 1
+                        resolvable = False
+                        for plat in (r"0\win32", r"0\win64"):
+                            try:
+                                winreg.CloseKey(winreg.OpenKey(root, rf"{ver}\{plat}"))
+                                resolvable = True
+                            except OSError:
+                                pass
+                        if not resolvable:
+                            print(
+                                f"  BROKEN typelib subkey: HKCR\\TypeLib\\{libid}\\{ver} has "
+                                "no win32/win64 mapping — this poisons LoadRegTypeLib and "
+                                "causes TYPE_E_LIBNOTREGISTERED. Fix (admin cmd, after a "
+                                "`reg export` backup):\n"
+                                "    reg delete "
+                                f'"HKLM\\SOFTWARE\\Classes\\TypeLib\\{libid}\\{ver}" /f',
+                                file=sys.stderr,
+                            )
+            except Exception:  # noqa: BLE001, S110 — best-effort diagnostics only
+                pass
             raise SystemExit(1) from exc
-        print(f"SELFTEST OK: connected to OneNote, {len(notebooks)} notebook(s) visible")
+        via = getattr(backend, "_bind_method", None)
+        suffix = f" (bound via: {via})" if via else ""
+        print(f"SELFTEST OK: connected to OneNote, {len(notebooks)} notebook(s) visible{suffix}")
         return
 
     configure_logging()  # §7: reads ONENOTE_MCP_LOG_LEVEL/FILE; default OFF, never stdout

@@ -66,6 +66,7 @@ def _hresult_of(exc: Exception) -> int | None:
 class Win32ComBackend(OneNoteBackend):
     def __init__(self) -> None:
         self._app = None  # lazily created COM object
+        self._bind_method = None  # how `app` was bound: "vendored" | "regenerated" (diagnostics)
 
     # --- connection ---------------------------------------------------------
 
@@ -75,35 +76,61 @@ class Win32ComBackend(OneNoteBackend):
 
         OneNote cannot be late-bound: ``Dispatch("OneNote.Application")`` yields a dynamic
         object whose ``GetIDsOfNames`` can't resolve ``GetHierarchy``, and
-        ``gencache.EnsureDispatch`` fails with "can not automate the makepy process". The
-        working recipe (confirmed on the VM, 2026-06-11) is to locate the OneNote type library,
-        build its early-bound makepy module explicitly, then instantiate the coclass — after
-        which ``[out] BSTR`` params come back as the call's return value. For a frozen build the
-        gen cache must be bundled (SPEC §8); see the PyInstaller spec when packaging.
+        ``gencache.EnsureDispatch`` fails with "can not automate the makepy process". So we bind
+        through an early-bound makepy module + coclass instantiation, after which ``[out] BSTR``
+        params come back as the call's return value. ``_typelib_module()`` supplies that module.
         """
         if self._app is None:
             try:
-                # Imported here, never at module top, to keep Linux import clean.
-                from win32com.client import gencache, selecttlb  # noqa: PLC0415
-
-                # Pick the OneNote 15.x (Office 2013+/M365 desktop) type library. A stale
-                # "OneNote 12.0" / version 1.0 registration with no backing file makes COM
-                # calls fail later with TYPE_E_LIBNOTREGISTERED (-2147319779) — prefer the
-                # highest version, which is the live one.
-                tlbs = [t for t in selecttlb.EnumTlbs() if "onenote" in t.desc.lower()]
-                if not tlbs:
-                    raise RuntimeError("No OneNote type library registered.")
-                tlb = max(tlbs, key=lambda t: (int(t.major, 16), int(t.minor, 16)))
-                mod = gencache.EnsureModule(tlb.clsid, 0, int(tlb.major, 16), int(tlb.minor, 16))
+                mod = self._typelib_module()
                 self._app = mod.Application()
             except Exception as exc:  # noqa: BLE001
                 raise BackendUnavailableError(
                     "Could not connect to OneNote via COM. Ensure the OneNote desktop app "
                     "(M365, not the UWP 'OneNote for Windows 10') is installed and running in "
-                    "this interactive session. If a call fails with 'program library not "
-                    "registered', delete the stale HKCR\\TypeLib\\{0EA692EE-...}\\1.0 subkey."
+                    "this interactive session."
                 ) from exc
         return self._app
+
+    def _typelib_module(self):
+        """The early-bound OneNote makepy module — vendored full module first, regenerate after.
+
+        FROZEN-DEPLOY GROUND TRUTH (2026-06-12): regenerating at runtime via
+        ``gencache.EnsureModule`` is ON-DEMAND — it fills method dispids lazily on the first call
+        (GetHierarchy), which does ``LoadRegTypeLib(clsid, 1, 1)``. On a cold consumer PC that
+        raised TYPE_E_LIBNOTREGISTERED (0x8002801D) because OneNote registers its typelib under
+        ``...\\1.1\\0\\Win32`` ONLY (no Win64), so a 64-bit process can't resolve it from the
+        registry. The dev VM hid this — its gen_py cache was permanently warm (a fully-baked
+        module needs no typelib at call time). So we ship that fully-baked module
+        (``_gen_onenote15``): importing it loads NO type library at runtime, sidestepping the bug
+        on every OneNote-15 machine. Imported here (not at module top) to keep the guarded-import
+        invariant (tests/test_smoke_import.py).
+        """
+        try:
+            from . import _gen_onenote15  # noqa: PLC0415 — vendored, win32com imports at its top
+
+            self._bind_method = "vendored"
+            return _gen_onenote15
+        except Exception:  # noqa: BLE001 — fall back to regeneration if the vendored module is gone
+            pass
+
+        from win32com.client import gencache, makepy, selecttlb  # noqa: PLC0415
+
+        tlbs = [t for t in selecttlb.EnumTlbs() if "onenote" in (t.desc or "").lower()]
+        if not tlbs:
+            raise RuntimeError("No OneNote type library registered.")
+        tlb = max(tlbs, key=lambda t: (int(t.major, 16), int(t.minor, 16)))
+        clsid, lcid = tlb.clsid, int(tlb.lcid)
+        major, minor = int(tlb.major, 16), int(tlb.minor, 16)
+        self._bind_method = "regenerated"
+        try:
+            return gencache.GetModuleForTypelib(clsid, lcid, major, minor)  # warm cache, full
+        except Exception:  # noqa: BLE001 — cold: generate the FULL module straight from the FILE
+            # ``tlb.dll`` is the registered typelib FILE path; loading from the file is registry-
+            # and bitness-neutral (no Win64 subkey needed), and bForDemand=False bakes every
+            # dispid up front so no typelib is loaded at the first GetHierarchy call.
+            makepy.GenerateFromTypeLibSpec(tlb.dll, bForDemand=False)
+            return gencache.GetModuleForTypelib(clsid, lcid, major, minor)
 
     def _call(self, name: str, fn):
         """Invoke a COM call with retry/backoff on 'OneNote is busy' HRESULTs."""

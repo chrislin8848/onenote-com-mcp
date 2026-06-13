@@ -37,6 +37,9 @@ hiddenimports = [
     "win32com.client.genpy",
     "win32com.client.build",
     "win32com.client.selecttlb",
+    # the vendored fully-generated OneNote 15.0 makepy module — imported lazily inside
+    # Win32ComBackend._typelib_module(), so name it explicitly to guarantee it's bundled.
+    "onenote_com_mcp.backend._gen_onenote15",
 ]
 # MCP/FastMCP and pydantic resolve a lot dynamically — collect their submodules wholesale.
 hiddenimports += collect_submodules("mcp")

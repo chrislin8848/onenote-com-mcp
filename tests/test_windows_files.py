@@ -160,8 +160,9 @@ def test_get_page_images_returns_printout_render_live(backend, attachment_pages)
 def test_copy_attachment_page_live(backend, attachment_pages, temp_section):
     result = copy.transfer_page(backend, attachment_pages[PAGE_1], temp_section)
 
-    # exactly one note: the printout flattening. NO unavailable-cache notes — all live.
-    assert len(result.file_notes) == 1 and "printout" in result.file_notes[0], result.file_notes
+    # printout flattening is expected normalization, NOT reported (user decision 2026-06-12);
+    # all caches are live here, so the copy must be note-free.
+    assert result.file_notes == [], result.file_notes
 
     copy_info = files.get_page_files_info(backend, result.page_id)
     assert sorted(e["preferred_name"] for e in copy_info) == sorted(PAGE_1_KINDS), (

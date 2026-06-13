@@ -46,3 +46,10 @@ Filename: "{app}\{#ExeName}"; Parameters: "--configure"; \
 [UninstallRun]
 ; Best-effort: leave Claude config alone on uninstall (the entry points at a now-removed exe;
 ; harmless, and removing it would need a --deconfigure we deliberately don't ship this round).
+
+; NOTE: the broken-OneNote-typelib case (a stale version subkey with no win32/win64 mapping,
+; which poisons LoadRegTypeLib → TYPE_E_LIBNOTREGISTERED on a cold OneNote launch) is handled
+; automatically by the post-install `--configure` step above: it writes a per-user (HKCU) shim
+; pointing the broken version at the healthy typelib file — no admin, reversible, no user action.
+; VM-reproduced + validated 2026-06-12. The runtime `--selftest` still detects+reports it as a
+; safety net if the auto-repair ever can't run.

@@ -69,8 +69,10 @@ def _rewrite_inserted_files(backend: OneNoteBackend, tree: etree._Element) -> li
     re-pointed at the copy so OneNote re-imports it. Printouts are flattened: their page-level
     ``one:XPSFile`` carriers hold read-side CallbackIDs that cannot ride into a write, so the
     carrier and the ``one:Printout`` child are stripped — the rendered pages survive as plain
-    inlined images and the source file as a normal attachment. Returns one note per attachment
-    that lost fidelity (unavailable cache, printout flattening); an empty list = fully faithful.
+    inlined images and the source file as a normal attachment. Flattening is treated as expected
+    normalization, NOT a fidelity loss (the visible pages are preserved), so it is intentionally
+    NOT reported (user decision 2026-06-12). Returns one note per attachment whose CONTENT could
+    not be transferred (unavailable cache); an empty list = nothing was dropped.
     """
     notes: list[str] = []
     xps_files = tree.findall(qn("XPSFile"))
@@ -84,11 +86,9 @@ def _rewrite_inserted_files(backend: OneNoteBackend, tree: etree._Element) -> li
         name = f.get("preferredName") or "attachment"
         printout = f.find(qn("Printout"))
         if printout is not None:
+            # Flatten (strip the printout structure); the rendered pages survive as images, so
+            # this is normalization, not a loss — deliberately no note (see docstring).
             f.remove(printout)
-            notes.append(
-                f"{name}: printout flattened — rendered pages copied as plain images, the "
-                "source file re-attached as a normal attachment"
-            )
         path_cache = f.attrib.pop("pathCache", None)
         staged = backend.stage_cache_copy(path_cache, name) if path_cache else None
         if staged:

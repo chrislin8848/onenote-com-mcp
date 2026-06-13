@@ -40,7 +40,10 @@ packages = ["src/onenote_com_mcp"]
 line-length = 100
 src = ["src", "tests"]
 target-version = "py312"
-extend-exclude = ["refs"]  # reference clone — not our code
+extend-exclude = [
+    "refs",  # reference clone — not our code
+    "src/onenote_com_mcp/backend/_gen_onenote15.py",  # vendored makepy output — keep verbatim
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
