@@ -66,6 +66,35 @@ def test_inline_image_binaries_removes_and_prunes_in_copy_mode():
     assert tree.find(f".//{_tag('T')}").text == "keep me"
 
 
+def test_copy_mode_keeps_table_cell_valid_when_its_only_image_is_removed():
+    # VM ground truth (祕魯18天, fully un-synced): an image-only table cell must NOT be emptied —
+    # pruning its OEChildren leaves an empty <one:Cell/> that UpdatePageContent rejects.
+    cell2 = (
+        "<one:Cell><one:OEChildren><one:OE><one:T>text cell</one:T>"
+        "</one:OE></one:OEChildren></one:Cell>"
+    )
+    tree = etree.fromstring(
+        f'<one:Page xmlns:one="{_ONE}"><one:Outline><one:OEChildren><one:OE>'
+        f"<one:Table><one:Row>"
+        f"<one:Cell><one:OEChildren><one:OE>"
+        f'<one:Image><one:CallbackID callbackID="{{CB}}"/></one:Image>'
+        f"</one:OE></one:OEChildren></one:Cell>"
+        f"{cell2}"
+        f"</one:Row></one:Table>"
+        "</one:OE></one:OEChildren></one:Outline></one:Page>".encode()
+    )
+
+    dropped = inline_image_binaries(_UnsyncedBackend(), "{PID}", tree, remove_unfetchable=True)
+
+    assert dropped == 1
+    assert tree.find(f".//{_tag('Image')}") is None  # un-fetchable image removed
+    cells = tree.findall(f".//{_tag('Cell')}")
+    assert len(cells) == 2  # both cells survive — the table stays rectangular
+    for cell in cells:  # EVERY cell still has OEChildren>OE (no empty <one:Cell/>)
+        oec = cell.find(_tag("OEChildren"))
+        assert oec is not None and oec.find(_tag("OE")) is not None
+
+
 def test_rewrite_inserted_files_removes_and_categorizes():
     tree = etree.fromstring(
         f'<one:Page xmlns:one="{_ONE}">'

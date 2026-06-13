@@ -127,7 +127,12 @@ def remove_content_element(el: etree._Element) -> None:
     hrInvalidXML (VM ground truth) — and a left-behind empty/placeholder marker could later be
     misread as real content or re-copied. Pruning the emptied containers keeps the payload valid
     and leaves no dead marker. Stops at the first ancestor that still holds real content or is not
-    a prunable container (e.g. the page root)."""
+    a prunable container (e.g. the page root).
+
+    A table CELL is the exception: it MUST keep a ``one:OEChildren`` with at least one ``one:OE``
+    (an empty ``<one:Cell/>`` is rejected with hrInvalidXML — VM ground truth 2026-06-13, a
+    fully-un-synced 祕魯18天 page with an image-only cell). So when pruning reaches a cell's
+    OEChildren, the OEChildren is REPLENISHED with a minimal empty paragraph instead of removed."""
     parent = el.getparent()
     if parent is None:
         return
@@ -138,6 +143,9 @@ def remove_content_element(el: etree._Element) -> None:
             break  # still holds real content — keep this container
         up = node.getparent()
         if up is None:
+            break
+        if local_name(up.tag) == "Cell" and local_name(node.tag) == "OEChildren":
+            node.append(make_text_oe([]))  # keep the cell valid; do NOT empty it
             break
         up.remove(node)
         node = up

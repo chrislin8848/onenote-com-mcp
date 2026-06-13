@@ -48,6 +48,24 @@ silently shipping blanks:
   ruff clean. Tier-2 validated** (un-synced 156-image section: copy completed with NO hrInvalidXML,
   148 images REMOVED, correct sync_warning). **Released as v1.0.1.**
 
+## v1.0.2 (2026-06-13) — table-cell hrInvalidXML fix
+
+Copying `祕魯18天` (a real OneDrive section, **149/149 images un-synced**, no attachments) failed
+with `UpdatePageContent` → `0x80042001` (hrInvalidXML). Diagnosis (VM, structure-only, PII-safe):
+some images live inside **table cells** (`Cell > OEChildren > OE > Image`); the v1.0.1 removal
+pruned the emptied OE → OEChildren and, at the cell boundary, **removed the cell's OEChildren too**,
+leaving an empty `<one:Cell/>` — which OneNote rejects (a cell must keep `OEChildren > OE`). The
+`清邁(同步測試)` validation didn't catch it because its images weren't in cells. (The pre-existing
+empty `<one:OE/>` that OneNote itself emits round-trip fine — not the cause; ruled out by diff.)
+
+**Fix:** `remove_content_element` now stops at a `Cell` boundary and REPLENISHES the cell's
+OEChildren with a minimal empty paragraph (`make_text_oe([])`) instead of emptying it — the table
+stays rectangular, sibling cells untouched. Tier-1: `test_copy_sync.py`
+`test_copy_mode_keeps_table_cell_valid_when_its_only_image_is_removed` (220 green). VM re-validated:
+`祕魯18天` copy COMPLETED, `missing_images=149`, correct `sync_warning`, 149 image elements removed,
+copy self-deleted. **Note:** 祕魯18天 has 0 attachments, so the file/object live path (TODO #1)
+is STILL unexercised — needs a section with un-synced *attachments*.
+
 ## TODO (continuing session)
 
 1. **Tier-2 validate `sync_warning` live.** ✅ **Image path DONE (2026-06-13):** copied the
