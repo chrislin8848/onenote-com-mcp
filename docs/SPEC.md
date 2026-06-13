@@ -155,10 +155,11 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 | `create_page` | 在指定節建新頁(可設 `pageLevel` 子頁) | `CreateNewPage` (+ `UpdateHierarchy` 設 pageLevel) + `UpdatePageContent` |
 | `update_page_content` | 改頁面內容:append / insert / replace(含改表格儲存格文字、樣式大小/字型/顏色/底色、超連結 `<a href>`) | `GetPageContent` → 改 XML → `UpdatePageContent`(純 append 可免讀全頁) |
 | `create_table` | 新增**新**表格(僅建立) | 組 `one:Table` XML → `UpdatePageContent` |
-| `modify_table` | 改**既有**表格形狀:`insert_rows`/`add_columns`(可指定位置或尾端)、`delete_rows`/`delete_columns`(DESTRUCTIVE);列欄對稱;空 cell 補最小段落 | `GetPageContent` → 改 `one:Table`(Columns 重編 index、每列增/刪 Cell)→ `UpdatePageContent` |
+| `modify_table` | 改**既有**表格:形狀(`insert_rows`/`add_columns`、`delete_rows`/`delete_columns`(DESTRUCTIVE);列欄對稱;空 cell 補最小段落)**或** `set_rows`(二維陣列就地覆蓋既有列內容,固定維度、保留每格 objectID;只覆蓋既有列,加列用 `insert_rows`) | `GetPageContent` → 改 `one:Table`(Columns 重編 index、每列增/刪/改 Cell)→ `UpdatePageContent` |
 | `insert_image` | 插入圖片到頁面 | 組 `one:Image` + base64 `one:Data` → `UpdatePageContent` |
 | `delete_node` | 刪頁/節/節群組/筆記本(層級) | `DeleteHierarchy(objectId)` |
-| `delete_page_content` | 刪頁面內容物件(圖片/表格/大綱) | `DeletePageContent(pageId, objectId)` |
+| `delete_page_content` | 刪**頁層**內容物件(整個大綱/頁層圖片/頁層附件) | `DeletePageContent(pageId, objectId)` |
+| `delete_inline_content` | 刪**大綱內**物件(表格/段落/行內圖片/行內附件);保留同大綱其他段落 | 走編輯 seam:`GetPageContent` → 移除元素並修剪空容器 → `UpdatePageContent`(**非** `DeletePageContent`——COM 對行內 OE 一律拒絕 `0x8004200E`) |
 | `copy_page` | 忠實克隆單頁到目標節 | 內部 raw-XML 克隆(見 §5「複製/克隆」) |
 | `copy_section` | 忠實克隆整節 | 建節 + 逐頁 `copy_page`(保留 pageLevel) |
 | `restructure_section` | 同節內**整批**重排頁面順序 + 調整 `pageLevel` 階層 | `GetHierarchy` → 重排完整頁清單(每頁帶 `pageLevel`)→ `UpdateHierarchy`(紀律見 §5「層級重排」) |
@@ -179,13 +180,13 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 **三件必做(功能描述正確之外):**
 
 1. **對比式/反向標註** — 針對本專案會互相混淆的工具組,在描述裡互相點名界線:
-   - `delete_node`(刪整個頁/節/節群組/筆記本節點) vs `delete_page_content`(只刪頁面**內**物件:圖/表/大綱,頁面保留)。
-   - `update_page_content`(加/改文字、樣式、超連結、表格**儲存格內容**) vs `create_table`(建**新**表格) vs `modify_table`(改既有表格**行列數**:增/刪列、增/刪欄) vs `insert_image`(插圖)——`update_page_content` 描述須註明「若加的是表格、改的是行列數、或插圖,改用對應工具」;`create_table` 只建新表、`modify_table` 只改既有表形狀,兩者互相點名。
+   - **刪除三角:** `delete_node`(刪整個頁/節/節群組/筆記本節點) vs `delete_page_content`(刪**頁層**物件:整個大綱/頁層圖/頁層附件,頁面保留) vs `delete_inline_content`(刪**大綱內**物件:表格/段落/行內圖/行內附件)。關鍵界線:**整個表格、段落永遠在大綱內,故刪它們一律用 `delete_inline_content`,絕不用 `delete_page_content`**;三者描述互相點名(both-way,guard-tested)。
+   - `update_page_content`(加/改文字、樣式、超連結、**單一**儲存格文字) vs `create_table`(建**新**表格) vs `modify_table`(改既有表格:`insert_rows`/`add_columns`/`delete_*` 形狀,或 `set_rows` 一次覆蓋整列/整表內容) vs `insert_image`(插圖)——`update_page_content` 描述須註明「若加的是表格、改的是行列數、或插圖,改用對應工具」;`create_table` 只建新表、`modify_table` 改既有表(形狀或整列內容),兩者互相點名;表格內容替換的分工 = `update_page_content "replace"`(一格)vs `modify_table set_rows`(整列/整表)。
    - `restructure_section`(**同節內**重排頁 + `pageLevel`) vs `reorder_sections`(**一本內**節順序) vs `move_page`(把頁搬到**別節**) vs `rename_node`(只改名)。
    - `get_page`(文字 + 結構化表格) vs `get_page_images`(取圖片二進位供視覺辨識) vs `get_page_files_info`(附件/嵌入物件**中繼資料**,任何型別) vs `get_page_files`(附件**內容**抽取,僅文字類/圖片/PDF)——info 是 files 的前置;非支援型別(docx/xlsx 等)只能取 info,不能取內容。
    - 命名小疙瘩:`restructure_section` 與 `reorder_sections` 的動詞/單複數不一致,若描述尚未對外凍結可考慮統一,降低模型猶豫。
 2. **把程式碼強制不了的行為契約寫進描述文字**(那是唯一落地處):
-   - 破壞性工具(`delete_node`、`delete_page_content`、覆蓋式 `update_page_content`)醒目標 **DESTRUCTIVE**。
+   - 破壞性工具(`delete_node`、`delete_page_content`、`delete_inline_content`、`modify_table` 的 `delete_rows`/`delete_columns`、覆蓋式 `update_page_content`)醒目標 **DESTRUCTIVE**。
    - 結構性工具(`restructure_section` / `reorder_sections` / `move_page` / `rename_node`)註明「呼叫前先向使用者提案並取得確認;建議先 `copy_section` 備份」(呼應 §5 層級重排紀律的 propose-confirm)。
 3. **參數 schema 也要導引選擇:** `update_page_content` 的 append/insert/replace 做成 **enum 並逐值描述**;必填/選填清楚;參數名自解釋。
 
@@ -220,7 +221,10 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 - **插入圖片** → `insert_image` 接收 base64 影像 + media type(可選位置 x/y 與大小),組 `<one:Image>` 含 `<one:Data>` base64 → `UpdatePageContent` 寫入(COM 文件明載 `UpdatePageContent` 可加入 images)。
 - **讀表格** → 解析 `one:Table` 成結構化 rows(list of list of cell text),不要攤平成單一字串。
 - **新增/改表格** → 組 `one:Table` XML(列、欄、儲存格),經 `UpdatePageContent` 寫入。
-- **刪內容物件(圖片/表格/大綱/附件/嵌入物件)** → `delete_page_content(pageId, objectId)` 走 `DeletePageContent`。**不是 `DeleteHierarchy`**(那只刪頁/節/筆記本層級),**也不能靠 `UpdatePageContent` 省略物件來刪**(它合併式、不會移除未指定物件)。`objectId` 由 `get_page` / `get_page_images` / `get_page_files_info` 取得(讀取工具須一併回傳各內容物件的 objectID);同帶 `dateExpectedLastModified` 做並發保護,預設不 `force`。
+- **刪內容物件** → 依物件在頁面的層級分兩條路徑(VM 實證:`DeletePageContent` 接受頁層 `one:Outline`/`one:Image`/`one:InsertedFile`,但對**行內** OE 一律以 `0x8004200E` 拒絕):
+  - **頁層物件(整個大綱/頁層圖片/頁層附件/嵌入物件)** → `delete_page_content(pageId, objectId)` 走 `DeletePageContent`。**不是 `DeleteHierarchy`**(那只刪頁/節/筆記本層級),**也不能靠 `UpdatePageContent` 省略物件來刪**(它合併式、不會移除未指定物件)。
+  - **大綱內物件(表格/段落/行內圖片/行內附件)** → `delete_inline_content(pageId, objectId)` 走**編輯 seam**(`GetPageContent` → 從樹上移除該元素並修剪變空的 OE/OEChildren/Outline、表格 cell 補最小段落不留空殼 → `UpdatePageContent`);同大綱其他段落保留(「刪表格、留段落」)。傳表格自身 objectID 刪整表、傳段落/OE objectID 刪段落(行內圖/附件用其外層 OE 的 objectID,即 `get_page` 回報者)。頁層 objectID 傳此處會被擋並導向 `delete_page_content`。
+  - `objectId` 由 `get_page` / `get_page_images` / `get_page_files_info` 取得(讀取工具須一併回傳各內容物件的 objectID);兩條路徑皆帶 `dateExpectedLastModified` 做並發保護,預設不 `force`。
 - **手寫墨跡** → 視為已知限制:除非 OneNote 已做墨跡辨識存了文字,否則本期不支援;明確記在限制清單。
 
 ### 附件與嵌入物件(`one:InsertedFile`)

@@ -92,9 +92,14 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 ## Status (2026-06-13)
 
 **v1.0.4 — inline delete + bulk table-content replace (24-tool catalog). Tier-1 246 green;
-Tier-2 NOT yet run (the two new live round-trips are written, awaiting the VM task).** Closes
-two real gaps found in hands-on use, both built INSIDE the edit seam (`apply_page_edit`) — no new
-COM, no new invariant:
+Tier-2 VM-VALIDATED (2026-06-13): both new live round-trips PASS** — `set_rows` overwrites a row
+and the whole table in place (cell objectIDs preserved), and `delete_inline_content` drops an
+inline table while the surrounding paragraphs survive. (The run also surfaced ONE pre-existing,
+unrelated failure: `test_copy_section_…` did `next(... "混合樣式頁")` without a skip-guard and hit
+StopIteration because that dump-source page is no longer in the VM's "Phase 0 測試用" section — its
+read/write siblings already skip on that. Fixed the test to skip the content spot-check when the
+sample page is absent; the de-collide/order/level assertions still run.) Closes two real gaps found
+in hands-on use, both built INSIDE the edit seam (`apply_page_edit`) — no new COM, no new invariant:
 - **`delete_inline_content`** (NEW tool, #24): delete ONE object from INSIDE an outline — a table,
   a paragraph, or an inline image/attachment — by objectID, via the edit seam (NOT
   DeletePageContent, which COM refuses for inline OEs). The exact gap reported: `delete_page_content`
@@ -112,7 +117,8 @@ COM, no new invariant:
   "replace" (ONE cell) and create_table (NEW table) — borders added to all three descriptions.
 - Tier-1: `test_page_edit_content.py` (+set_rows ×5, +delete_inline_content ×4 incl. keep-siblings,
   cell-stays-valid, page-level-refused); `test_smoke_server.py` 23→24 + both-way border assert;
-  Tier-2 `test_windows_write.py` (+set_rows + delete-inline-keeps-paragraphs round-trips, await VM).
+  Tier-2 `test_windows_write.py` (+set_rows + delete-inline-keeps-paragraphs round-trips — both
+  PASS live 2026-06-13).
 - Text-paragraph edits confirmed WHOLE-OE replacement (a fresh one:T swapped in), never
   character-level — `_replace_oe_text`, untouched paragraphs stay byte-identical.
 
