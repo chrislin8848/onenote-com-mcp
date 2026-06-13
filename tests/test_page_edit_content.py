@@ -367,6 +367,79 @@ def test_modify_table_refuses_deleting_every_row(be, table_page):
     assert not [c for c in be.calls if c.method == "update_page_content"]
 
 
+# --- nested tables (a table inside a cell — the 業務塔斯作業 PAYMENT layout) --------------
+
+_ONE_NS = "http://schemas.microsoft.com/office/onenote/2013/onenote"
+
+
+def _nested_table_tree():
+    def cell(cid, pid, text):
+        return (
+            f'<one:Cell objectID="{cid}"><one:OEChildren>'
+            f'<one:OE objectID="{pid}"><one:T><![CDATA[{text}]]></one:T></one:OE>'
+            "</one:OEChildren></one:Cell>"
+        )
+
+    inner = (
+        '<one:Table objectID="T-INNER">'
+        '<one:Columns><one:Column index="0" width="50"/><one:Column index="1" width="150"/>'
+        "</one:Columns>"
+        f'<one:Row objectID="IR1">{cell("IC1", "IP1", "全額")}'
+        f"{cell('IC2', 'IP2', '91900')}</one:Row>"
+        f'<one:Row objectID="IR2">{cell("IC3", "IP3", "已付")}'
+        f"{cell('IC4', 'IP4', '23000')}</one:Row>"
+        "</one:Table>"
+    )
+    xml = (
+        f'<one:Page xmlns:one="{_ONE_NS}" ID="P"><one:Outline objectID="OUT"><one:OEChildren>'
+        '<one:OE objectID="OE-OUTER"><one:Table objectID="T-OUTER">'
+        '<one:Columns><one:Column index="0" width="100"/><one:Column index="1" width="300"/>'
+        "</one:Columns>"
+        f'<one:Row objectID="R1">{cell("C1", "P1", "PAYMENT")}'
+        f'<one:Cell objectID="C2"><one:OEChildren><one:OE objectID="P2">{inner}'
+        "</one:OE></one:OEChildren></one:Cell></one:Row>"
+        "</one:Table></one:OE></one:OEChildren></one:Outline></one:Page>"
+    )
+    return etree.fromstring(xml.encode("utf-8"), parser=_PARSER)
+
+
+def test_parse_surfaces_nested_table_with_its_own_object_id():
+    from onenote_com_mcp.xmllayer.parse import parse_page
+
+    page = parse_page(etree.tostring(_nested_table_tree()).decode("utf-8"))
+    outer = page.outlines[0].paragraphs[0].table
+    assert outer.object_id == "T-OUTER"
+    inner = outer.rows[0][1].paragraphs[0].table  # the PAYMENT value cell holds a table
+    assert inner is not None and inner.object_id == "T-INNER"
+    assert [c.text for c in inner.rows[0]] == ["全額", "91900"]
+
+
+def test_modify_table_on_inner_table_does_not_touch_outer():
+    tree = _nested_table_tree()
+    inner = page_edit._find_content_object(tree, "T-INNER")
+    outer = page_edit._find_content_object(tree, "T-OUTER")
+
+    page_edit._add_table_columns(inner, None, 1, None)  # add a column to the INNER table
+
+    assert len(inner.findall(f"{qn('Columns')}/{qn('Column')}")) == 3
+    for row in inner.findall(qn("Row")):
+        assert len(row.findall(qn("Cell"))) == 3
+    # the OUTER table is untouched: still 2 columns, its row still has 2 cells
+    assert len(outer.findall(f"{qn('Columns')}/{qn('Column')}")) == 2
+    assert len(outer.findall(qn("Row"))[0].findall(qn("Cell"))) == 2
+
+
+def test_modify_table_delete_row_on_inner_table_scoped():
+    tree = _nested_table_tree()
+    inner = page_edit._find_content_object(tree, "T-INNER")
+    outer = page_edit._find_content_object(tree, "T-OUTER")
+
+    page_edit._delete_table_rows(inner, [0])  # drop the inner table's first row
+
+    assert len(inner.findall(qn("Row"))) == 1
+    assert len(outer.findall(qn("Row"))) == 1, "outer table's single row is untouched"
+
+
 def test_modify_table_rejects_non_table_target(be, mixed):
     # a paragraph OE objectID is not a table
     oe = next(o for o in mixed.iter(qn("OE")) if o.get("objectID"))
