@@ -115,7 +115,37 @@ def _prune_unchanged_content(tree: etree._Element, before: dict[etree._Element, 
             tree.remove(child)
 
 
-def inline_image_binaries(backend: OneNoteBackend, page_id: str, tree: etree._Element) -> int:
+_CONTENT_LEAF_TAGS = frozenset({"T", "Image", "Table", "InsertedFile", "InkDrawing", "MediaFile"})
+_PRUNABLE_CONTAINERS = frozenset({"OE", "OEChildren", "Outline"})
+
+
+def remove_content_element(el: etree._Element) -> None:
+    """Remove a content element (an un-copyable one:Image / one:InsertedFile) AND prune any
+    now-empty one:OE / one:OEChildren / one:Outline ancestors.
+
+    Dropping a one:Image alone empties its OE/Outline and makes UpdatePageContent fail with
+    hrInvalidXML (VM ground truth) — and a left-behind empty/placeholder marker could later be
+    misread as real content or re-copied. Pruning the emptied containers keeps the payload valid
+    and leaves no dead marker. Stops at the first ancestor that still holds real content or is not
+    a prunable container (e.g. the page root)."""
+    parent = el.getparent()
+    if parent is None:
+        return
+    parent.remove(el)
+    node = parent
+    while node is not None and local_name(node.tag) in _PRUNABLE_CONTAINERS:
+        if any(local_name(d.tag) in _CONTENT_LEAF_TAGS for d in node.iter()):
+            break  # still holds real content — keep this container
+        up = node.getparent()
+        if up is None:
+            break
+        up.remove(node)
+        node = up
+
+
+def inline_image_binaries(
+    backend: OneNoteBackend, page_id: str, tree: etree._Element, remove_unfetchable: bool = False
+) -> int:
     """Ensure every one:Image in the payload carries inline one:Data, never a CallbackID.
 
     Public: the copy path (service/copy.py) needs the same guarantee — even a piBinaryData
@@ -126,13 +156,15 @@ def inline_image_binaries(backend: OneNoteBackend, page_id: str, tree: etree._El
     0x8004200F (hrBinaryObjectDoesNotExist). VM-confirmed root cause (2026-06-13): the image is
     not yet downloaded to THIS machine (OneDrive files-on-demand hydrates image binaries lazily,
     per page); a fully-synced machine serves them fine. (The earlier "OCR-processed images" theory
-    was wrong — the OCR'd photos were simply the large, last-to-hydrate ones.) Rather than let one
-    un-fetchable image abort a whole page/section copy, fill it with a 1x1 transparent placeholder
-    (an Image needs Data OR CallbackID to be valid XML; a Size-only image AND a dropped element
-    both make UpdatePageContent fail with hrInvalidXML). The caller reports the gap (SPEC §5:
-    losses are explicit, never silent). NOTE: unlike the live original, a copied placeholder does
-    NOT self-heal — the fix is to fully sync the source before copying. Returns the COUNT of images
-    that fell back to the placeholder (0 = every image carried real pixels)."""
+    was wrong — the OCR'd photos were simply the large, last-to-hydrate ones.) On an un-fetchable
+    image, ``remove_unfetchable`` selects the fallback:
+      * False (default, EDIT path): keep a valid (blank) box — a 1x1 transparent placeholder. The
+        edit path must NOT delete an image that lives in the cloud but isn't downloaded here.
+      * True (COPY path): REMOVE the image and prune the emptied OE/Outline — a copy must not carry
+        a dead placeholder (it can't self-heal and could later be misread / re-copied).
+    Either way the loss is counted and the caller reports it (SPEC §5: explicit, never silent); the
+    user's fix is always to fully sync the source then copy again. Returns the COUNT of images that
+    could not carry real pixels (0 = all carried)."""
     dropped = 0
     for image in list(tree.iter(qn("Image"))):
         callback = image.find(qn("CallbackID"))
@@ -145,8 +177,11 @@ def inline_image_binaries(backend: OneNoteBackend, page_id: str, tree: etree._El
             try:
                 binary = backend.get_binary_page_content(page_id, callback_id)
             except OneNoteComError:
-                binary = _PLACEHOLDER_PNG_B64  # un-fetchable: keep a valid (blank) Image box
                 dropped += 1
+                if remove_unfetchable:
+                    remove_content_element(image)
+                    continue  # image (and any emptied container) gone — nothing more to do
+                binary = _PLACEHOLDER_PNG_B64  # edit path: keep a valid (blank) Image box
             data = etree.Element(qn("Data"))
             data.text = binary
             ocr = image.find(qn("OCRData"))

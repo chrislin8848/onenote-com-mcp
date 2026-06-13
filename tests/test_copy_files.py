@@ -57,8 +57,10 @@ def test_clone_restages_caches_and_never_carries_path_cache(be):
     sent = _sent_payload(be)
 
     files = list(sent.iter(qn("InsertedFile")))
-    assert len(files) == 5  # 3 inline + 2 page-level, all still present
+    # 5 source attachments; the docx (cache deliberately unavailable) is REMOVED → 4 carried
+    assert len(files) == 4
     assert all(f.get("pathCache") is None for f in files), "pathCache must NEVER ride"
+    assert not any(f.get("preferredName") == "丘山行Word頁籤(中文) .docx" for f in files)
 
     by_name = {f.get("preferredName"): f for f in files}
     # cache available → pathSource re-pointed at the STAGED copy (FixtureBackend fake path)
@@ -103,17 +105,13 @@ def test_clone_reports_unavailable_cache_explicitly(be):
     result = copy.transfer_page(be, PAGE_1_ID, _TARGET_SECTION)
     sent = _sent_payload(be)
 
-    # the docx cache fixture is deliberately absent AND it has no pathSource (ground truth:
-    # embedded-style entries may lack one) — entry still copied, loss reported
-    docx = next(
-        f
-        for f in sent.iter(qn("InsertedFile"))
-        if f.get("preferredName") == "丘山行Word頁籤(中文) .docx"
-    )
-    assert docx.get("pathSource") is None and docx.get("pathCache") is None
-    [note] = [n for n in result.file_notes if "docx" in n]
-    assert "not downloaded to this machine" in note  # under-synced source, reported (SPEC §5)
+    # the docx cache fixture is deliberately absent → the attachment cannot be carried; a dead
+    # reference would not self-heal, so it is REMOVED from the copy and the loss is reported.
+    names = {f.get("preferredName") for f in sent.iter(qn("InsertedFile"))}
+    assert "丘山行Word頁籤(中文) .docx" not in names
     assert result.missing_files == 1  # categorized as a file (no one:Previews → not embedded)
+    [note] = [n for n in result.file_notes if "docx" in n]
+    assert "removed from the copy" in note
 
 
 def test_clone_embedded_object_gets_staged_source_and_keeps_previews(be):

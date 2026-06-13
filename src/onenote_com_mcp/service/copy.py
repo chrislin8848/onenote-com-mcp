@@ -23,7 +23,11 @@ from onenote_com_mcp.enums import HierarchyScope, NewPageStyle, PageInfo
 from onenote_com_mcp.errors import NodeNotFoundError
 from onenote_com_mcp.service.create import create_section
 from onenote_com_mcp.service.hierarchy_edit import apply_hierarchy_restructure
-from onenote_com_mcp.service.page_edit import inline_image_binaries, parse_onenote_datetime
+from onenote_com_mcp.service.page_edit import (
+    inline_image_binaries,
+    parse_onenote_datetime,
+    remove_content_element,
+)
 from onenote_com_mcp.xmllayer.namespaces import local_name, qn
 
 # strip_cdata=False keeps one:T CDATA sections verbatim — byte-level span fidelity.
@@ -79,10 +83,10 @@ def sync_warning(missing_images: int, missing_files: int, missing_objects: int) 
     if missing_objects:
         parts.append(f"{missing_objects} embedded object(s)")
     return (
-        "Source is NOT fully synced: " + " + ".join(parts) + " could not be copied — their "
-        "content is not yet downloaded to this machine. They appear blank/empty in the copy and "
-        "will NOT auto-download later (unlike the live original). Open and fully sync the source "
-        "section in OneNote, then run the copy again for a faithful copy."
+        "Source is NOT fully synced: " + " + ".join(parts) + " could not be copied and were "
+        "OMITTED from the copy — their content is not yet downloaded to this machine and would not "
+        "self-heal if copied as placeholders (unlike the live original). Open and fully sync the "
+        "source section in OneNote, then run the copy again for a faithful copy."
     )
 
 
@@ -123,7 +127,7 @@ def _rewrite_inserted_files(
         for img in tree.iter(qn("Image")):
             for attr in _PRINTOUT_IMAGE_ATTRS:
                 img.attrib.pop(attr, None)
-    for f in tree.iter(qn("InsertedFile")):
+    for f in list(tree.iter(qn("InsertedFile"))):
         name = f.get("preferredName") or "attachment"
         is_embedded = f.find(qn("Previews")) is not None  # embedded object vs plain file icon
         printout = f.find(qn("Printout"))
@@ -136,17 +140,19 @@ def _rewrite_inserted_files(
         if staged:
             f.set("pathSource", staged)
             continue
-        # cache not available locally → the content is not synced to this machine; the element
-        # is left as an empty/broken reference, counted + reported so the user can sync + re-copy.
+        # cache not available locally → the content is not synced to this machine. A dead
+        # reference can't self-heal and could later be misread / re-copied, so REMOVE it (pruning
+        # any emptied OE) and report — the user syncs the source, then re-copies for fidelity.
         if is_embedded:
             missing_objects += 1
             kind = "embedded object"
         else:
             missing_files += 1
             kind = "file"
+        remove_content_element(f)
         notes.append(
             f"{name}: {kind} content not downloaded to this machine (source not fully synced) "
-            "— copied as an empty reference; it will NOT auto-download"
+            "— removed from the copy; sync the source, then copy again for a faithful copy"
         )
     return missing_files, missing_objects, notes
 
@@ -158,15 +164,16 @@ def _transplant_raw_page(
     source_level = tree.get("pageLevel")
 
     # 1. pixels: every one:Image gets inline one:Data (callbacks resolve against the SOURCE).
-    #    Images whose binary isn't downloaded locally get a placeholder + are counted, never fatal.
-    missing_images = inline_image_binaries(backend, source_page_id, tree)
+    #    Images whose binary isn't downloaded locally are REMOVED (+ emptied OE pruned) and counted
+    #    — a copy must not carry a dead placeholder (it can't self-heal, could be misread later).
+    missing_images = inline_image_binaries(backend, source_page_id, tree, remove_unfetchable=True)
     # 1b. attachments: stage cache copies, re-point pathSource, flatten printouts (Phase 5b)
     missing_files, missing_objects, file_notes = _rewrite_inserted_files(backend, tree)
     if missing_images:
         file_notes.insert(
             0,
             f"{missing_images} image(s) not downloaded to this machine (source not fully synced) "
-            "— copied as blank 1x1 placeholders that will NOT auto-download",
+            "— removed from the copy; sync the source, then copy again for a faithful copy",
         )
     # 2. reset identity/state — QuickStyleDef/TagDef tables, spans, tables, author attrs all
     #    stay verbatim; only IDs/stamps/view-state go
