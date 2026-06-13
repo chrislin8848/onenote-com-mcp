@@ -153,8 +153,9 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 | `get_current_context` | 取使用者目前檢視位置(筆記本/節群組/節/頁,ID+名稱) | `Windows.CurrentWindow` 的 `CurrentNotebookId/CurrentSectionGroupId/CurrentSectionId/CurrentPageId` + 範圍化 `GetHierarchy` 解名稱 |
 | `create_section` | 在指定本(或節群組)建立節 | `OpenHierarchy(name+".one", parentId, out id, cftSection)`(parent 可為 notebook 或節群組) |
 | `create_page` | 在指定節建新頁(可設 `pageLevel` 子頁) | `CreateNewPage` (+ `UpdateHierarchy` 設 pageLevel) + `UpdatePageContent` |
-| `update_page_content` | 改頁面內容:append / insert / replace(含改表格儲存格/加列) | `GetPageContent` → 改 XML → `UpdatePageContent`(純 append 可免讀全頁) |
-| `create_table` | 新增表格 | 組 `one:Table` XML → `UpdatePageContent` |
+| `update_page_content` | 改頁面內容:append / insert / replace(含改表格儲存格文字、樣式大小/字型/顏色/底色、超連結 `<a href>`) | `GetPageContent` → 改 XML → `UpdatePageContent`(純 append 可免讀全頁) |
+| `create_table` | 新增**新**表格(僅建立) | 組 `one:Table` XML → `UpdatePageContent` |
+| `modify_table` | 改**既有**表格形狀:`insert_rows`/`add_columns`(可指定位置或尾端)、`delete_rows`/`delete_columns`(DESTRUCTIVE);列欄對稱;空 cell 補最小段落 | `GetPageContent` → 改 `one:Table`(Columns 重編 index、每列增/刪 Cell)→ `UpdatePageContent` |
 | `insert_image` | 插入圖片到頁面 | 組 `one:Image` + base64 `one:Data` → `UpdatePageContent` |
 | `delete_node` | 刪頁/節/節群組/筆記本(層級) | `DeleteHierarchy(objectId)` |
 | `delete_page_content` | 刪頁面內容物件(圖片/表格/大綱) | `DeletePageContent(pageId, objectId)` |
@@ -179,7 +180,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 
 1. **對比式/反向標註** — 針對本專案會互相混淆的工具組,在描述裡互相點名界線:
    - `delete_node`(刪整個頁/節/節群組/筆記本節點) vs `delete_page_content`(只刪頁面**內**物件:圖/表/大綱,頁面保留)。
-   - `update_page_content`(加/改文字) vs `create_table`(加表格) vs `insert_image`(插圖)——`update_page_content` 描述須註明「若加的是表格或圖片,改用對應工具」。
+   - `update_page_content`(加/改文字、樣式、超連結、表格**儲存格內容**) vs `create_table`(建**新**表格) vs `modify_table`(改既有表格**行列數**:增/刪列、增/刪欄) vs `insert_image`(插圖)——`update_page_content` 描述須註明「若加的是表格、改的是行列數、或插圖,改用對應工具」;`create_table` 只建新表、`modify_table` 只改既有表形狀,兩者互相點名。
    - `restructure_section`(**同節內**重排頁 + `pageLevel`) vs `reorder_sections`(**一本內**節順序) vs `move_page`(把頁搬到**別節**) vs `rename_node`(只改名)。
    - `get_page`(文字 + 結構化表格) vs `get_page_images`(取圖片二進位供視覺辨識) vs `get_page_files_info`(附件/嵌入物件**中繼資料**,任何型別) vs `get_page_files`(附件**內容**抽取,僅文字類/圖片/PDF)——info 是 files 的前置;非支援型別(docx/xlsx 等)只能取 info,不能取內容。
    - 命名小疙瘩:`restructure_section` 與 `reorder_sections` 的動詞/單複數不一致,若描述尚未對外凍結可考慮統一,降低模型猶豫。

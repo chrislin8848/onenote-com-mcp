@@ -124,19 +124,51 @@ OneNote writes highlight as **both** `background:yellow` (standard CSS) **and**
 both**, or some OneNote builds render inconsistently. Color may be any CSS color
 (`yellow`, `#FFFF00`, ...).
 
+### Hyperlinks — `<a href>` inside the `one:T` CDATA (ground truth: 表格頁 fixture)
+
+A hyperlink is an `<a href="URL">…</a>` wrapping the styled span (or bare text) inside the
+CDATA — same layer as `<span style>`, NOT an attribute on the OE:
+
+```
+<![CDATA[<a href="https://example.com/loc-a"><span style='font-weight:bold'>範例溫泉</span></a>]]>
+<![CDATA[<a href="https://example.com/…"><span lang=zh-TW>範例SA</span></a> 上廁所]]>
+```
+
+**Parser**: an `<a>` is a stack frame whose inner spans inherit the `href` until `</a>`; each run
+carries its `link`. **Builder**: a run with a `link` is wrapped in `<a href="…">…</a>`, the href
+attribute-escaped (`&`→`&amp;`, `"`→`&quot;`, `>`→`&gt;`). **Round-trip gotcha (fixed):** a link's
+visible text survives a read even if the URL is dropped, so a parser that ignores `<a>` makes a
+`replace` edit silently STRIP the hyperlink. `get_page` surfaces each run's `link`; the builder
+re-emits it.
+
 ### Tables
 
 ```xml
-<one:Table bordersVisible="true">
-  <one:Columns><one:Column index="0" width=".."/>...</one:Columns>
+<one:Table bordersVisible="true" hasHeaderRow="false">
+  <one:Columns><one:Column index="0" width=".."/><one:Column index="1" width=".."/></one:Columns>
   <one:Row>
-    <one:Cell><one:OEChildren><one:OE><one:T>...</one:T></one:OE></one:OEChildren></one:Cell>
+    <one:Cell shadingColor="#FFFFFF"><one:OEChildren><one:OE><one:T>...</one:T></one:OE></one:OEChildren></one:Cell>
   </one:Row>
 </one:Table>
 ```
 
-Cells contain `OE`/`T` — same style rules apply. Parse to structured rows (list of list of
-cell-content), **never** flatten to one string. Build full `one:Table` XML for create/modify.
+Cells contain `OE`/`T` — same style rules apply (incl. `<a href>` links). Parse to structured rows
+(list of list of cell-content), **never** flatten to one string. Build full `one:Table` XML for
+create.
+
+**Structural edits (`modify_table`)** keep the table valid:
+- **add/insert columns**: insert a `one:Column` into `one:Columns`, **renumber every Column's
+  `index`** to stay sequential, and insert one `one:Cell` into EVERY row at the same position so
+  the table stays rectangular. **delete columns**: remove the `one:Column` AND the matching cell
+  from every row, then renumber.
+- **insert/delete rows**: rows are the direct `one:Row` children after `one:Columns` (insert
+  before the row at the target index, or append at the end).
+- **An emptied cell MUST keep `one:OEChildren > one:OE`** — an empty `<one:Cell/>` is rejected by
+  `UpdatePageContent` with `hrInvalidXML` (VM ground truth, 祕魯18天). `remove_content_element`
+  replenishes a cleared cell with a minimal empty paragraph rather than emptying it.
+- **Nested tables** (a `one:Table` inside a cell's OE) parse recursively and each table carries its
+  OWN `objectID`; `modify_table` targets the inner or outer table by that id and the helpers use
+  direct-child `findall`, so an edit to the inner table never touches the outer.
 
 ### Images
 

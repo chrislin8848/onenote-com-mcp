@@ -159,6 +159,11 @@ any doc sketch above:
   page-level objects (Outline/Image/…). Deleting a paragraph = submitting its outline without
   it via `UpdatePageContent` (merge replaces a submitted object's content wholesale). Phase 6
   must scope `delete_page_content` accordingly.
+- **An empty `<one:Cell/>` is rejected with `hrInvalidXML` (0x80042001)** — a table cell MUST
+  keep `one:OEChildren > one:OE` (VM ground truth 2026-06-13, 祕魯18天: removing the only image
+  in a cell and pruning its OEChildren left an empty cell → the whole `modify_table`/copy write
+  failed). The fix replenishes a cleared cell with a minimal empty paragraph. (`modify_table`
+  add/delete column/row edits ride the same `UpdatePageContent` core; no new COM signature.)
 
 ## VM-validated COM behaviors (Phase 5 Tier-2, 2026-06-11)
 
