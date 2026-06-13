@@ -28,21 +28,25 @@ then copy.**
 Copy path now DETECTS + REPORTS under-synced content (SPEC §5: explicit, never silent) instead of
 silently shipping blanks:
 
-- `service/page_edit.py::inline_image_binaries` → returns the **count** of images that fell back to
-  the 1×1 placeholder (was a notes list). Docstring corrected (sync, not OCR; placeholders don't
-  self-heal). `apply_page_edit` still ignores this return — see TODO #2.
+- `service/page_edit.py`: `inline_image_binaries` returns the **count** of un-fetchable images and
+  takes `remove_unfetchable`. COPY path (True) → **REMOVES** the image and prunes the emptied
+  OE/Outline via the new `remove_content_element()` helper (a copy must not carry a dead placeholder
+  that can't self-heal and could later be misread / re-copied; pruning the empty container is what
+  avoids the hrInvalidXML that made the original "just drop it" fail). EDIT path (False, default) →
+  keeps a 1×1 placeholder (must not delete a cloud-only image). Docstring corrected (sync, not OCR).
 - `service/copy.py`:
-  - `_rewrite_inserted_files` → returns `(missing_files, missing_objects, notes)`, categorizing
-    each `one:InsertedFile` by kind (`one:Previews` child ⇒ **embedded object**; else ⇒ **file**).
+  - `_rewrite_inserted_files` → returns `(missing_files, missing_objects, notes)`, categorizing each
+    `one:InsertedFile` by kind (`one:Previews` child ⇒ **embedded object**; else ⇒ **file**), and
+    **REMOVES** the un-synced ones (prune) instead of leaving a broken reference.
   - `PageCopyResult` / `SectionCopyResult` gained `missing_images` / `missing_files` /
-    `missing_objects` counts.
-  - `sync_warning(images, files, objects)` builds the user-facing warning (returns `None` when
-    nothing is missing).
-  - `transfer_section` aggregates the counts across pages.
+    `missing_objects` counts; `transfer_section` aggregates them.
+  - `sync_warning(images, files, objects)` builds the user-facing warning (None when nothing missing;
+    "… OMITTED … would not self-heal … sync the source, then copy again").
 - `server.py` `copy_page` / `copy_section` return `sync_warning` in the JSON; descriptions instruct
   Claude to ALWAYS surface a non-null `sync_warning` and advise the user to fully sync + re-copy.
-- Tests: new `tests/test_copy_sync.py` (count / categorize / warning); `tests/test_copy_files.py`
-  wording updated. **Tier-1: 218 passed, ruff clean.**
+- Tests: new `tests/test_copy_sync.py`; `tests/test_copy_files.py` updated. **Tier-1: 219 passed,
+  ruff clean. Tier-2 validated** (un-synced 156-image section: copy completed with NO hrInvalidXML,
+  148 images REMOVED, correct sync_warning). **Released as v1.0.1.**
 
 ## TODO (continuing session)
 
@@ -59,18 +63,16 @@ silently shipping blanks:
    NEVER plain SSH (a hung COM call blocks OneNote's single-threaded server). VM =
    `dev@192.168.122.13` (DHCP — `virsh domifaddr --source agent win11-onenote`); repo at
    `C:\onenote-mcp` with a synced `.venv`.
-2. **Edit path warns too?** `service/page_edit.py::apply_page_edit` ignores `inline_image_binaries`'
-   return, so editing a page with un-synced images silently placeholders them. Decide whether the
-   edit tools should surface the same warning.
-3. **Optional product step (Chris's idea):** a *pre-copy* sync check — detect un-synced content and
-   block/prompt (or trigger + await OneDrive hydration) BEFORE copying, instead of only warning
-   after. The warning shipped here is the minimum; this is the nicer UX.
-4. **Doc hygiene.** Correct the stale "OCR-processed images un-extractable via COM" framing where it
-   still appears (this CLAUDE.md "Real-data resilience" status paragraph; `docs/com-api-reference.md`;
-   `docs/onenote-xml-schema.md` if any) to the sync explanation above.
+2. **Edit-path warning** — ❌ **decided NO (Chris, 2026-06-13):** only warn at copy time; the edit
+   path stays as-is (keeps the placeholder; must not delete a cloud-only image).
+3. **Pre-copy sync check** — ❌ **decided NO (Chris):** the copy-time `sync_warning` is sufficient.
+4. **Doc hygiene** — ✅ **DONE:** the CLAUDE.md "Real-data resilience" paragraph now states the sync
+   diagnosis (not OCR). `com-api-reference.md` / `onenote-xml-schema.md` had no stale OCR wording.
 5. **Parked — do NOT pursue unless requirements change:** disk-parse via pyOneNote (would fork an
    MS-ONESTORE parser — a fragile patch-treadmill; investigated and rejected 2026-06-13) and COM
    `Publish`-render. Both are UNNECESSARY now that the cause is sync.
+6. **Remaining (Chris):** file/object Tier-2 live (he is testing on his own fully/partially-synced
+   PC) and the real-Claude-Desktop install test of the 1.0.1 build.
 
 ## VM state left by this session
 

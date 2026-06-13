@@ -107,15 +107,19 @@ Desktop → installed exe `--selftest` binds OneNote, exit 0; **version 1.0.0**)
 NOT CC sub-agents) — packaging is done.
 
 **Real-data resilience (2026-06-13, VM-validated on Chris's actual 測試章節1/測試章節2 sections,
-`tests/test_windows_realdata.py`):** OneNote will NOT serve an **OCR-processed** image's binary
-via COM — `GetBinaryPageContent` returns `0x8004200F` (not a sync artifact; `NavigateTo` doesn't
-help; un-extractable, full stop). This hits BOTH content paths and BOTH now degrade gracefully
-instead of crashing the whole operation: the **copy path** (`page_edit.inline_image_binaries`)
-substitutes a 1×1 transparent-PNG placeholder + a `file_notes` line per page; the **read path**
-(`read.get_page_images`) SKIPS the un-fetchable image (`get_page` stays the authority on what
-images a page has — object_id/dimensions/OCR text — so nothing is hidden, only unviewable pixels
-are dropped). Real-data smoke = read all 4 tools over every page + copy section to a throwaway +
-delete-and-confirm-gone, all green on both real sections.
+`tests/test_windows_realdata.py`):** when a section is NOT fully downloaded on this machine
+(OneDrive files-on-demand), `GetBinaryPageContent` returns `0x8004200F` (`hrBinaryObjectDoesNotExist`)
+for the not-yet-hydrated image binaries — a **sync artifact, NOT an OCR or COM limitation** (a
+fully-synced machine serves them fine; the earlier "OCR-processed images un-extractable, full stop"
+claim here was WRONG — re-diagnosed 2026-06-13, see [docs/HANDOFF-copy-sync.md](docs/HANDOFF-copy-sync.md)).
+Both content paths handle the under-synced case: the **copy path** REMOVES the un-fetchable image /
+attachment and prunes the emptied OE/Outline, then returns a categorized `sync_warning` (N images +
+X files + Y objects OMITTED — sync the source + re-copy for fidelity; `service/copy.py`,
+`tests/test_copy_sync.py`, Tier-2 validated: no hrInvalidXML, 148/156 images removed on an un-synced
+section); the **read path** (`read.get_page_images`) SKIPS the un-fetchable image (`get_page` stays
+the authority on what images a page has — object_id/dimensions/OCR text — so nothing is hidden, only
+un-downloaded pixels are dropped). Real-data smoke = read all 4 tools over every page + copy section
+to a throwaway + delete-and-confirm-gone, all green on both real sections.
 The VM is up, the XML layer is TDD'd against real dumps,
 the seven read tools run through `service/read.py` on `FixtureBackend` (Linux green), AND the
 live-COM read path is validated end-to-end on the VM: `tests/test_windows_read.py` (Tier 2,
