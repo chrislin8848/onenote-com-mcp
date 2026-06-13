@@ -29,6 +29,7 @@ class Run:
     span_style: dict[str, str] = field(default_factory=dict)
     style: dict[str, str] = field(default_factory=dict)
     lang: str | None = None
+    link: str | None = None  # hyperlink href if this run sits inside an <a href="...">…</a>
 
 
 def parse_style_attr(style: str | None) -> dict[str, str]:
@@ -54,17 +55,22 @@ class _SpanParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.runs: list[Run] = []
-        self._stack: list[tuple[dict[str, str], str | None]] = []
+        # each frame: (style, lang, link). <a href> wraps <span>s (VM ground truth), so an
+        # inner span inherits the enclosing link; the link rides until the </a>.
+        self._stack: list[tuple[dict[str, str], str | None, str | None]] = []
 
-    def _current(self) -> tuple[dict[str, str], str | None]:
-        return self._stack[-1] if self._stack else ({}, None)
+    def _current(self) -> tuple[dict[str, str], str | None, str | None]:
+        return self._stack[-1] if self._stack else ({}, None, None)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        style, lang, link = self._current()
         if tag == "span":
             d = dict(attrs)
-            style, lang = self._current()
             merged = {**style, **parse_style_attr(d.get("style"))}
-            self._stack.append((merged, d.get("lang") or lang))
+            self._stack.append((merged, d.get("lang") or lang, link))
+        elif tag == "a":
+            # inherit style/lang, set the hyperlink for everything until </a>
+            self._stack.append((style, lang, dict(attrs).get("href") or link))
         elif tag == "br":
             self.handle_data("\n")
 
@@ -73,17 +79,20 @@ class _SpanParser(HTMLParser):
             self.handle_data("\n")
 
     def handle_endtag(self, tag: str) -> None:
-        if tag == "span" and self._stack:
+        if tag in ("span", "a") and self._stack:
             self._stack.pop()
 
     def handle_data(self, data: str) -> None:
         if not data:
             return
-        style, lang = self._current()
-        if self.runs and self.runs[-1].span_style == style and self.runs[-1].lang == lang:
-            self.runs[-1].text += data  # merge adjacent chunks under the same span
+        style, lang, link = self._current()
+        last = self.runs[-1] if self.runs else None
+        if last and last.span_style == style and last.lang == lang and last.link == link:
+            last.text += data  # merge adjacent chunks under the same span + link
         else:
-            self.runs.append(Run(text=data, span_style=style, style=dict(style), lang=lang))
+            self.runs.append(
+                Run(text=data, span_style=style, style=dict(style), lang=lang, link=link)
+            )
 
 
 def parse_spans(cdata: str | None) -> list[Run]:
@@ -123,19 +132,30 @@ def _escape_text(text: str) -> str:
     return escape(text, quote=False).replace(">", "&gt;")
 
 
+def _escape_attr(value: str) -> str:
+    # href attribute value: escape & < > " ' so it is safe inside double quotes and the CDATA
+    # (HTMLParser unescapes these on the way back in). escape(quote=True) covers all five.
+    return escape(value, quote=True)
+
+
 def build_spans(runs: list) -> str:
-    """Runs (Run | dict | str) → CDATA payload. Inverse of :func:`parse_spans`."""
+    """Runs (Run | dict | str) → CDATA payload. Inverse of :func:`parse_spans`.
+
+    A run carrying a ``link`` is wrapped in ``<a href="…">…</a>`` (VM ground truth: OneNote
+    stores hyperlinks as an ``<a>`` around the styled span, inside the one:T CDATA)."""
     out: list[str] = []
     for run in runs:
+        link: str | None = None
         if isinstance(run, str):
             text, style = run, {}
         elif isinstance(run, Run):
-            text, style = run.text, run.span_style or run.style
+            text, style, link = run.text, run.span_style or run.style, run.link
         else:
-            text, style = run["text"], run.get("style") or {}
-        text = _escape_text(text)
+            text, style, link = run["text"], run.get("style") or {}, run.get("link")
+        inner = _escape_text(text)
         if style:
-            out.append(f"<span style='{build_style_attr(style)}'>{text}</span>")
-        else:
-            out.append(text)
+            inner = f"<span style='{build_style_attr(style)}'>{inner}</span>"
+        if link:
+            inner = f'<a href="{_escape_attr(link)}">{inner}</a>'
+        out.append(inner)
     return "".join(out)

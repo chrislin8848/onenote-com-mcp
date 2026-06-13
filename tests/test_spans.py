@@ -155,3 +155,40 @@ def test_build_spans_never_emits_cdata_terminator():
     cdata = build_spans([{"text": "x ]]> y"}])
     assert "]]>" not in cdata
     assert "".join(r.text for r in parse_spans(cdata)) == "x ]]> y"
+
+
+# --- hyperlinks (<a href> inside one:T CDATA) — VM ground truth from the 表格頁 fixture ----
+
+
+def test_parse_captures_hyperlink_from_a_tag():
+    # the exact shape OneNote stores (real fixture): <a href="..."><span ...>text</span></a>
+    cdata = '<a href="https://example.com/loc-a"><span lang=zh-TW>範例溫泉</span></a>'
+    runs = parse_spans(cdata)
+    assert len(runs) == 1
+    assert runs[0].text == "範例溫泉"
+    assert runs[0].link == "https://example.com/loc-a"
+    assert runs[0].lang == "zh-TW"
+
+
+def test_parse_link_only_on_the_linked_run():
+    cdata = '<a href="https://example.com">linked</a><span lang=en-US> tail</span>'
+    runs = parse_spans(cdata)
+    assert [(r.text, r.link) for r in runs] == [("linked", "https://example.com"), (" tail", None)]
+
+
+def test_build_wraps_linked_run_in_a_tag():
+    cdata = build_spans([{"text": "OneNote", "link": "https://example.com/x?a=1&b=2"}])
+    assert cdata.startswith('<a href="https://example.com/x?a=1&amp;b=2">')
+    assert cdata.endswith("</a>")
+
+
+def test_hyperlink_round_trips_text_style_and_href():
+    original = [
+        {"text": "plain "},
+        {"text": "site", "style": {"font-weight": "bold"}, "link": "https://example.com/p?x=1&y=2"},
+    ]
+    runs = parse_spans(build_spans(original))
+    assert [r.text for r in runs] == ["plain ", "site"]
+    assert runs[0].link is None
+    assert runs[1].link == "https://example.com/p?x=1&y=2"
+    assert runs[1].span_style["font-weight"] == "bold"

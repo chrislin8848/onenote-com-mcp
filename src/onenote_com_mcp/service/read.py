@@ -84,7 +84,10 @@ def _collect_pages(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _run_dict(run: Any) -> dict[str, Any]:
     # effective style = QuickStyleDef baseline ← OE style ← inline span (resolved in parse.py)
-    return {"text": run.text, "style": run.style}
+    d: dict[str, Any] = {"text": run.text, "style": run.style}
+    if run.link:  # hyperlink href — surfaced so it round-trips through a replace edit
+        d["link"] = run.link
+    return d
 
 
 def _oe_object_id(img: Image) -> str | None:

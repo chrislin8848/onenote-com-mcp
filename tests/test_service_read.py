@@ -157,6 +157,25 @@ def test_get_page_images_empty_when_no_images(fixtures_dir):
     assert read.get_page_images(_be(fixtures_dir), MIXED_PAGE_ID) == []
 
 
+def test_get_page_surfaces_hyperlinks_on_runs(fixtures_dir):
+    # the real 表格頁 fixture has cells with <a href="..."> links; get_page must expose the href
+    # on the run (so a replace edit can round-trip it instead of silently dropping the link)
+    page = read.get_page(_be(fixtures_dir), TABLE_PAGE_ID)
+    links = {
+        run.get("link")
+        for outline in page["outlines"]
+        for block in outline["blocks"]
+        if block["type"] == "table"
+        for row in block["rows"]
+        for cell in row
+        for para in cell["paragraphs"]
+        for run in para["runs"]
+        if run.get("link")
+    }
+    assert "https://example.com/loc-a" in links
+    assert "https://example.com/loc-b" in links
+
+
 def test_get_page_images_skips_unfetchable_images(fixtures_dir):
     """OCR-processed images return 0x8004200F from GetBinaryPageContent (VM ground truth).
     get_page_images must SKIP them, not crash — get_page remains the authority on what's there.

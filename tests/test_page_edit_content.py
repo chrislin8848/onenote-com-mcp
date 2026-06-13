@@ -208,6 +208,23 @@ def test_replace_edits_table_cell_text_without_touching_other_cells(be, table_pa
     assert etree.tostring(sent_cells[1], with_tail=False) == other_cell_before
 
 
+def test_replace_can_write_a_hyperlink(be, mixed):
+    page_id = mixed.get("ID")
+    target_oe = next(o for o in mixed.iter(qn("OE")) if o.get("objectID"))
+    page_edit.edit_page_content(
+        be,
+        page_id,
+        [{"runs": [{"text": "OneNote", "link": "https://example.com/a?x=1&y=2"}]}],
+        "replace",
+        target_object_id=target_oe.get("objectID"),
+    )
+    _, sent = _sent_payload(be)
+    edited = next(o for o in sent.iter(qn("OE")) if o.get("objectID") == target_oe.get("objectID"))
+    cdata = _cdata(edited)
+    assert '<a href="https://example.com/a?x=1&amp;y=2">' in cdata
+    assert "OneNote</a>" in cdata
+
+
 # --- tables ---------------------------------------------------------------------------
 
 

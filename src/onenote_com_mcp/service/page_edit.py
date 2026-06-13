@@ -271,7 +271,9 @@ def _normalize_paragraphs(content: str | list[Any]) -> list[dict[str, Any]]:
         if isinstance(item, str):
             paragraphs.append({"runs": [item], "quick_style_index": None, "alignment": None})
         elif isinstance(item, dict):
-            runs = item.get("runs") or [{"text": item.get("text", ""), "style": item.get("style")}]
+            runs = item.get("runs") or [
+                {"text": item.get("text", ""), "style": item.get("style"), "link": item.get("link")}
+            ]
             paragraphs.append(
                 {
                     "runs": runs,

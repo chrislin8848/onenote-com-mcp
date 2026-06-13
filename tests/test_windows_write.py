@@ -337,6 +337,44 @@ def test_modify_table_shape_roundtrips(backend, temp_section):
     ]
 
 
+def test_hyperlink_write_and_readback(backend, temp_section):
+    page_id = create.create_page(backend, temp_section, "超連結頁")
+    url = "https://example.com/path?x=1&y=2"
+    page_edit.edit_page_content(
+        backend, page_id, [{"runs": [{"text": "官網", "link": url}]}], "append"
+    )
+
+    def runs():
+        return [
+            run
+            for o in read.get_page(backend, page_id)["outlines"]
+            for b in o["blocks"]
+            if b["type"] == "paragraph"
+            for run in b["runs"]
+        ]
+
+    linked = next(r for r in runs() if r.get("link"))
+    assert linked["text"] == "官網"
+    assert linked["link"] == url, "the hyperlink href survives a live write → read round-trip"
+
+    # editing that paragraph (replace, re-supplying the run) must NOT drop the link
+    oe_id = next(
+        b["object_id"]
+        for o in read.get_page(backend, page_id)["outlines"]
+        for b in o["blocks"]
+        if b["type"] == "paragraph" and any(r.get("link") for r in b["runs"])
+    )
+    page_edit.edit_page_content(
+        backend,
+        page_id,
+        [{"runs": [{"text": "官方網站", "link": url}]}],
+        "replace",
+        target_object_id=oe_id,
+    )
+    linked2 = next(r for r in runs() if r.get("link"))
+    assert linked2["text"] == "官方網站" and linked2["link"] == url
+
+
 # --- 6. images ---------------------------------------------------------------------------
 
 

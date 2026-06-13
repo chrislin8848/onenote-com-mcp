@@ -232,7 +232,10 @@ def update_page_content(
     {"text": "...", "style": {...}} or {"runs": [{"text": "...", "style": {...}}, ...]},
     each optionally with "quick_style_index" / "alignment". Style keys are the CSS-like keys
     get_page returns: font-weight, font-style, text-decoration, color, background (highlight),
-    font-family, font-size.
+    font-family, font-size. A run (or a {"text": ...} paragraph) may carry "link": "https://…"
+    to make that text a HYPERLINK. To restyle or hyperlink EXISTING text, read it with get_page,
+    then "replace" the paragraph re-supplying its runs with the changed style/link (get_page
+    reports each run's existing "link" so a replace round-trips it instead of dropping it).
 
     Concurrency-guarded: fails instead of clobbering if the page changed since it was read.
     force=True overwrites anyway — DESTRUCTIVE, only after explicit user confirmation."""
