@@ -127,6 +127,63 @@ def test_restructure_section_bad_entry_rejected_before_any_read(section_be):
     assert not section_be.calls
 
 
+# --- reposition_page (single-page move; the seam supplies §5 completeness) --------------
+
+
+def test_reposition_page_moves_one_page_after_anchor(section_be, notebook_pages):
+    ids = [p.get("ID") for p in _section_pages(notebook_pages, SECTION_ID)]
+    # move the LAST page to right after the FIRST — caller gives only the two IDs
+    hierarchy_edit.reposition_page(section_be, SECTION_ID, ids[-1], after_page_id=ids[0])
+    sent_ids = [p.get("ID") for p in _section_pages(_sent(section_be), SECTION_ID)]
+    assert sent_ids == [ids[0], ids[-1], *ids[1:-1]]
+    assert set(sent_ids) == set(ids), "node-ID conserved — nothing dropped or invented"
+
+
+def test_reposition_page_to_top_when_after_is_empty(section_be, notebook_pages):
+    ids = [p.get("ID") for p in _section_pages(notebook_pages, SECTION_ID)]
+    hierarchy_edit.reposition_page(section_be, SECTION_ID, ids[2])  # empty after → section top
+    sent_ids = [p.get("ID") for p in _section_pages(_sent(section_be), SECTION_ID)]
+    assert sent_ids == [ids[2], *[i for i in ids if i != ids[2]]]
+
+
+def test_reposition_page_sets_optional_page_level(section_be, notebook_pages):
+    ids = [p.get("ID") for p in _section_pages(notebook_pages, SECTION_ID)]
+    hierarchy_edit.reposition_page(
+        section_be, SECTION_ID, ids[-1], after_page_id=ids[0], page_level=2
+    )
+    moved = next(p for p in _section_pages(_sent(section_be), SECTION_ID) if p.get("ID") == ids[-1])
+    assert moved.get("pageLevel") == "2"
+
+
+def test_reposition_page_other_sections_ride_along_untouched(section_be, notebook_pages):
+    ids = [p.get("ID") for p in _section_pages(notebook_pages, SECTION_ID)]
+    hierarchy_edit.reposition_page(section_be, SECTION_ID, ids[-1], after_page_id=ids[0])
+    sent = _sent(section_be)
+    for sid in (SEC1_ID, SEC2_ID):
+        before = [p.get("ID") for p in _section_pages(notebook_pages, sid)]
+        after = [p.get("ID") for p in _section_pages(sent, sid)]
+        assert after == before, "whole batch submitted — untouched sections verbatim"
+
+
+def test_reposition_page_rejects_after_self(section_be, notebook_pages):
+    ids = [p.get("ID") for p in _section_pages(notebook_pages, SECTION_ID)]
+    with pytest.raises(ValueError, match="cannot be the page being moved"):
+        hierarchy_edit.reposition_page(section_be, SECTION_ID, ids[0], after_page_id=ids[0])
+    assert _no_write(section_be)
+
+
+def test_reposition_page_rejects_bad_level_before_any_read(section_be):
+    with pytest.raises(ValueError, match="page_level"):
+        hierarchy_edit.reposition_page(section_be, SECTION_ID, "{P}{1}{B0}", page_level=4)
+    assert not section_be.calls, "bad page_level rejected before any COM read"
+
+
+def test_reposition_page_rejects_unknown_page(section_be):
+    with pytest.raises(NodeNotFoundError):
+        hierarchy_edit.reposition_page(section_be, SECTION_ID, "{NOPE}{1}{B0}")
+    assert _no_write(section_be)
+
+
 # --- reorder_sections ------------------------------------------------------------------
 
 

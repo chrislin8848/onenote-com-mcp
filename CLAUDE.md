@@ -91,6 +91,32 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 
 ## Status (2026-06-13)
 
+**v1.0.5 — page positioning + table-clear ergonomics (25-tool catalog). Tier-1 263 green; Tier-2
+VM-VALIDATED (reposition_page / set_rows-None / copy_page-below-source all PASS live).** Driven by
+a real-Claude-Desktop failure: "copy this page below the original, then clear the tables" got STUCK
+because the only way to position a page was restructure_section's whole 46-page list — the model
+reached for an external scratch file and hit Claude Desktop's read-only sandbox. Fixes, all inside
+the existing hierarchy/edit seams:
+- **`reposition_page`** (NEW tool #25): move ONE page to a new spot within its section — right
+  after `after_page_id` (empty → section top), optional `page_level`. Caller gives only IDs; the
+  seam reads the full page list and conserves node-IDs, so the SPEC §5 whole-batch discipline holds
+  without the LLM enumerating 46 pages (same pattern as move_page). `service/hierarchy_edit.py`.
+- **copy_page + create_page default placement**: copy_page gained `after_page_id` and now DEFAULTS
+  to placing the copy right BELOW the source page; create_page gained `after_page_id` and DEFAULTS
+  to placing the new page below the page the user is currently on (`get_current_window_ids`, read
+  BEFORE creating). Both fall back to the section end when the anchor isn't in the target section
+  (cross-section copy / current page elsewhere / no window) — an EXPLICIT missing anchor still
+  raises. Composition lives in the server facades; orchestration is Tier-1 facade-unit-tested
+  (`tests/test_copy_page_placement.py`, patched service calls) + the create_page facade is exercised
+  live (explicit-anchor, deterministic) in Tier-2.
+- **`set_rows` None=keep**: a `None` cell leaves THAT cell unchanged (`[None, "", …]` = keep column
+  0, clear the body — the "keep first row/column" ask), so clearing a table body no longer needs to
+  re-supply the kept column's values.
+- §4: the reorder set (reposition_page / restructure_section / reorder_sections / move_page /
+  rename_node) cross-named; copy_page/create_page document the default-below-anchor; server
+  instructions say "single page → reposition_page, never an external scratch file". SPEC §4/§5 +
+  tool table updated.
+
 **v1.0.4 — inline delete + bulk table-content replace (24-tool catalog). Tier-1 246 green;
 Tier-2 VM-VALIDATED (2026-06-13): both new live round-trips PASS** — `set_rows` overwrites a row
 and the whole table in place (cell objectIDs preserved), and `delete_inline_content` drops an

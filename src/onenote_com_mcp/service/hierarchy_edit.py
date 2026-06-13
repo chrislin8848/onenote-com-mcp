@@ -167,6 +167,53 @@ def restructure_section(
     apply_hierarchy_restructure(backend, section_id, HierarchyScope.hsPages, mutate)
 
 
+def reposition_page(
+    backend: OneNoteBackend,
+    section_id: str,
+    page_id: str,
+    after_page_id: str = "",
+    page_level: int | None = None,
+) -> None:
+    """Move ONE page to a new position WITHIN its section — right after ``after_page_id`` (empty →
+    the top of the section) — and optionally set its ``pageLevel``.
+
+    The lightweight alternative to restructure_section for the common "put this page here" case:
+    the caller supplies only IDs, and the seam's whole-tree read + node-ID conservation provide
+    the SPEC §5 completeness (nothing is dropped — the full page list still rides in the one batch;
+    only this page's position changes). Same-section only — moving a page to a DIFFERENT section is
+    move_page. lxml ``addnext``/``addprevious`` MOVE the existing element, so no node is added."""
+    if page_level is not None and page_level not in (1, 2, 3):
+        raise ValueError(f"page_level must be 1, 2 or 3, got {page_level!r}")
+    if after_page_id and after_page_id == page_id:
+        raise ValueError("after_page_id cannot be the page being moved")
+
+    def mutate(tree: etree._Element) -> None:
+        section = _find_node(tree, section_id)
+        page = _find_node(tree, page_id)
+        if local_name(page.tag) != "Page":
+            raise ValueError(f"{page_id!r} is a one:{local_name(page.tag)}, not a page")
+        if page.getparent() is not section:
+            raise ValueError(
+                f"page {page_id!r} is not directly in section {section_id!r} — "
+                "to move a page to another section use move_page"
+            )
+        if after_page_id:
+            anchor = _find_node(tree, after_page_id)
+            if local_name(anchor.tag) != "Page" or anchor.getparent() is not section:
+                raise ValueError(
+                    f"after_page_id {after_page_id!r} must be a page in section {section_id!r}"
+                )
+            anchor.addnext(page)  # MOVE page to immediately after the anchor
+        else:
+            first = section.find(qn("Page"))
+            if first is not None and first is not page:
+                first.addprevious(page)  # MOVE page to the top of the section
+        if page_level is not None:
+            page.set("pageLevel", str(page_level))
+
+    apply_hierarchy_restructure(backend, section_id, HierarchyScope.hsPages, mutate)
+
+
 def reorder_sections(
     backend: OneNoteBackend, notebook_id: str, ordered_section_ids: list[str]
 ) -> None:

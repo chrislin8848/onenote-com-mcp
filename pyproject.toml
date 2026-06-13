@@ -1,6 +1,6 @@
 [project]
 name = "onenote-com-mcp"
-version = "1.0.4"
+version = "1.0.5"
 description = "COM-only OneNote MCP server (live OneNote desktop CRUD, no Azure/Graph/token)"
 readme = "README.md"
 requires-python = ">=3.12"

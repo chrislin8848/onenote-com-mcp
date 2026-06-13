@@ -33,6 +33,7 @@ EXPECTED_TOOLS = {
     "copy_page",
     "copy_section",
     "restructure_section",
+    "reposition_page",
     "reorder_sections",
     "rename_node",
     "move_page",
@@ -53,9 +54,9 @@ def tools():
     return {t.name: t for t in asyncio.run(mcp.list_tools())}
 
 
-def test_catalog_is_the_24_expected_tools(tools):
+def test_catalog_is_the_25_expected_tools(tools):
     assert set(tools) == EXPECTED_TOOLS
-    assert len(tools) == 24
+    assert len(tools) == 25
 
 
 def test_every_tool_has_a_real_description(tools):
@@ -79,6 +80,11 @@ def test_contrastive_borders_present(tools):
     # the inline-vs-page-level delete border names both neighbours
     assert "delete_page_content" in tools["delete_inline_content"].description
     assert "delete_inline_content" in tools["delete_page_content"].description
+    # the one-page-vs-many-pages reorder border names each other
+    assert "reposition_page" in tools["restructure_section"].description
+    assert "restructure_section" in tools["reposition_page"].description
+    # copy_page can place the copy directly (after_page_id) — the stuck-workflow fix
+    assert "after_page_id" in tools["copy_page"].inputSchema["properties"]
 
 
 def test_update_mode_is_a_per_value_enum(tools):

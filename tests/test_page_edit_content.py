@@ -455,6 +455,22 @@ def test_modify_table_set_rows_rejects_rows_wider_than_table(be, table_page):
     assert not [c for c in be.calls if c.method == "update_page_content"]
 
 
+def test_modify_table_set_rows_none_cell_leaves_that_cell_unchanged(be, table_page):
+    # None = "keep this cell": the "keep first column, clear the rest" pattern is [None, "", ...]
+    table = next(table_page.iter(qn("Table")))
+    cell0_before = etree.tostring(
+        table.findall(qn("Row"))[0].findall(qn("Cell"))[0], with_tail=False
+    )
+    page_edit.modify_table(
+        be, table_page.get("ID"), table.get("objectID"), "set_rows", rows=[[None, "改第二格"]]
+    )
+    _, sent = _sent_payload(be)
+    sent_cells = next(sent.iter(qn("Table"))).findall(qn("Row"))[0].findall(qn("Cell"))
+    assert etree.tostring(sent_cells[0], with_tail=False) == cell0_before, "None kept col 0"
+    changed = sent_cells[1].find(f"{qn('OEChildren')}/{qn('OE')}")
+    assert "改第二格" in _cdata(changed)
+
+
 # --- nested tables (a table inside a cell — the 業務塔斯作業 PAYMENT layout) --------------
 
 _ONE_NS = "http://schemas.microsoft.com/office/onenote/2013/onenote"

@@ -444,8 +444,10 @@ def _set_cell_content(
 def _set_table_rows(table: etree._Element, rows: list[list[Any]], at_index: int | None) -> None:
     """Replace the CONTENT of existing rows from ``at_index`` (None = row 0), one input row per
     existing row. Fixed-shape: rows/columns are never added or removed — every one:Cell keeps its
-    objectID. A short input row leaves the trailing columns untouched. Out-of-range writes are
-    refused (point at insert_rows / add_columns) so a content edit never silently grows it."""
+    objectID. A short input row leaves the trailing columns untouched, and a ``None`` cell leaves
+    THAT cell unchanged (so ``[None, "", ""]`` keeps column 0 and clears the rest). Out-of-range
+    writes are refused (point at insert_rows / add_columns) so a content edit never silently grows
+    it."""
     existing = table.findall(qn("Row"))
     n_rows = len(existing)
     n_cols = len(_table_columns_el(table).findall(qn("Column")))
@@ -468,6 +470,8 @@ def _set_table_rows(table: etree._Element, rows: list[list[Any]], at_index: int 
     for j, row_input in enumerate(rows):
         cells = existing[at_index + j].findall(qn("Cell"))
         for k, cell_input in enumerate(row_input):
+            if cell_input is None:
+                continue  # None = leave this cell exactly as it is (keep its content + identity)
             runs, shading_color, alignment = _cell_runs(cell_input)
             _set_cell_content(cells[k], runs, shading_color, alignment)
 
@@ -615,9 +619,10 @@ def modify_table(
       * ``set_rows``     — REPLACE the content of existing rows with ``rows`` (cell content, same
         shape as create_table), starting at ``at_index`` (omit = row 0), one input row per existing
         row. Fixed-shape: no row/column is added or removed and every cell keeps its objectID; a
-        short input row leaves trailing columns untouched. Give one row + ``at_index`` to replace a
-        single row. Writing past the last row / wider than the table is refused (grow it first with
-        insert_rows / add_columns).
+        short input row leaves trailing columns untouched, and a ``None`` cell leaves THAT cell
+        unchanged (``[None, "", ""]`` keeps column 0, clears the rest). Give one row + ``at_index``
+        to replace a single row. Writing past the last row / wider than the table is refused (grow
+        it first with insert_rows / add_columns).
       * ``delete_rows``    — remove the rows at ``indices`` (0-based). DESTRUCTIVE.
       * ``delete_columns`` — remove the columns at ``indices`` (0-based) and the matching cell in
         every row. DESTRUCTIVE.

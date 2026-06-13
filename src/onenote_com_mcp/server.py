@@ -1,12 +1,12 @@
-"""FastMCP server — the full 24-tool OneNote catalog (SPEC §4).
+"""FastMCP server — the full 25-tool OneNote catalog (SPEC §4).
 
 Every tool is a thin facade over ``onenote_com_mcp.service`` (the shared write core, the copy
 core, the hierarchy core); the orchestration lives there, not here. Descriptions carry the §4
 contract the LLM reads: contrastive borders on confusable pairs (get_page vs get_page_images vs
 get_page_files_info vs get_page_files; update_page_content vs create_table vs insert_image;
-restructure_section vs reorder_sections vs move_page vs rename_node; delete_node vs
-delete_page_content vs delete_inline_content; copy vs move), DESTRUCTIVE + propose-then-confirm
-contracts in text, and
+restructure_section vs reposition_page vs reorder_sections vs move_page vs rename_node;
+delete_node vs delete_page_content vs delete_inline_content; copy vs move), DESTRUCTIVE +
+propose-then-confirm contracts in text, and
 ``mode`` as a per-value enum. Cross-tool rules that belong to no single tool live in
 ``_SERVER_INSTRUCTIONS`` (MCP ``initialize`` instructions). ``logged_tool`` adds the §7 per-call
 diagnostic log at the decorator seam.
@@ -29,6 +29,7 @@ from typing import Literal
 from mcp.server.fastmcp import FastMCP, Image
 
 from onenote_com_mcp.backend import get_backend
+from onenote_com_mcp.errors import NoCurrentWindowError, NodeNotFoundError
 from onenote_com_mcp.logging_config import configure_logging, log_tool_call
 from onenote_com_mcp.service import copy, create, delete, files, hierarchy_edit, page_edit, read
 
@@ -55,9 +56,16 @@ back into another tool call.
 
 Destructive and structural operations (delete_node, delete_page_content, delete_inline_content, \
 modify_table's delete_rows/delete_columns, force overwrites, restructure_section, \
-reorder_sections, move_page, rename_node) are propose-then-confirm: tell the user exactly what \
-will change and get their go-ahead before calling. For risky restructures, \
+reorder_sections, reposition_page, move_page, rename_node) are propose-then-confirm: tell the \
+user exactly what will change and get their go-ahead before calling. For risky restructures, \
 suggest a clone backup with copy_section first.
+
+Positioning a page: copy_page and create_page already place the new page right BELOW its natural \
+anchor by default — copy_page below the SOURCE page, create_page below the page the user is \
+currently on — so "copy this page" / "add a page here" need no position argument. Pass their \
+after_page_id only to place the page after a DIFFERENT page. To move an EXISTING page use \
+reposition_page. For a SINGLE page do NOT reach for restructure_section's whole-list reorder, and \
+NEVER write an external scratch file to organize the order: reorder lists in context.
 
 Benchmark workflow for "copy these pages and change the dates" (faithful copy, then edit the \
 copy): (1) the user manually creates a synced notebook B in the OneNote UI (COM cannot create \
@@ -201,15 +209,39 @@ def create_section(parent_id: str, name: str) -> str:
 
 @logged_tool()
 def create_page(
-    section_id: str, title: str, content: str | list[dict] = "", page_level: int = 1
+    section_id: str,
+    title: str,
+    content: str | list[dict] = "",
+    page_level: int = 1,
+    after_page_id: str = "",
 ) -> str:
     """Create a new PAGE in a section. Use this to make a page; to add content to a page that
-    already exists, use update_page_content. page_level (1/2/3) sets subpage indent. content
+    already exists, use update_page_content. By DEFAULT the new page is placed right BELOW the page
+    the user is currently viewing (from get_current_context) when that page is in this section —
+    what you usually want when creating a page while reading one. Pass after_page_id to place it
+    after a specific page instead; if there is no current page in this section the new page is added
+    at the END (then reposition_page can move it). page_level (1/2/3) sets subpage indent. content
     optionally adds initial paragraphs — same shapes as update_page_content (plain text with
     newlines, or styled paragraph dicts)."""
-    return _json(
-        {"page_id": create.create_page(get_backend(), section_id, title, content, page_level)}
-    )
+    backend = get_backend()
+    # Default anchor = the page the user is currently on — read BEFORE creating, so the anchor is
+    # where they were (not the freshly created page). An explicit after_page_id wins; no open
+    # window → no default (append at end).
+    anchor = after_page_id
+    if not anchor:
+        try:
+            anchor = backend.get_current_window_ids().page_id or ""
+        except NoCurrentWindowError:
+            anchor = ""
+    new_id = create.create_page(backend, section_id, title, content, page_level)
+    if anchor and anchor != new_id:
+        try:
+            hierarchy_edit.reposition_page(backend, section_id, new_id, after_page_id=anchor)
+        except NodeNotFoundError:
+            if after_page_id:
+                raise  # an explicitly named anchor that is not in this section is a real error
+            # the current page is in a DIFFERENT section → leave the new page at the section end
+    return _json({"page_id": new_id})
 
 
 # --- Modify (shared write core — service/page_edit.py) -----------------------
@@ -293,7 +325,7 @@ def modify_table(
     page_id: str,
     table_object_id: str,
     operation: Literal["add_columns", "insert_rows", "set_rows", "delete_columns", "delete_rows"],
-    rows: list[list[str | dict]] | None = None,
+    rows: list[list[str | dict | None]] | None = None,
     indices: list[int] | None = None,
     at_index: int | None = None,
     count: int = 1,
@@ -315,9 +347,11 @@ def modify_table(
                          same shape as create_table) from at_index (omit → row 0), one input row per
                          existing row. set_rows only rewrites existing rows — to ADD new rows use
                          insert_rows. Fixed-shape: no row/column added or removed, every cell keeps
-                         its ID; a short input row leaves trailing columns untouched. Pass one row +
-                         at_index to overwrite a single row; pass every row to refresh the whole
-                         table at once (vs update_page_content "replace", which rewrites ONE cell).
+                         its ID; a short input row leaves trailing columns untouched, and a None
+                         cell leaves THAT cell unchanged ([None,"",""] keeps column 0, clears the
+                         rest — the "keep first column/header, clear the body" pattern). Pass one
+                         row + at_index to overwrite a single row; pass every row to refresh the
+                         whole table (vs update_page_content "replace", which rewrites ONE cell).
                          Writing past the last row, or a row wider than the table, is refused.
       "delete_rows"    — DESTRUCTIVE: remove the rows at indices (0-based list).
       "delete_columns" — DESTRUCTIVE: remove the columns at indices (0-based) plus the matching
@@ -373,15 +407,32 @@ def insert_image(
 
 
 @logged_tool()
-def copy_page(page_id: str, target_section_id: str) -> str:
+def copy_page(page_id: str, target_section_id: str, after_page_id: str = "") -> str:
     """DUPLICATE a page into a section (formatting, tables, inline images, attachments,
     pageLevel all preserved); the original stays put. This is a copy, NOT a move — to relocate
-    a page without duplicating it, use move_page. Returns the new page's ID. If the source is not
-    fully downloaded on this machine (OneDrive files-on-demand), some images/files/embedded
-    objects cannot be copied and come out blank/empty — sync_warning summarizes how many, and
-    file_notes lists each. ALWAYS surface a non-null sync_warning to the user and suggest they
-    fully sync the source in OneNote, then copy again (the blanks do NOT self-heal)."""
-    result = copy.transfer_page(get_backend(), page_id, target_section_id)
+    a page without duplicating it, use move_page. By DEFAULT the copy is placed right BELOW the
+    source page (a same-section duplicate appears immediately after its original — what you
+    usually want when no position is given). Pass after_page_id to place it after a DIFFERENT page
+    instead (it must be in target_section_id). Copying to a DIFFERENT section, where the original
+    isn't present, leaves the copy at the end of that section. Returns the new page's ID. If the
+    source is not fully downloaded on this machine (OneDrive files-on-demand), some
+    images/files/embedded objects cannot be copied and come out blank/empty — sync_warning
+    summarizes how many, and file_notes lists each. ALWAYS surface a non-null sync_warning to the
+    user and suggest they fully sync the source in OneNote, then copy again (blanks don't
+    self-heal)."""
+    backend = get_backend()
+    result = copy.transfer_page(backend, page_id, target_section_id)
+    # transfer_page lands the copy at the section END. Default placement is right below the SOURCE
+    # page; an explicit after_page_id wins. If the anchor isn't in the target section (a
+    # cross-section copy with no explicit anchor), there is no "below the original" — leave it last.
+    anchor = after_page_id or page_id
+    try:
+        hierarchy_edit.reposition_page(
+            backend, target_section_id, result.page_id, after_page_id=anchor
+        )
+    except NodeNotFoundError:
+        if after_page_id:
+            raise  # an explicitly named anchor that is not in the section is a real error
     return _json(
         {
             "page_id": result.page_id,
@@ -428,14 +479,35 @@ def copy_section(section_id: str, target_parent_id: str) -> str:
 
 @logged_tool()
 def restructure_section(section_id: str, ordered_pages: list[dict]) -> str:
-    """STRUCTURAL. Reorder ALL pages WITHIN ONE section and adjust their subpage levels, in one
-    batch. Use this for page order/indent inside a single section. To move a page to a DIFFERENT
-    section use move_page; to reorder the sections themselves use reorder_sections; to rename a
-    page/section use rename_node. ordered_pages = the section's COMPLETE page list in target
-    order, each entry {"page_id": str, "page_level": 1|2|3} (a partial list is rejected). Propose
-    the target order and confirm with the user first; suggest a copy_section backup."""
+    """STRUCTURAL. Reorder MANY pages WITHIN ONE section and/or adjust their subpage levels, in one
+    batch. Use this when reordering several pages at once, or to set pages' subpage level
+    (pageLevel). To move just ONE page to a position, use reposition_page instead — it takes only
+    the IDs, NOT the whole list. To move a page to a DIFFERENT section use move_page; to reorder the
+    sections themselves use reorder_sections; to rename a page/section use rename_node.
+    ordered_pages = the section's COMPLETE page list in target order, each entry {"page_id": str,
+    "page_level": 1|2|3} (a partial list is rejected — build it by reordering the list_pages output
+    in place; do NOT write it to an external scratch file). Propose the target order and confirm
+    with the user first; suggest a copy_section backup."""
     hierarchy_edit.restructure_section(get_backend(), section_id, ordered_pages)
     return f"section {section_id} restructured"
+
+
+@logged_tool()
+def reposition_page(
+    section_id: str, page_id: str, after_page_id: str = "", page_level: int | None = None
+) -> str:
+    """STRUCTURAL. Move ONE page to a new position WITHIN its section — placed right after
+    after_page_id (leave empty to move it to the TOP of the section) — and optionally set its
+    subpage level (page_level 1/2/3). You give only the IDs; you do NOT need the section's full page
+    list (that's the difference from restructure_section, which is for reordering MANY pages or
+    setting several levels at once). This is the tool for "put the copied/new page right below page
+    X": copy_page / create_page append the page at the END of the section, then reposition_page
+    moves it where you want. Same-section only — to move a page to a DIFFERENT section use
+    move_page. Confirm with the user before applying."""
+    hierarchy_edit.reposition_page(
+        get_backend(), section_id, page_id, after_page_id=after_page_id, page_level=page_level
+    )
+    return f"page {page_id} repositioned in {section_id}"
 
 
 @logged_tool()
@@ -466,9 +538,10 @@ def rename_node(parent_id: str, object_id: str, new_name: str) -> str:
 def move_page(notebook_id: str, page_id: str, target_section_id: str) -> str:
     """STRUCTURAL. Move a page to a DIFFERENT section within the same notebook — the page leaves
     its current section (this is a move, not a copy_page duplicate) and lands at the end of the
-    target section with its subpage level reset to 1. To reorder pages WITHIN their section
-    instead, use restructure_section. The moved page gets a NEW page ID — returned here; use it
-    for any follow-up calls. Confirm with the user before applying."""
+    target section with its subpage level reset to 1. To move/position a page WITHIN its current
+    section instead, use reposition_page (one page) or restructure_section (many pages). The moved
+    page gets a NEW page ID — returned here; use it for any follow-up calls. Confirm with the user
+    before applying."""
     new_id = hierarchy_edit.move_page(get_backend(), notebook_id, page_id, target_section_id)
     return _json({"new_page_id": new_id, "section_id": target_section_id})
 

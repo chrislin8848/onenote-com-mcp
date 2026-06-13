@@ -20,7 +20,7 @@ import uuid
 
 import pytest
 
-from onenote_com_mcp.service import copy, read
+from onenote_com_mcp.service import copy, create, hierarchy_edit, read
 
 pytestmark = pytest.mark.windows
 
@@ -189,6 +189,17 @@ def test_copy_page_preserves_subpage_level(backend, fixture_pages, temp_section)
     copy.transfer_page(backend, sub_id, temp_section)  # source is a level-2 subpage
     landed = read.list_pages(backend, temp_section)
     assert [p["page_level"] for p in landed] == [1, 2], "source pageLevel survives the clone"
+
+
+def test_copy_page_default_places_copy_below_its_source(backend, temp_section):
+    # mirrors copy_page's facade default (anchor = the source page): a same-section duplicate
+    # lands right below its original, NOT at the section end.
+    a = create.create_page(backend, temp_section, "原頁A")
+    b = create.create_page(backend, temp_section, "其他頁B")  # so "end" != "below source"
+    copy_id = copy.transfer_page(backend, a, temp_section).page_id  # lands at END: [A, B, copy]
+    hierarchy_edit.reposition_page(backend, temp_section, copy_id, after_page_id=a)  # the default
+    order = [p["id"] for p in read.list_pages(backend, temp_section)]
+    assert order == [a, copy_id, b], "the duplicate sits right below its original"
 
 
 # --- copy_section ------------------------------------------------------------------------

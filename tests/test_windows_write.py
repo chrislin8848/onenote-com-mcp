@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import json
 import uuid
 
 import pytest
 from lxml import etree
 
+from onenote_com_mcp import server
 from onenote_com_mcp.enums import PageInfo
 from onenote_com_mcp.errors import ConcurrencyError
 from onenote_com_mcp.service import create, hierarchy_edit, page_edit, read
@@ -368,6 +370,16 @@ def test_modify_table_set_rows_roundtrip(backend, temp_section):
         ["5", "6"],
     ]
 
+    # None cell = keep that cell; "" clears the rest — the keep-column-0 pattern
+    page_edit.modify_table(
+        backend, page_id, tid, "set_rows", rows=[[None, ""], [None, ""], [None, ""]]
+    )
+    assert [[c["text"] for c in r] for r in table()["rows"]] == [
+        ["1", ""],
+        ["3", ""],
+        ["5", ""],
+    ]
+
 
 def test_delete_inline_content_drops_table_keeps_paragraphs(backend, temp_section):
     page_id = create.create_page(backend, temp_section, "刪除行內表格頁", "段落一\n段落二")
@@ -455,6 +467,33 @@ def test_restructure_section_roundtrip(backend, temp_section):
     pages = read.list_pages(backend, temp_section)
     assert [p["id"] for p in pages] == [c, a, b]
     assert [p["page_level"] for p in pages] == [1, 2, 2]
+
+
+def test_reposition_page_roundtrip(backend, temp_section):
+    a = create.create_page(backend, temp_section, "重排頁A")
+    b = create.create_page(backend, temp_section, "重排頁B")
+    c = create.create_page(backend, temp_section, "重排頁C")  # appended last, like a copy
+
+    # move C to right after A (the "put the copy below page X" workflow), give only the IDs
+    hierarchy_edit.reposition_page(backend, temp_section, c, after_page_id=a, page_level=2)
+    pages = read.list_pages(backend, temp_section)
+    assert [p["id"] for p in pages] == [a, c, b], "C lands right after A; B rides along"
+    assert next(p["page_level"] for p in pages if p["id"] == c) == 2
+
+    # empty after_page_id → move to the top of the section
+    hierarchy_edit.reposition_page(backend, temp_section, b)
+    assert [p["id"] for p in read.list_pages(backend, temp_section)] == [b, a, c]
+
+
+def test_create_page_facade_places_below_explicit_anchor(backend, temp_section, monkeypatch):
+    # exercise the REAL server.create_page facade (create + reposition) with an explicit anchor —
+    # deterministic (no dependence on which page the VM's OneNote window currently shows)
+    monkeypatch.setattr(server, "get_backend", lambda: backend)
+    a = create.create_page(backend, temp_section, "錨頁")
+    b = create.create_page(backend, temp_section, "尾頁")  # so "end" != "after anchor"
+    new_id = json.loads(server.create_page(temp_section, "新頁", after_page_id=a))["page_id"]
+    order = [p["id"] for p in read.list_pages(backend, temp_section)]
+    assert order == [a, new_id, b], "the facade placed the new page right after its explicit anchor"
 
 
 def test_rename_page_and_section_roundtrip(backend, notebook_id, temp_section):

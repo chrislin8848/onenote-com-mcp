@@ -152,17 +152,18 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 | `get_page_files` | 取**附件內容**供 Claude 分析(**僅限**:文字類解碼/圖片/PDF 抽文字;其餘型別回中繼資料並明示不支援) | 讀 `pathCache` 本機快取檔(**非** `GetBinaryPageContent`)+ server 端型別感知抽取 |
 | `get_current_context` | 取使用者目前檢視位置(筆記本/節群組/節/頁,ID+名稱) | `Windows.CurrentWindow` 的 `CurrentNotebookId/CurrentSectionGroupId/CurrentSectionId/CurrentPageId` + 範圍化 `GetHierarchy` 解名稱 |
 | `create_section` | 在指定本(或節群組)建立節 | `OpenHierarchy(name+".one", parentId, out id, cftSection)`(parent 可為 notebook 或節群組) |
-| `create_page` | 在指定節建新頁(可設 `pageLevel` 子頁) | `CreateNewPage` (+ `UpdateHierarchy` 設 pageLevel) + `UpdatePageContent` |
+| `create_page` | 在指定節建新頁(可設 `pageLevel` 子頁);**預設把新頁放在目前所在頁(get_current_context)正下方**,`after_page_id` 可指定別頁,無視窗/目前頁不在該節則落節尾 | `CreateNewPage` (+ `UpdateHierarchy` 設 pageLevel) + `UpdatePageContent` + 預設接 `reposition_page`(錨點=目前頁;讀視窗在建頁前;錨點不在該節→吞掉退回節尾) |
 | `update_page_content` | 改頁面內容:append / insert / replace(含改表格儲存格文字、樣式大小/字型/顏色/底色、超連結 `<a href>`) | `GetPageContent` → 改 XML → `UpdatePageContent`(純 append 可免讀全頁) |
 | `create_table` | 新增**新**表格(僅建立) | 組 `one:Table` XML → `UpdatePageContent` |
-| `modify_table` | 改**既有**表格:形狀(`insert_rows`/`add_columns`、`delete_rows`/`delete_columns`(DESTRUCTIVE);列欄對稱;空 cell 補最小段落)**或** `set_rows`(二維陣列就地覆蓋既有列內容,固定維度、保留每格 objectID;只覆蓋既有列,加列用 `insert_rows`) | `GetPageContent` → 改 `one:Table`(Columns 重編 index、每列增/刪/改 Cell)→ `UpdatePageContent` |
+| `modify_table` | 改**既有**表格:形狀(`insert_rows`/`add_columns`、`delete_rows`/`delete_columns`(DESTRUCTIVE);列欄對稱;空 cell 補最小段落)**或** `set_rows`(二維陣列就地覆蓋既有列內容,固定維度、保留每格 objectID;只覆蓋既有列,加列用 `insert_rows`;cell 給 `None` 則該格不動,`[None,"",…]` = 保留第一欄、清空其餘) | `GetPageContent` → 改 `one:Table`(Columns 重編 index、每列增/刪/改 Cell)→ `UpdatePageContent` |
 | `insert_image` | 插入圖片到頁面 | 組 `one:Image` + base64 `one:Data` → `UpdatePageContent` |
 | `delete_node` | 刪頁/節/節群組/筆記本(層級) | `DeleteHierarchy(objectId)` |
 | `delete_page_content` | 刪**頁層**內容物件(整個大綱/頁層圖片/頁層附件) | `DeletePageContent(pageId, objectId)` |
 | `delete_inline_content` | 刪**大綱內**物件(表格/段落/行內圖片/行內附件);保留同大綱其他段落 | 走編輯 seam:`GetPageContent` → 移除元素並修剪空容器 → `UpdatePageContent`(**非** `DeletePageContent`——COM 對行內 OE 一律拒絕 `0x8004200E`) |
-| `copy_page` | 忠實克隆單頁到目標節 | 內部 raw-XML 克隆(見 §5「複製/克隆」) |
+| `copy_page` | 忠實克隆單頁到目標節;**預設把副本放在來源頁正下方**(同節複製的自然位置),`after_page_id` 可指定放在別頁之後,跨節複製則落在節尾 | 內部 raw-XML 克隆(見 §5「複製/克隆」)+ 預設接 `reposition_page`(錨點=來源頁;跨節時錨點不在目標節→吞掉退回節尾) |
 | `copy_section` | 忠實克隆整節 | 建節 + 逐頁 `copy_page`(保留 pageLevel) |
-| `restructure_section` | 同節內**整批**重排頁面順序 + 調整 `pageLevel` 階層 | `GetHierarchy` → 重排完整頁清單(每頁帶 `pageLevel`)→ `UpdateHierarchy`(紀律見 §5「層級重排」) |
+| `restructure_section` | 同節內**整批**重排**多頁**順序 + 調整 `pageLevel` 階層 | `GetHierarchy` → 重排完整頁清單(每頁帶 `pageLevel`)→ `UpdateHierarchy`(紀律見 §5「層級重排」) |
+| `reposition_page` | 把**一頁**移到同節內某頁之後(空=移到節首)+ 可選設 `pageLevel`;只給 ID,不必交完整清單 | 走同一個 hierarchy seam:`GetHierarchy`(節範圍)→ `addnext`/`addprevious` 原地搬一個元素(node-ID 守恆,whole-batch 紀律由 seam 保證)→ `UpdateHierarchy` |
 | `reorder_sections` | 重排某本內節的順序 | 同上,對 `one:Section` 元素整批重排(僅節/頁有實證;**筆記本層級排序未驗證、不納入**) |
 | `rename_node` | 重新命名頁/節 | `UpdateHierarchy`(改 name 屬性) |
 | `move_page` | 把頁搬到別的節 | `UpdateHierarchy`(把頁元素掛到目標節下;**跨節搬移可靠性待 VM 實機驗證**) |
@@ -182,12 +183,12 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 1. **對比式/反向標註** — 針對本專案會互相混淆的工具組,在描述裡互相點名界線:
    - **刪除三角:** `delete_node`(刪整個頁/節/節群組/筆記本節點) vs `delete_page_content`(刪**頁層**物件:整個大綱/頁層圖/頁層附件,頁面保留) vs `delete_inline_content`(刪**大綱內**物件:表格/段落/行內圖/行內附件)。關鍵界線:**整個表格、段落永遠在大綱內,故刪它們一律用 `delete_inline_content`,絕不用 `delete_page_content`**;三者描述互相點名(both-way,guard-tested)。
    - `update_page_content`(加/改文字、樣式、超連結、**單一**儲存格文字) vs `create_table`(建**新**表格) vs `modify_table`(改既有表格:`insert_rows`/`add_columns`/`delete_*` 形狀,或 `set_rows` 一次覆蓋整列/整表內容) vs `insert_image`(插圖)——`update_page_content` 描述須註明「若加的是表格、改的是行列數、或插圖,改用對應工具」;`create_table` 只建新表、`modify_table` 改既有表(形狀或整列內容),兩者互相點名;表格內容替換的分工 = `update_page_content "replace"`(一格)vs `modify_table set_rows`(整列/整表)。
-   - `restructure_section`(**同節內**重排頁 + `pageLevel`) vs `reorder_sections`(**一本內**節順序) vs `move_page`(把頁搬到**別節**) vs `rename_node`(只改名)。
+   - `reposition_page`(**同節內**把**一頁**移到某頁之後,只給 ID) vs `restructure_section`(**同節內**重排**多頁** + `pageLevel`,須完整清單) vs `reorder_sections`(**一本內**節順序) vs `move_page`(把頁搬到**別節**) vs `rename_node`(只改名)。關鍵:移**單一**頁用 `reposition_page`(不必交 46 筆清單,避免模型去寫外部暫存檔);`copy_page` / `create_page` **預設**都把新頁放在「自然錨點」正下方——`copy_page` 在**來源頁**之下、`create_page` 在**目前所在頁**(get_current_context)之下,所以「複製這頁」「在這裡建頁」都不必指定位置,`after_page_id` 才是覆蓋;要移**既有**頁才用 `reposition_page`。
    - `get_page`(文字 + 結構化表格) vs `get_page_images`(取圖片二進位供視覺辨識) vs `get_page_files_info`(附件/嵌入物件**中繼資料**,任何型別) vs `get_page_files`(附件**內容**抽取,僅文字類/圖片/PDF)——info 是 files 的前置;非支援型別(docx/xlsx 等)只能取 info,不能取內容。
    - 命名小疙瘩:`restructure_section` 與 `reorder_sections` 的動詞/單複數不一致,若描述尚未對外凍結可考慮統一,降低模型猶豫。
 2. **把程式碼強制不了的行為契約寫進描述文字**(那是唯一落地處):
    - 破壞性工具(`delete_node`、`delete_page_content`、`delete_inline_content`、`modify_table` 的 `delete_rows`/`delete_columns`、覆蓋式 `update_page_content`)醒目標 **DESTRUCTIVE**。
-   - 結構性工具(`restructure_section` / `reorder_sections` / `move_page` / `rename_node`)註明「呼叫前先向使用者提案並取得確認;建議先 `copy_section` 備份」(呼應 §5 層級重排紀律的 propose-confirm)。
+   - 結構性工具(`restructure_section` / `reposition_page` / `reorder_sections` / `move_page` / `rename_node`)註明「呼叫前先向使用者提案並取得確認;建議先 `copy_section` 備份」(呼應 §5 層級重排紀律的 propose-confirm)。
 3. **參數 schema 也要導引選擇:** `update_page_content` 的 append/insert/replace 做成 **enum 並逐值描述**;必填/選填清楚;參數名自解釋。
 
 **Server 層 `instructions`(跨工具總則):** 在 MCP `initialize` 的 `instructions` 放不屬於任何單一工具的總則——本 server 操作 live OneNote、讀取一律範圍化、**刪頁面內物件前先用 `get_page` / `get_page_images` / `get_page_files_info` 取 `objectID`**、以及標竿流程「日期改寫 = 手動建本 B → `copy_section` 克隆 → `search_pages` 找日期頁 → `get_page` 讀 → `update_page_content(replace)` 改」。Claude Desktop 對 `instructions` 的採用程度須**實測確認**。
@@ -210,7 +211,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 - `DeleteHierarchy(objectId, ...)`:刪除節點。
 - `OpenHierarchy(path, relativeToId, out objectId, CreateFileType)`:**建立/開啟層級節點**。本專案只用 `cftSection` 建節(name 以 `.one` 結尾、relativeTo 給父 notebook **或節群組**的 ID),及 `cftNone`(只開不建)。⚠️ **`cftNotebook`(建本)不使用**——COM 在本地建出的本不會綁雲端同步,實證不可行,故無 `create_notebook` 工具;**`cftFolder`(建節群組)亦不使用**——本期無建節群組工具,需要時於 OneNote 手動建。`UpdateHierarchy` 用來設 `pageLevel`(子頁,`create_page` 與複製都會用到,屬必用);改名(`rename_node`)、重排(`restructure_section`/`reorder_sections`)、搬移(`move_page`)亦全走它。
   - ⚠️ **為何不建本:** COM 在本地新建的筆記本不會落在會同步到 OneDrive 的位置(只會是本機本),這正是移除 `create_notebook` 的原因。**`create_section` 則安全**——在既有(已同步)notebook 內建節會自動沿用其同步。需要新增整本時,於 OneNote **手動**建好已同步的本,再用 `create_section` / `copy_section` 往裡面加。
-- **層級重排紀律(`UpdateHierarchy`):** 順序由提交 XML 中**子元素的排列順序**決定,沒有位置索引屬性。`UpdateHierarchy` 對部分清單會「推斷」意圖——微軟文件明言:只提交部分子元素時,未提交者的落點**不可預期**。因此重排**必須整批提交該層級的完整子元素清單**(照目標順序、頁面各自帶 `pageLevel`),嚴禁只丟想動的那幾個;若該本含節群組,筆記本直屬子元素是 `one:Section` 與 `one:SectionGroup` 的**混合清單**,整批提交須兩種都含。實證範圍:節內頁面與本內節的重排有社群實例;**最上層筆記本清單的排序未驗證,不納入**;**跨節搬頁(`move_page`)的可靠性需 VM 實機驗證後才轉正**。結構性變更(重排/搬移/改名)的工具描述應註明「建議先克隆備份(copy_section),且 Claude 應先提案經使用者確認再批次套用」。
+- **層級重排紀律(`UpdateHierarchy`):** 順序由提交 XML 中**子元素的排列順序**決定,沒有位置索引屬性。`UpdateHierarchy` 對部分清單會「推斷」意圖——微軟文件明言:只提交部分子元素時,未提交者的落點**不可預期**。因此重排**必須整批提交該層級的完整子元素清單**(照目標順序、頁面各自帶 `pageLevel`),嚴禁只丟想動的那幾個;若該本含節群組,筆記本直屬子元素是 `one:Section` 與 `one:SectionGroup` 的**混合清單**,整批提交須兩種都含。實證範圍:節內頁面與本內節的重排有社群實例;**最上層筆記本清單的排序未驗證,不納入**;**跨節搬頁(`move_page`)的可靠性需 VM 實機驗證後才轉正**。結構性變更(重排/搬移/改名)的工具描述應註明「建議先克隆備份(copy_section),且 Claude 應先提案經使用者確認再批次套用」。**但「把整份清單交給 LLM」是人因懸崖**(實測:46 頁的 section,模型寧可去寫外部暫存檔輔助排序,撞到唯讀沙箱而中斷)——故移**單一**頁的常見需求由 `reposition_page` 承接:呼叫端只給 page_id + after_page_id,service 在 seam 內讀整層、用 `addnext` 原地搬一個元素、靠 node-ID 守恆保證「完整清單」紀律不破(與 `move_page` 同套路)。整批多頁重排或設多頁 `pageLevel` 才用 `restructure_section`。
 - **目前檢視位置(`Windows` 介面):** `Application.Windows.CurrentWindow` 取作用中視窗,其 `CurrentPageId / CurrentSectionId / CurrentSectionGroupId / CurrentNotebookId` 即使用者目前停留的位置;`get_current_context` 以此實作,並用範圍化 `GetHierarchy` 把 ID 解析成名稱回報。限制:**無開啟視窗時取不到**(回報明確錯誤,勿猜);多視窗以作用中視窗為準;**頁內游標位置/選取文字無 API 可取**,粒度止於「頁」;工具描述應提醒 Claude 動作前先回報「你目前在 X 頁」供使用者確認(避免使用者已切頁的時間差)。
 - 錯誤處理:對 `RPC_E_SERVERCALL_RETRYLATER`(0x8001010A,OneNote 忙碌/同步中)做重試 + 退避。
 - OneNote XML schema:核心元素 `one:Page / one:Outline / one:OEChildren / one:OE / one:T`(文字)、`one:Table/Row/Cell`、`one:Image`。注意 `one:` namespace 前綴。
