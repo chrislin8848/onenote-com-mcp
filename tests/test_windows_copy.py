@@ -196,6 +196,8 @@ def test_copy_page_preserves_subpage_level(backend, fixture_pages, temp_section)
 
 def test_copy_section_preserves_order_levels_and_decollides_name(backend, notebook_id):
     source = _find(read.list_sections(backend, notebook_id), TEST_SECTION)
+    if source is None:
+        pytest.skip(f"{TEST_SECTION!r} section not found")
     src_pages = read.list_pages(backend, source["id"])
 
     new_section_id = copy.transfer_section(backend, source["id"], notebook_id).section_id

@@ -306,16 +306,111 @@ def _replace_oe_text(oe: etree._Element, paragraph: dict[str, Any]) -> None:
         oe.set("alignment", paragraph["alignment"])
 
 
-def _append_table_rows(table: etree._Element, rows: list[list[Any]]) -> None:
-    n_cols = len(table.findall(f"{qn('Columns')}/{qn('Column')}"))
+def _table_columns_el(table: etree._Element) -> etree._Element:
+    columns = table.find(qn("Columns"))
+    if columns is None:
+        raise ValueError("the target table has no one:Columns element")
+    return columns
+
+
+def _renumber_columns(columns: etree._Element) -> None:
+    for i, col in enumerate(columns.findall(qn("Column"))):
+        col.set("index", str(i))
+
+
+def _empty_cell() -> etree._Element:
+    """A minimal valid one:Cell (OEChildren > OE > empty T) — an empty <one:Cell/> is rejected."""
+    cell = etree.Element(qn("Cell"))
+    etree.SubElement(cell, qn("OEChildren")).append(make_text_oe([]))
+    return cell
+
+
+def _insert_table_rows(table: etree._Element, rows: list[list[Any]], at_index: int | None) -> None:
+    """Insert rows at a 0-based position; ``at_index=None`` appends at the end."""
+    n_cols = len(_table_columns_el(table).findall(qn("Column")))
     widest = max(len(r) for r in rows)
     if widest > n_cols:
         raise ValueError(
             f"a row has {widest} cells but the table has {n_cols} columns — "
-            "adding columns to an existing table is not supported"
+            "add columns first (modify_table operation='add_columns')"
         )
-    for row in rows:
-        table.append(make_table_row(row, n_cols))
+    existing = table.findall(qn("Row"))
+    n_rows = len(existing)
+    if at_index is None:
+        at_index = n_rows
+    if not (0 <= at_index <= n_rows):
+        raise ValueError(f"at_index {at_index} is out of range 0..{n_rows}")
+    new_rows = [make_table_row(row, n_cols) for row in rows]
+    if at_index < n_rows:
+        for nr in new_rows:
+            existing[at_index].addprevious(nr)
+    else:
+        for nr in new_rows:
+            table.append(nr)
+
+
+def _add_table_columns(
+    table: etree._Element, at_index: int | None, count: int, width: float | None
+) -> None:
+    """Insert ``count`` empty columns at a 0-based position (None = append at the end). Adds an
+    empty cell to every row at the same position so the table stays rectangular."""
+    if count < 1:
+        raise ValueError("count must be >= 1")
+    columns = _table_columns_el(table)
+    cols = columns.findall(qn("Column"))
+    n_cols = len(cols)
+    if at_index is None:
+        at_index = n_cols
+    if not (0 <= at_index <= n_cols):
+        raise ValueError(f"at_index {at_index} is out of range 0..{n_cols}")
+    if width is None:
+        last = cols[-1].get("width") if cols else None
+        width = float(last) if last else 120.0
+    for i in range(count):
+        col = etree.Element(qn("Column"))
+        col.set("width", str(float(width)))
+        columns.insert(at_index + i, col)
+    _renumber_columns(columns)
+    for row in table.findall(qn("Row")):
+        for i in range(count):
+            row.insert(at_index + i, _empty_cell())
+
+
+def _delete_table_rows(table: etree._Element, indices: list[int]) -> None:
+    rows = table.findall(qn("Row"))
+    n = len(rows)
+    bad = sorted({i for i in indices if not (0 <= i < n)})
+    if bad:
+        raise ValueError(f"row index(es) {bad} out of range 0..{n - 1}")
+    targets = sorted(set(indices))
+    if len(targets) >= n:
+        raise ValueError(
+            "that would delete every row — delete the whole table with delete_page_content instead"
+        )
+    for i in reversed(targets):
+        table.remove(rows[i])
+
+
+def _delete_table_columns(table: etree._Element, indices: list[int]) -> None:
+    columns = _table_columns_el(table)
+    cols = columns.findall(qn("Column"))
+    n = len(cols)
+    bad = sorted({i for i in indices if not (0 <= i < n)})
+    if bad:
+        raise ValueError(f"column index(es) {bad} out of range 0..{n - 1}")
+    targets = sorted(set(indices))
+    if len(targets) >= n:
+        raise ValueError(
+            "that would delete every column — delete the whole table with delete_page_content "
+            "instead"
+        )
+    for i in reversed(targets):
+        columns.remove(cols[i])
+        for row in table.findall(qn("Row")):
+            cells = row.findall(qn("Cell"))
+            if i < len(cells):
+                row.remove(cells[i])
+    _renumber_columns(columns)
 
 
 # --- Composable mutators + the facades the MCP write tools delegate to ---------------
@@ -403,23 +498,25 @@ def add_table(
     target_object_id: str = "",
     force: bool = False,
 ) -> None:
-    """No target / an outline target → append a NEW one:Table (wrapped in its own one:OE).
-    Target = an existing one:Table objectID → append ``rows`` to that table in place."""
+    """Create a NEW one:Table (wrapped in its own one:OE). No target → the page's last outline
+    (created if none); an outline objectID → that outline. To change an EXISTING table's shape
+    (add/insert rows, add columns, delete rows/columns) use ``modify_table`` instead."""
     if not rows:
         raise ValueError("rows is empty")
 
     def mutate(tree: etree._Element) -> None:
-        outline = None
         if target_object_id:
             target = _find_content_object(tree, target_object_id)
             kind = local_name(target.tag)
             if kind == "Table":
-                _append_table_rows(target, rows)
-                return
+                raise ValueError(
+                    f"create_table target {target_object_id!r} is an existing table — "
+                    "create_table only makes NEW tables; use modify_table to add rows/columns"
+                )
             if kind != "Outline":
                 raise ValueError(
                     f"create_table target {target_object_id!r} is a one:{kind} — it must be "
-                    "an outline (new table) or an existing table (append rows)"
+                    "an outline objectID (or omitted to use the page's last outline)"
                 )
             outline = target
         else:
@@ -427,6 +524,64 @@ def add_table(
         oe = etree.Element(qn("OE"))
         oe.append(make_table(rows, borders_visible, has_header_row, col_widths))
         _outline_children(outline).append(oe)
+
+    apply_page_edit(backend, page_id, mutate, force=force)
+
+
+_TABLE_OPS = ("add_columns", "insert_rows", "delete_columns", "delete_rows")
+TableOp = Literal["add_columns", "insert_rows", "delete_columns", "delete_rows"]
+
+
+def modify_table(
+    backend: OneNoteBackend,
+    page_id: str,
+    table_object_id: str,
+    operation: TableOp,
+    *,
+    rows: list[list[Any]] | None = None,
+    indices: list[int] | None = None,
+    at_index: int | None = None,
+    count: int = 1,
+    width: float | None = None,
+    force: bool = False,
+) -> None:
+    """Change an EXISTING table's shape in place (its objectID + every cell's identity are kept).
+
+    operation:
+      * ``insert_rows``  — insert ``rows`` (cell content, same shape as create_table) at the
+        0-based ``at_index``; omit ``at_index`` to append at the end.
+      * ``add_columns``  — insert ``count`` empty columns at ``at_index`` (omit = append at the
+        end); ``width`` defaults to the last column's. Every row gets an empty cell so the table
+        stays rectangular. Fill the new cells afterwards with update_page_content (replace).
+      * ``delete_rows``    — remove the rows at ``indices`` (0-based). DESTRUCTIVE.
+      * ``delete_columns`` — remove the columns at ``indices`` (0-based) and the matching cell in
+        every row. DESTRUCTIVE.
+    Row/column indices match get_page's table layout. Deleting every row/column is refused
+    (delete the whole table with delete_page_content instead)."""
+    if operation not in _TABLE_OPS:
+        raise ValueError(f"operation must be one of {_TABLE_OPS}, got {operation!r}")
+    if not table_object_id:
+        raise ValueError("table_object_id is required (a one:Table objectID from get_page)")
+    if operation == "insert_rows" and not rows:
+        raise ValueError("insert_rows requires non-empty rows")
+    if operation in ("delete_rows", "delete_columns") and not indices:
+        raise ValueError(f"{operation} requires non-empty indices")
+
+    def mutate(tree: etree._Element) -> None:
+        table = _find_content_object(tree, table_object_id)
+        if local_name(table.tag) != "Table":
+            raise ValueError(
+                f"target {table_object_id!r} is a one:{local_name(table.tag)}, not a table — "
+                "pass a table objectID from get_page"
+            )
+        if operation == "insert_rows":
+            _insert_table_rows(table, rows, at_index)
+        elif operation == "add_columns":
+            _add_table_columns(table, at_index, count, width)
+        elif operation == "delete_rows":
+            _delete_table_rows(table, indices)
+        else:  # delete_columns
+            _delete_table_columns(table, indices)
 
     apply_page_edit(backend, page_id, mutate, force=force)
 

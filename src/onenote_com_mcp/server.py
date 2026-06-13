@@ -251,15 +251,16 @@ def create_table(
     target_object_id: str = "",
     force: bool = False,
 ) -> str:
-    """Create a NEW table on a page, or append rows to an existing table. Use this for table
-    STRUCTURE (new table, more rows). To edit the TEXT already in a table cell, use
-    update_page_content ("replace" on the cell's paragraph objectID) — not this.
+    """Create a NEW table on a page. Use this ONLY to make a brand-new table. To change an
+    EXISTING table's shape (add/insert rows, add columns, delete rows/columns) use modify_table;
+    to edit the TEXT already in a cell use update_page_content ("replace" on the cell's paragraph
+    objectID).
 
     rows: cells are plain strings or dicts {"text" | "runs", "style", "shading_color",
-    "alignment"} (short rows are padded). target_object_id: empty → new table at the end of
-    the page's last outline; an outline objectID → new table in that outline; an existing
-    table's objectID (from get_page) → append the rows to that table (row width must fit its
-    columns). Concurrency-guarded; force=True only after explicit user confirmation."""
+    "alignment"} (short rows are padded). target_object_id: empty → new table at the end of the
+    page's last outline; an outline objectID → new table in that outline. (Passing an existing
+    table's objectID is an error — use modify_table.) Concurrency-guarded; force=True only after
+    explicit user confirmation."""
     page_edit.add_table(
         get_backend(),
         page_id,
@@ -270,6 +271,50 @@ def create_table(
         force=force,
     )
     return f"table added to {page_id}"
+
+
+@logged_tool()
+def modify_table(
+    page_id: str,
+    table_object_id: str,
+    operation: Literal["add_columns", "insert_rows", "delete_columns", "delete_rows"],
+    rows: list[list[str | dict]] | None = None,
+    indices: list[int] | None = None,
+    at_index: int | None = None,
+    count: int = 1,
+    width: float | None = None,
+    force: bool = False,
+) -> str:
+    """Change an EXISTING table's SHAPE in place (row/column count) — the table's objectID and
+    every untouched cell's content/identity are preserved. Pair with create_table (which only
+    makes NEW tables) and update_page_content ("replace" to edit a cell's TEXT). Get
+    table_object_id and the row/column layout from get_page first.
+
+    operation (row and column edits are symmetric):
+      "insert_rows"    — insert rows at 0-based at_index (omit at_index → append at the end).
+                         rows = cell content, same shape as create_table.
+      "add_columns"    — insert count empty columns at 0-based at_index (omit → append at the
+                         end); width defaults to the last column's. Every row gains an empty cell.
+                         Fill the new cells afterwards with update_page_content ("replace").
+      "delete_rows"    — DESTRUCTIVE: remove the rows at indices (0-based list).
+      "delete_columns" — DESTRUCTIVE: remove the columns at indices (0-based) plus the matching
+                         cell in every row.
+    Deleting every row/column is refused — remove the whole table with delete_page_content.
+    Concurrency-guarded; force=True only after explicit user confirmation. DESTRUCTIVE
+    operations should be proposed and confirmed with the user first."""
+    page_edit.modify_table(
+        get_backend(),
+        page_id,
+        table_object_id,
+        operation,
+        rows=rows,
+        indices=indices,
+        at_index=at_index,
+        count=count,
+        width=width,
+        force=force,
+    )
+    return f"table {table_object_id} modified ({operation}) on {page_id}"
 
 
 @logged_tool()

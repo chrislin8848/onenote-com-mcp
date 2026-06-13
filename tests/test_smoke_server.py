@@ -28,6 +28,7 @@ EXPECTED_TOOLS = {
     "create_page",
     "update_page_content",
     "create_table",
+    "modify_table",
     "insert_image",
     "copy_page",
     "copy_section",
@@ -38,7 +39,7 @@ EXPECTED_TOOLS = {
     "delete_node",
     "delete_page_content",
 }
-DESTRUCTIVE_TOOLS = {"delete_node", "delete_page_content"}
+DESTRUCTIVE_TOOLS = {"delete_node", "delete_page_content", "modify_table"}
 
 
 @pytest.fixture(scope="module")
@@ -46,9 +47,9 @@ def tools():
     return {t.name: t for t in asyncio.run(mcp.list_tools())}
 
 
-def test_catalog_is_the_22_expected_tools(tools):
+def test_catalog_is_the_23_expected_tools(tools):
     assert set(tools) == EXPECTED_TOOLS
-    assert len(tools) == 22
+    assert len(tools) == 23
 
 
 def test_every_tool_has_a_real_description(tools):

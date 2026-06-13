@@ -224,31 +224,137 @@ def test_add_table_appends_new_table_in_its_own_oe(be, mixed):
     assert len(rows[1].findall(qn("Cell"))) == 2, "short rows are padded"
 
 
-def test_add_table_appends_rows_to_existing_table(be, table_page):
+def test_create_table_rejects_an_existing_table_target(be, table_page):
+    # shape edits on an existing table go through modify_table now, not create_table
+    table = next(table_page.iter(qn("Table")))
+    with pytest.raises(ValueError, match="modify_table"):
+        page_edit.add_table(
+            be, table_page.get("ID"), [["新左", "新右"]], target_object_id=table.get("objectID")
+        )
+    assert not [c for c in be.calls if c.method == "update_page_content"], "no write on failure"
+
+
+# --- modify_table: structural edits on an existing table ------------------------------
+
+
+def test_modify_table_insert_rows_appends_when_at_index_omitted(be, table_page):
     table = next(table_page.iter(qn("Table")))
     rows_before = table.findall(qn("Row"))
     first_row_before = etree.tostring(rows_before[0], with_tail=False)
 
-    page_edit.add_table(
-        be, table_page.get("ID"), [["新左", "新右"]], target_object_id=table.get("objectID")
+    page_edit.modify_table(
+        be, table_page.get("ID"), table.get("objectID"), "insert_rows", rows=[["新左", "新右"]]
+    )
+    _, sent = _sent_payload(be)
+    sent_rows = next(sent.iter(qn("Table"))).findall(qn("Row"))
+    assert len(sent_rows) == len(rows_before) + 1
+    assert etree.tostring(sent_rows[0], with_tail=False) == first_row_before
+    new_cell = sent_rows[-1].findall(qn("Cell"))[0]
+    assert "新左" in _cdata(new_cell.find(f"{qn('OEChildren')}/{qn('OE')}"))
+
+
+def test_modify_table_insert_rows_at_position(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    n_before = len(table.findall(qn("Row")))
+
+    page_edit.modify_table(
+        be,
+        table_page.get("ID"),
+        table.get("objectID"),
+        "insert_rows",
+        rows=[["X", "Y"]],
+        at_index=1,
+    )
+    _, sent = _sent_payload(be)
+    sent_rows = next(sent.iter(qn("Table"))).findall(qn("Row"))
+    assert len(sent_rows) == n_before + 1
+    assert "X" in _cdata(sent_rows[1].findall(qn("Cell"))[0].find(f"{qn('OEChildren')}/{qn('OE')}"))
+
+
+def test_modify_table_insert_rows_rejects_rows_wider_than_table(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    with pytest.raises(ValueError, match="columns"):
+        page_edit.modify_table(
+            be, table_page.get("ID"), table.get("objectID"), "insert_rows", rows=[["a", "b", "c"]]
+        )
+    assert not [c for c in be.calls if c.method == "update_page_content"]
+
+
+def test_modify_table_add_columns_appends_column_to_every_row(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    n_cols = len(table.findall(f"{qn('Columns')}/{qn('Column')}"))
+    n_rows = len(table.findall(qn("Row")))
+
+    page_edit.modify_table(be, table_page.get("ID"), table.get("objectID"), "add_columns")
+    _, sent = _sent_payload(be)
+    sent_table = next(sent.iter(qn("Table")))
+    cols = sent_table.findall(f"{qn('Columns')}/{qn('Column')}")
+    assert len(cols) == n_cols + 1
+    assert [c.get("index") for c in cols] == [str(i) for i in range(n_cols + 1)], "re-indexed"
+    for row in sent_table.findall(qn("Row")):
+        assert len(row.findall(qn("Cell"))) == n_cols + 1  # every row stays rectangular
+    # the new cell is a valid, empty cell (OEChildren > OE), never an empty <Cell/>
+    last_cell = sent_table.findall(qn("Row"))[0].findall(qn("Cell"))[-1]
+    assert last_cell.find(f"{qn('OEChildren')}/{qn('OE')}") is not None
+    assert n_rows == len(sent_table.findall(qn("Row")))  # add_columns doesn't change row count
+
+
+def test_modify_table_add_columns_at_position(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    n_cols = len(table.findall(f"{qn('Columns')}/{qn('Column')}"))
+    page_edit.modify_table(
+        be, table_page.get("ID"), table.get("objectID"), "add_columns", at_index=0, count=2
+    )
+    _, sent = _sent_payload(be)
+    cols = next(sent.iter(qn("Table"))).findall(f"{qn('Columns')}/{qn('Column')}")
+    assert len(cols) == n_cols + 2
+
+
+def test_modify_table_delete_rows(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    rows_before = table.findall(qn("Row"))
+    kept = etree.tostring(rows_before[-1], with_tail=False)
+
+    page_edit.modify_table(
+        be, table_page.get("ID"), table.get("objectID"), "delete_rows", indices=[0]
+    )
+    _, sent = _sent_payload(be)
+    sent_rows = next(sent.iter(qn("Table"))).findall(qn("Row"))
+    assert len(sent_rows) == len(rows_before) - 1
+    assert etree.tostring(sent_rows[-1], with_tail=False) == kept, "untouched row is byte-identical"
+
+
+def test_modify_table_delete_columns_drops_column_and_each_rows_cell(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    n_cols = len(table.findall(f"{qn('Columns')}/{qn('Column')}"))
+
+    page_edit.modify_table(
+        be, table_page.get("ID"), table.get("objectID"), "delete_columns", indices=[0]
     )
     _, sent = _sent_payload(be)
     sent_table = next(sent.iter(qn("Table")))
-    sent_rows = sent_table.findall(qn("Row"))
-    assert len(sent_rows) == len(rows_before) + 1
-    assert len(sent_table.findall(f"{qn('Columns')}/{qn('Column')}")) == 2, "no new columns"
-    assert etree.tostring(sent_rows[0], with_tail=False) == first_row_before
-    new_cells = sent_rows[-1].findall(qn("Cell"))
-    assert "新左" in _cdata(new_cells[0].find(f"{qn('OEChildren')}/{qn('OE')}"))
+    cols = sent_table.findall(f"{qn('Columns')}/{qn('Column')}")
+    assert len(cols) == n_cols - 1
+    assert [c.get("index") for c in cols] == [str(i) for i in range(n_cols - 1)], "re-indexed"
+    for row in sent_table.findall(qn("Row")):
+        assert len(row.findall(qn("Cell"))) == n_cols - 1
 
 
-def test_add_table_rejects_rows_wider_than_existing_table(be, table_page):
+def test_modify_table_refuses_deleting_every_row(be, table_page):
     table = next(table_page.iter(qn("Table")))
-    with pytest.raises(ValueError, match="columns"):
-        page_edit.add_table(
-            be, table_page.get("ID"), [["a", "b", "c"]], target_object_id=table.get("objectID")
+    n = len(table.findall(qn("Row")))
+    with pytest.raises(ValueError, match="every row"):
+        page_edit.modify_table(
+            be, table_page.get("ID"), table.get("objectID"), "delete_rows", indices=list(range(n))
         )
-    assert not [c for c in be.calls if c.method == "update_page_content"], "no write on failure"
+    assert not [c for c in be.calls if c.method == "update_page_content"]
+
+
+def test_modify_table_rejects_non_table_target(be, mixed):
+    # a paragraph OE objectID is not a table
+    oe = next(o for o in mixed.iter(qn("OE")) if o.get("objectID"))
+    with pytest.raises(ValueError, match="not a table"):
+        page_edit.modify_table(be, mixed.get("ID"), oe.get("objectID"), "delete_rows", indices=[0])
 
 
 # --- images ---------------------------------------------------------------------------

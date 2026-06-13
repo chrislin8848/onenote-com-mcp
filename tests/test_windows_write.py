@@ -274,7 +274,8 @@ def test_table_create_append_rows_and_cell_edit(backend, temp_section):
     assert t1["has_header_row"] is True
     assert [[c["text"] for c in row] for row in t1["rows"]] == [["品名", "數量"], ["蘋果", "3"]]
 
-    page_edit.add_table(backend, page_id, [["香蕉", "5"]], target_object_id=t1["object_id"])
+    # append a row via modify_table (replaces the old create_table append-rows path)
+    page_edit.modify_table(backend, page_id, t1["object_id"], "insert_rows", rows=[["香蕉", "5"]])
     t2 = table()
     assert [[c["text"] for c in row] for row in t2["rows"]] == [
         ["品名", "數量"],
@@ -290,6 +291,50 @@ def test_table_create_append_rows_and_cell_edit(backend, temp_section):
         ["蘋果", "30"],
         ["香蕉", "5"],
     ], "one cell edited; every other cell untouched"
+
+
+def test_modify_table_shape_roundtrips(backend, temp_section):
+    page_id = create.create_page(backend, temp_section, "表格形狀頁")
+    page_edit.add_table(backend, page_id, [["a", "b"], ["c", "d"], ["e", "f"]])
+
+    def table():
+        return next(
+            b
+            for o in read.get_page(backend, page_id)["outlines"]
+            for b in o["blocks"]
+            if b["type"] == "table"
+        )
+
+    tid = table()["object_id"]
+
+    # insert a row at position 1
+    page_edit.modify_table(backend, page_id, tid, "insert_rows", rows=[["x", "y"]], at_index=1)
+    assert [[c["text"] for c in r] for r in table()["rows"]] == [
+        ["a", "b"],
+        ["x", "y"],
+        ["c", "d"],
+        ["e", "f"],
+    ]
+
+    # add a column at the end → every row gains an (empty) cell, table stays rectangular
+    page_edit.modify_table(backend, page_id, tid, "add_columns")
+    t = table()
+    assert all(len(r) == 3 for r in t["rows"]), "every row has 3 cells after add_columns"
+    assert [c["text"] for c in t["rows"][0]] == ["a", "b", ""], "new cell is empty"
+
+    # delete the middle column (index 1) → drops that column from every row
+    page_edit.modify_table(backend, page_id, tid, "delete_columns", indices=[1])
+    t = table()
+    assert all(len(r) == 2 for r in t["rows"])
+    assert [c["text"] for c in t["rows"][0]] == ["a", ""]
+
+    # delete the first row
+    page_edit.modify_table(backend, page_id, tid, "delete_rows", indices=[0])
+    assert [[c["text"] for c in r] for r in table()["rows"]] == [
+        ["x", ""],
+        ["c", ""],
+        ["e", ""],
+    ]
 
 
 # --- 6. images ---------------------------------------------------------------------------
