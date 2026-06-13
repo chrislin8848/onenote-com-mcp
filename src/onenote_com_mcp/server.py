@@ -44,9 +44,10 @@ tables, images), get_page_images (image pixels), or get_page_files_info (attachm
 objects). Picking the right tool but omitting the objectID it needs is as wrong as picking the \
 wrong tool.
 
-Destructive and structural operations (delete_node, delete_page_content, force overwrites, \
-restructure_section, reorder_sections, move_page, rename_node) are propose-then-confirm: tell \
-the user exactly what will change and get their go-ahead before calling. For risky restructures, \
+Destructive and structural operations (delete_node, delete_page_content, modify_table's \
+delete_rows/delete_columns, force overwrites, restructure_section, reorder_sections, move_page, \
+rename_node) are propose-then-confirm: tell the user exactly what will change and get their \
+go-ahead before calling. For risky restructures, \
 suggest a clone backup with copy_section first.
 
 Benchmark workflow for "copy these pages and change the dates" (faithful copy, then edit the \
@@ -214,9 +215,11 @@ def update_page_content(
     force: bool = False,
 ) -> str:
     """Edit a page's TEXT/paragraphs surgically — untouched paragraphs keep their formatting
-    verbatim. Use this to add, insert, or rewrite text and styled paragraphs, and to edit a
-    table CELL's text. NOT for creating a table (use create_table) or adding an image (use
-    insert_image). To remove a whole outline/image/attachment, use delete_page_content.
+    verbatim. Use this to add, insert, or rewrite text and styled paragraphs (size/font/color/
+    highlight/hyperlink), and to edit a table CELL's text. NOT for: creating a table (use
+    create_table); changing a table's row/column COUNT, i.e. adding/deleting rows or columns
+    (use modify_table); adding an image (use insert_image); removing a whole outline/image/
+    attachment (use delete_page_content).
 
     mode (per value):
       "append"        — add paragraphs at the end of an outline; target_object_id optionally
@@ -474,8 +477,9 @@ def delete_page_content(page_id: str, object_id: str, force: bool = False) -> st
     object_id comes from get_page / get_page_images / get_page_files_info. This removes a
     PAGE-LEVEL object only; it does NOT delete a whole page/section (use delete_node) and
     canNOT remove inline content (a single paragraph, or a table/image/attachment inside an
-    outline) — edit that with update_page_content instead. Concurrency-guarded; force=True
-    only after explicit user confirmation. Confirm with the user before applying."""
+    outline) — edit that with update_page_content, or to drop a table ROW/COLUMN use
+    modify_table (delete_rows / delete_columns). Concurrency-guarded; force=True only after
+    explicit user confirmation. Confirm with the user before applying."""
     delete.delete_page_content(get_backend(), page_id, object_id, force=force)
     return f"deleted content object {object_id} from {page_id}"
 

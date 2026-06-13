@@ -91,6 +91,24 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 
 ## Status (2026-06-13)
 
+**v1.0.3 — table-shape editing + hyperlinks (23-tool catalog).** Two text/table-editing
+capabilities added inside the existing seams + VM-validated:
+- **`modify_table`** (NEW tool, #23): change an EXISTING table's shape in place — `insert_rows`
+  (at a position, or append when at_index omitted), `add_columns` (empty columns at a position,
+  every row kept rectangular), `delete_rows`, `delete_columns` (both DESTRUCTIVE). Row/column ops
+  are symmetric. `create_table` is now create-ONLY (its old append-rows branch moved here). Nested
+  tables (table-in-cell) are addressed by the inner table's own objectID — read + modify both
+  recurse/scope correctly (Tier-1 `test_page_edit_content.py`); creating a NEW nested table is
+  still unsupported. Built in `service/page_edit.py`, `remove_content_element` keeps a cell valid
+  (never an empty `<one:Cell/>`).
+- **Hyperlinks**: text runs carry an optional `link` (href). `xmllayer/spans.py` parses/builds
+  `<a href="…">…</a>` inside one:T CDATA (VM ground truth: the 表格頁 fixture). `get_page` now
+  reports each run's `link` — FIXING a real fidelity gap (a link's URL was dropped on read, so a
+  replace edit silently stripped it). `update_page_content` content may set `link`.
+- §4 contrastive borders re-balanced across create_table / modify_table / update_page_content /
+  delete_page_content so a naive LLM disambiguates; modify_table's deletes added to the
+  propose-then-confirm list in `_SERVER_INSTRUCTIONS`. Tier-1 237 + Tier-2 46 green.
+
 **Post-1.0 (IN PROGRESS) — see [docs/HANDOFF-copy-sync.md](docs/HANDOFF-copy-sync.md):** the
 long-standing "OCR images can't be copied" issue was RE-DIAGNOSED as OneDrive files-on-demand
 UNDER-SYNC (NOT OCR, NOT a COM limitation — a fully-synced machine copies fine). `copy_page`/
