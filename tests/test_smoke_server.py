@@ -31,6 +31,8 @@ EXPECTED_TOOLS = {
     "modify_table",
     "insert_image",
     "copy_page",
+    "copy_pages",
+    "copy_page_subtree",
     "copy_section",
     "restructure_section",
     "reposition_page",
@@ -54,9 +56,9 @@ def tools():
     return {t.name: t for t in asyncio.run(mcp.list_tools())}
 
 
-def test_catalog_is_the_25_expected_tools(tools):
+def test_catalog_is_the_27_expected_tools(tools):
     assert set(tools) == EXPECTED_TOOLS
-    assert len(tools) == 25
+    assert len(tools) == 27
 
 
 def test_every_tool_has_a_real_description(tools):
@@ -85,6 +87,15 @@ def test_contrastive_borders_present(tools):
     assert "restructure_section" in tools["reposition_page"].description
     # copy_page can place the copy directly (after_page_id) — the stuck-workflow fix
     assert "after_page_id" in tools["copy_page"].inputSchema["properties"]
+    # the single-vs-many-vs-subtree copy border: copy_page names the multi-page tools, and the
+    # multi-page tools name each other (so a "copy these pages / this page + subpages" ask routes
+    # away from a scatter-prone string of copy_page calls)
+    assert "copy_pages" in tools["copy_page"].description
+    assert "copy_page_subtree" in tools["copy_page"].description
+    assert "copy_page_subtree" in tools["copy_pages"].description
+    assert "copy_pages" in tools["copy_page_subtree"].description
+    assert "after_page_id" in tools["copy_pages"].inputSchema["properties"]
+    assert "after_page_id" in tools["copy_page_subtree"].inputSchema["properties"]
 
 
 def test_update_mode_is_a_per_value_enum(tools):

@@ -257,3 +257,78 @@ def test_copy_section_into_section_group_live(backend, notebook_id):
         ]
     finally:
         backend.delete_hierarchy(new_id, permanent=True)
+
+
+# --- copy_page_subtree / copy_pages: block copy of a page + its subpages (v1.0.6) --------
+# Closes the real failure "copy ●ITIN and its subpages below ●Local" — a string of single
+# copy_page calls scattered each copy below its own source. The fix copies the whole subtree as
+# ONE contiguous block, in order, with each page's subpage level preserved. The live questions
+# this answers: (1) does the positional subtree model match what the live hierarchy reports, and
+# (2) does the block actually land contiguous + level-correct after a chosen anchor over real COM.
+
+
+def _section_pages(backend, notebook_id, section_name):
+    sec = _find(read.list_sections(backend, notebook_id), section_name)
+    if sec is None:
+        return None, None
+    return sec["id"], read.list_pages(backend, sec["id"])
+
+
+def _positional_subtree(pages, page_id):
+    """The page + the consecutive following pages at a DEEPER level (OneNote's subpage model),
+    computed straight from a live list_pages so the expectation tracks the VM, not a hard-code."""
+    ids = [p["id"] for p in pages]
+    levels = [p["page_level"] for p in pages]
+    start = ids.index(page_id)
+    base = levels[start]
+    out = [ids[start]]
+    for j in range(start + 1, len(ids)):
+        if levels[j] > base:
+            out.append(ids[j])
+        else:
+            break
+    return out
+
+
+def test_subtree_page_ids_matches_positional_rule_live(backend, notebook_id):
+    sec_id, pages = _section_pages(backend, notebook_id, TEST_SECTION)
+    if sec_id is None:
+        pytest.skip(f"{TEST_SECTION!r} section not found")
+    multi = next((p for p in pages if p["name"] == "單節多頁"), None)
+    if multi is None:
+        pytest.skip("單節多頁 not present on this VM")
+    assert copy.subtree_page_ids(backend, sec_id, multi["id"]) == _positional_subtree(
+        pages, multi["id"]
+    )
+
+
+def test_copy_subtree_lands_as_one_ordered_block_with_levels(backend, notebook_id, temp_section):
+    sec_id, pages = _section_pages(backend, notebook_id, TEST_SECTION)
+    if sec_id is None:
+        pytest.skip(f"{TEST_SECTION!r} section not found")
+    multi = next((p for p in pages if p["name"] == "單節多頁"), None)
+    if multi is None:
+        pytest.skip("單節多頁 not present on this VM")
+    sub_ids = copy.subtree_page_ids(backend, sec_id, multi["id"])
+    if len(sub_ids) < 2:
+        pytest.skip("單節多頁 has no subpages on this VM — nothing to block-copy")
+    src_level = {p["id"]: p["page_level"] for p in pages}
+
+    # seed the throwaway section with two anchors so "block right after the FIRST" is observable
+    anchor = create.create_page(backend, temp_section, "錨A")
+    tail = create.create_page(backend, temp_section, "尾B")
+
+    # copies land at the section END first: [anchor, tail, *copies]
+    result = copy.copy_pages(backend, sub_ids, temp_section)
+    assert len(result.page_ids) == len(sub_ids)
+    hierarchy_edit.reposition_pages(backend, temp_section, result.page_ids, after_page_id=anchor)
+
+    landed = read.list_pages(backend, temp_section)
+    order = [p["id"] for p in landed]
+    assert order == [anchor, *result.page_ids, tail], (
+        "the copied subtree is ONE contiguous block right after the anchor, in source order"
+    )
+    copied_levels = [p["page_level"] for p in landed if p["id"] in set(result.page_ids)]
+    assert copied_levels == [src_level[sid] for sid in sub_ids], (
+        "each copied page keeps its source subpage level (the subtree nesting survives)"
+    )

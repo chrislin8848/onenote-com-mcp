@@ -214,6 +214,55 @@ def reposition_page(
     apply_hierarchy_restructure(backend, section_id, HierarchyScope.hsPages, mutate)
 
 
+def reposition_pages(
+    backend: OneNoteBackend,
+    section_id: str,
+    page_ids: list[str],
+    after_page_id: str = "",
+) -> None:
+    """Move SEVERAL pages into one CONTIGUOUS block within their section, in the given order.
+
+    The block of ``page_ids`` (in that exact order) is placed right after ``after_page_id``
+    (empty → the TOP of the section); the rest of the section keeps its relative order. This is
+    the multi-page sibling of ``reposition_page`` — copy_pages / copy_page_subtree clone several
+    pages (they land scattered at the section end) and then call this ONCE to gather them into a
+    block at the destination. pageLevels are NOT touched (the copies already carry them), only
+    order. Same SPEC §5 discipline: the whole page list rides in one batch via the seam.
+
+    Raises ``NodeNotFoundError`` if a page (or a given ``after_page_id``) is not a page directly
+    in this section — the copy_pages facade swallows the anchor case for an IMPLICIT default
+    (cross-section: there is no "below the original") but re-raises an EXPLICITLY named anchor."""
+    if not page_ids:
+        raise ValueError("page_ids is empty")
+    block = list(page_ids)
+    if len(block) != len(set(block)):
+        raise ValueError("page_ids contains duplicates")
+    if after_page_id and after_page_id in set(block):
+        raise ValueError("after_page_id cannot be one of the pages being moved")
+
+    def mutate(tree: etree._Element) -> None:
+        section = _find_node(tree, section_id)
+        all_ids = [p.get("ID") for p in section.findall(qn("Page"))]
+        block_set = set(block)
+        not_here = [pid for pid in block if pid not in all_ids]
+        if not_here:
+            raise NodeNotFoundError(f"pages not directly in section {section_id!r}: {not_here}")
+        rest = [pid for pid in all_ids if pid not in block_set]
+        if not after_page_id:
+            ordered = block + rest
+        else:
+            anchor = _find_node(tree, after_page_id)  # NodeNotFoundError if entirely absent
+            if local_name(anchor.tag) != "Page" or anchor.getparent() is not section:
+                raise ValueError(
+                    f"after_page_id {after_page_id!r} must be a page in section {section_id!r}"
+                )
+            i = rest.index(after_page_id)
+            ordered = rest[: i + 1] + block + rest[i + 1 :]
+        _reorder_children(section, frozenset({"Page"}), ordered, "reposition_pages")
+
+    apply_hierarchy_restructure(backend, section_id, HierarchyScope.hsPages, mutate)
+
+
 def reorder_sections(
     backend: OneNoteBackend, notebook_id: str, ordered_section_ids: list[str]
 ) -> None:

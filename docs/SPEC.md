@@ -160,8 +160,10 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 | `delete_node` | 刪頁/節/節群組/筆記本(層級) | `DeleteHierarchy(objectId)` |
 | `delete_page_content` | 刪**頁層**內容物件(整個大綱/頁層圖片/頁層附件) | `DeletePageContent(pageId, objectId)` |
 | `delete_inline_content` | 刪**大綱內**物件(表格/段落/行內圖片/行內附件);保留同大綱其他段落 | 走編輯 seam:`GetPageContent` → 移除元素並修剪空容器 → `UpdatePageContent`(**非** `DeletePageContent`——COM 對行內 OE 一律拒絕 `0x8004200E`) |
-| `copy_page` | 忠實克隆單頁到目標節;**預設把副本放在來源頁正下方**(同節複製的自然位置),`after_page_id` 可指定放在別頁之後,跨節複製則落在節尾 | 內部 raw-XML 克隆(見 §5「複製/克隆」)+ 預設接 `reposition_page`(錨點=來源頁;跨節時錨點不在目標節→吞掉退回節尾) |
-| `copy_section` | 忠實克隆整節 | 建節 + 逐頁 `copy_page`(保留 pageLevel) |
+| `copy_page` | 忠實克隆**單頁**到目標節;**預設把副本放在來源頁正下方**(同節複製的自然位置),`after_page_id` 可指定放在別頁之後,跨節複製則落在節尾 | 內部 raw-XML 克隆(見 §5「複製/克隆」)+ 預設接 `reposition_page`(錨點=來源頁;跨節時錨點不在目標節→吞掉退回節尾) |
+| `copy_pages` | 忠實克隆**多頁**為**一個連續區塊**(依給定順序、各頁保留 pageLevel)到目標節;`after_page_id` 把整塊放在某頁之後,否則落節尾 | 逐頁 `copy_page`(各落節尾)+ **一次** `reposition_pages` 把整批排成連續區塊到錨點後(node-ID 守恆,whole-batch 紀律由 seam 保證) |
+| `copy_page_subtree` | 忠實克隆**一頁連同其子頁**(其後較深 pageLevel 的連續頁)為一個區塊;**同節預設放在來源子頁樹正下方**(像 copy_page),`after_page_id` 可指定別頁,跨節落節尾 | `subtree_page_ids`(依位置式子頁模型算出清單)→ `copy_pages` |
+| `copy_section` | 忠實克隆**整節** | 建節 + 逐頁 `copy_page`(保留 pageLevel) |
 | `restructure_section` | 同節內**整批**重排**多頁**順序 + 調整 `pageLevel` 階層 | `GetHierarchy` → 重排完整頁清單(每頁帶 `pageLevel`)→ `UpdateHierarchy`(紀律見 §5「層級重排」) |
 | `reposition_page` | 把**一頁**移到同節內某頁之後(空=移到節首)+ 可選設 `pageLevel`;只給 ID,不必交完整清單 | 走同一個 hierarchy seam:`GetHierarchy`(節範圍)→ `addnext`/`addprevious` 原地搬一個元素(node-ID 守恆,whole-batch 紀律由 seam 保證)→ `UpdateHierarchy` |
 | `reorder_sections` | 重排某本內節的順序 | 同上,對 `one:Section` 元素整批重排(僅節/頁有實證;**筆記本層級排序未驗證、不納入**) |
@@ -184,6 +186,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
    - **刪除三角:** `delete_node`(刪整個頁/節/節群組/筆記本節點) vs `delete_page_content`(刪**頁層**物件:整個大綱/頁層圖/頁層附件,頁面保留) vs `delete_inline_content`(刪**大綱內**物件:表格/段落/行內圖/行內附件)。關鍵界線:**整個表格、段落永遠在大綱內,故刪它們一律用 `delete_inline_content`,絕不用 `delete_page_content`**;三者描述互相點名(both-way,guard-tested)。
    - `update_page_content`(加/改文字、樣式、超連結、**單一**儲存格文字) vs `create_table`(建**新**表格) vs `modify_table`(改既有表格:`insert_rows`/`add_columns`/`delete_*` 形狀,或 `set_rows` 一次覆蓋整列/整表內容) vs `insert_image`(插圖)——`update_page_content` 描述須註明「若加的是表格、改的是行列數、或插圖,改用對應工具」;`create_table` 只建新表、`modify_table` 改既有表(形狀或整列內容),兩者互相點名;表格內容替換的分工 = `update_page_content "replace"`(一格)vs `modify_table set_rows`(整列/整表)。
    - `reposition_page`(**同節內**把**一頁**移到某頁之後,只給 ID) vs `restructure_section`(**同節內**重排**多頁** + `pageLevel`,須完整清單) vs `reorder_sections`(**一本內**節順序) vs `move_page`(把頁搬到**別節**) vs `rename_node`(只改名)。關鍵:移**單一**頁用 `reposition_page`(不必交 46 筆清單,避免模型去寫外部暫存檔);`copy_page` / `create_page` **預設**都把新頁放在「自然錨點」正下方——`copy_page` 在**來源頁**之下、`create_page` 在**目前所在頁**(get_current_context)之下,所以「複製這頁」「在這裡建頁」都不必指定位置,`after_page_id` 才是覆蓋;要移**既有**頁才用 `reposition_page`。
+   - **複製粒度四選一:** `copy_page`(**單頁**) vs `copy_pages`(**多頁**明確清單) vs `copy_page_subtree`(**一頁 + 其子頁**,自動算出子頁) vs `copy_section`(**整節**)。關鍵界線:複製**多頁到某位置**時**絕不**重複呼叫 `copy_page`——`copy_page` 預設把每份副本貼在**各自來源頁**之下,會把整組副本打散(real-Claude-Desktop 實測:「把 ●ITIN 及其子頁複製到 ●Local 下方」因此亂放);`copy_pages` / `copy_page_subtree` 把副本排成**一個連續區塊**、一次定位到 `after_page_id` 之後。
    - `get_page`(文字 + 結構化表格) vs `get_page_images`(取圖片二進位供視覺辨識) vs `get_page_files_info`(附件/嵌入物件**中繼資料**,任何型別) vs `get_page_files`(附件**內容**抽取,僅文字類/圖片/PDF)——info 是 files 的前置;非支援型別(docx/xlsx 等)只能取 info,不能取內容。
    - 命名小疙瘩:`restructure_section` 與 `reorder_sections` 的動詞/單複數不一致,若描述尚未對外凍結可考慮統一,降低模型猶豫。
 2. **把程式碼強制不了的行為契約寫進描述文字**(那是唯一落地處):

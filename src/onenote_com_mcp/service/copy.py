@@ -57,6 +57,15 @@ class PageCopyResult:
 
 
 @dataclass
+class PagesCopyResult:
+    page_ids: list[str]  # the copies' IDs in the target section, in copy order
+    file_notes: list[str] = field(default_factory=list)
+    missing_images: int = 0
+    missing_files: int = 0
+    missing_objects: int = 0
+
+
+@dataclass
 class SectionCopyResult:
     section_id: str
     file_notes: list[str] = field(default_factory=list)  # aggregated, prefixed per page
@@ -278,6 +287,68 @@ def transfer_section(
         missing_files=missing_files,
         missing_objects=missing_objects,
     )
+
+
+def copy_pages(
+    backend: OneNoteBackend, page_ids: list[str], target_section_id: str
+) -> PagesCopyResult:
+    """Faithfully copy SEVERAL pages into a section, IN ORDER, returning their new IDs + notes.
+
+    Each page is cloned via ``transfer_page`` (so every copy keeps its own ``pageLevel`` — a
+    subpage stays a subpage). The copies land at the section END in copy order; gathering them
+    into a contiguous block at a chosen position is the caller's job (the server facade chains
+    ``hierarchy_edit.reposition_pages`` once). This is the engine under copy_page_subtree and the
+    copy_pages tool — the fix for "copy these pages as a block somewhere", which a string of
+    single copy_page calls placed unpredictably (each landed below its own source)."""
+    if not page_ids:
+        raise ValueError("page_ids is empty")
+    if len(page_ids) != len(set(page_ids)):
+        raise ValueError("page_ids contains duplicate IDs")
+    new_ids: list[str] = []
+    file_notes: list[str] = []
+    missing_images = missing_files = missing_objects = 0
+    for pid in page_ids:
+        result = transfer_page(backend, pid, target_section_id)
+        new_ids.append(result.page_id)
+        file_notes.extend(result.file_notes)
+        missing_images += result.missing_images
+        missing_files += result.missing_files
+        missing_objects += result.missing_objects
+    return PagesCopyResult(
+        page_ids=new_ids,
+        file_notes=file_notes,
+        missing_images=missing_images,
+        missing_files=missing_files,
+        missing_objects=missing_objects,
+    )
+
+
+def subtree_page_ids(backend: OneNoteBackend, section_id: str, page_id: str) -> list[str]:
+    """The page plus its subpages, in document order: ``page_id`` followed by the consecutive
+    pages whose ``pageLevel`` is DEEPER than it, stopping at the next page at the same-or-shallower
+    level. A page with no subpages (or one that is itself a subpage) returns just ``[page_id]``.
+
+    This is OneNote's positional subpage model — a page "owns" the more-indented pages that
+    follow it until the indentation steps back out. copy_page_subtree uses it to turn "copy this
+    page and its subpages" into the explicit ordered list that ``copy_pages`` clones."""
+    tree = etree.fromstring(
+        backend.get_hierarchy(section_id, HierarchyScope.hsPages).encode("utf-8")
+    )
+    section = _find_node(tree, section_id)
+    pages = section.findall(qn("Page"))
+    ids = [p.get("ID") for p in pages]
+    levels = [int(p.get("pageLevel") or "1") for p in pages]
+    if page_id not in ids:
+        raise NodeNotFoundError(f"page {page_id!r} is not directly in section {section_id!r}")
+    start = ids.index(page_id)
+    base = levels[start]
+    out = [ids[start]]
+    for j in range(start + 1, len(pages)):
+        if levels[j] > base:
+            out.append(ids[j])
+        else:
+            break
+    return out
 
 
 # NOTE: there is deliberately no transfer_notebook. VM ground truth (2026-06-11): this M365

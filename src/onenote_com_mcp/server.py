@@ -1,4 +1,4 @@
-"""FastMCP server — the full 25-tool OneNote catalog (SPEC §4).
+"""FastMCP server — the full 27-tool OneNote catalog (SPEC §4).
 
 Every tool is a thin facade over ``onenote_com_mcp.service`` (the shared write core, the copy
 core, the hierarchy core); the orchestration lives there, not here. Descriptions carry the §4
@@ -66,6 +66,12 @@ currently on — so "copy this page" / "add a page here" need no position argume
 after_page_id only to place the page after a DIFFERENT page. To move an EXISTING page use \
 reposition_page. For a SINGLE page do NOT reach for restructure_section's whole-list reorder, and \
 NEVER write an external scratch file to organize the order: reorder lists in context.
+
+Copying SEVERAL pages to a position: do NOT call copy_page repeatedly — each copy lands below its \
+own source, scattering them. To copy a page together with its subpages (e.g. "copy this page and \
+its subpages below page X") use copy_page_subtree(page_id, after_page_id=X); for an arbitrary set \
+of pages use copy_pages(page_ids, after_page_id=X). Both place the copies as ONE contiguous block, \
+in order, in a single placement step.
 
 Benchmark workflow for "copy these pages and change the dates" (faithful copy, then edit the \
 copy): (1) the user manually creates a synced notebook B in the OneNote UI (COM cannot create \
@@ -410,7 +416,9 @@ def insert_image(
 def copy_page(page_id: str, target_section_id: str, after_page_id: str = "") -> str:
     """DUPLICATE a page into a section (formatting, tables, inline images, attachments,
     pageLevel all preserved); the original stays put. This is a copy, NOT a move — to relocate
-    a page without duplicating it, use move_page. By DEFAULT the copy is placed right BELOW the
+    a page without duplicating it, use move_page. This copies ONE page only: to copy several pages
+    at once use copy_pages, to copy a page TOGETHER WITH its subpages use copy_page_subtree, and to
+    copy a whole section use copy_section. By DEFAULT the copy is placed right BELOW the
     source page (a same-section duplicate appears immediately after its original — what you
     usually want when no position is given). Pass after_page_id to place it after a DIFFERENT page
     instead (it must be in target_section_id). Copying to a DIFFERENT section, where the original
@@ -448,7 +456,9 @@ def copy_page(page_id: str, target_section_id: str, after_page_id: str = "") -> 
 def copy_section(section_id: str, target_parent_id: str) -> str:
     """DUPLICATE a whole section (all pages in order, subpage levels kept) into a notebook OR
     section group; the original stays put. The copy keeps the source name, de-collided with
-    " (2)" if taken. This is the largest copy unit (there is no copy_notebook — clone a whole
+    " (2)" if taken. For copying only SOME pages of a section, not the whole thing, use copy_pages
+    (an explicit list) or copy_page_subtree (a page and its subpages). This is the largest copy
+    unit (there is no copy_notebook — clone a whole
     notebook by copy_section per section into a manually-created notebook). Returns the new
     section's ID. If the source is not fully downloaded on this machine (OneDrive files-on-demand),
     images/files/embedded objects come out blank — sync_warning summarizes how many across all
@@ -459,6 +469,83 @@ def copy_section(section_id: str, target_parent_id: str) -> str:
     return _json(
         {
             "section_id": result.section_id,
+            "sync_warning": copy.sync_warning(
+                result.missing_images, result.missing_files, result.missing_objects
+            ),
+            "file_notes": result.file_notes,
+        }
+    )
+
+
+@logged_tool()
+def copy_pages(page_ids: list[str], target_section_id: str, after_page_id: str = "") -> str:
+    """DUPLICATE SEVERAL pages into a section as ONE contiguous block, in the given order
+    (each page's formatting, tables, images, attachments and subpage level preserved); the
+    originals stay put. Use this when copying MORE THAN ONE page at once — copy_page is for a
+    single page, copy_section is for a whole section, and to copy a page TOGETHER WITH its
+    subpages use copy_page_subtree (it works out the subpage list for you). page_ids = the pages
+    to copy, in the order you want them to end up. By DEFAULT the block lands at the END of the
+    target section; pass after_page_id to place the whole block right after that page instead
+    (it must be in target_section_id). Do NOT call copy_page repeatedly to copy a group of pages
+    — that scatters each copy below its own original; this places them together. Returns the new
+    page IDs. If the source is not fully downloaded on this machine, some images/files/embedded
+    objects cannot be copied — sync_warning summarizes how many, file_notes lists each; ALWAYS
+    surface a non-null sync_warning and tell the user to fully sync the source, then copy again."""
+    backend = get_backend()
+    result = copy.copy_pages(backend, page_ids, target_section_id)
+    if after_page_id:
+        # an explicitly named anchor must be a page in the target section, else it's a real error
+        hierarchy_edit.reposition_pages(
+            backend, target_section_id, result.page_ids, after_page_id=after_page_id
+        )
+    # no anchor → leave the block at the section end (already contiguous, in order)
+    return _json(
+        {
+            "page_ids": result.page_ids,
+            "sync_warning": copy.sync_warning(
+                result.missing_images, result.missing_files, result.missing_objects
+            ),
+            "file_notes": result.file_notes,
+        }
+    )
+
+
+@logged_tool()
+def copy_page_subtree(
+    section_id: str,
+    page_id: str,
+    target_section_id: str = "",
+    after_page_id: str = "",
+) -> str:
+    """DUPLICATE a page TOGETHER WITH its subpages (the more-indented pages that follow it) as one
+    contiguous block — "copy this page and everything under it". section_id is where the source
+    page lives; page_id is the page to copy (its subpages are found automatically).
+    target_section_id is where the copies go (omit it to copy within the SAME section, the common
+    case). By DEFAULT, a same-section copy lands right BELOW the source subtree (the copy appears
+    just after the original, like copy_page); pass after_page_id to place the block right after a
+    DIFFERENT page instead (this is how you do "copy ●ITIN and its subpages below the ●Local page":
+    page_id=●ITIN, after_page_id=●Local). Copying to a different section, or with no same-section
+    anchor, lands the block at that section's end. Distinct from copy_page (single page, no
+    subpages), copy_pages (an explicit page list), and copy_section (the whole section). Returns
+    new page IDs; the same sync_warning / file_notes rules as copy_page apply — ALWAYS surface a
+    non-null sync_warning."""
+    backend = get_backend()
+    target = target_section_id or section_id
+    sub_ids = copy.subtree_page_ids(backend, section_id, page_id)
+    result = copy.copy_pages(backend, sub_ids, target)
+    # Default placement mirrors copy_page's "below the source": for a same-section copy, anchor on
+    # the source subtree's LAST page so the copy block lands right after the original. An explicit
+    # after_page_id wins. Cross-section (or an implicit anchor not in target) → leave at the end.
+    anchor = after_page_id or (sub_ids[-1] if target == section_id else "")
+    if anchor:
+        try:
+            hierarchy_edit.reposition_pages(backend, target, result.page_ids, after_page_id=anchor)
+        except NodeNotFoundError:
+            if after_page_id:
+                raise  # an explicitly named anchor that is not in the section is a real error
+    return _json(
+        {
+            "page_ids": result.page_ids,
             "sync_warning": copy.sync_warning(
                 result.missing_images, result.missing_files, result.missing_objects
             ),

@@ -89,7 +89,37 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 - **Tier 2 (VM, checkpoint):** `@pytest.mark.windows`, real COM round-trips. Auto-skipped off
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
-## Status (2026-06-13)
+## Status (2026-06-14)
+
+**v1.0.6 — multi-page block copy (27-tool catalog). Tier-1 282 green; Tier-2 VM-VALIDATED
+(2026-06-14: both new subtree round-trips PASS live — `copy_page_subtree`'s subtree detection
+matches the live positional model, and a cloned subtree lands as ONE contiguous block, in source
+order, with each page's pageLevel preserved).** Driven by a real-Claude-Desktop failure: "copy
+●ITIN and its subpages below the ●Local page" came out SCATTERED — the model had no single-call way
+to copy a page subtree, so it strung together `copy_page` calls, and `copy_page`'s default ("place
+the copy right below its SOURCE page") left each copy glued beside its own original instead of as a
+block below ●Local. Root cause = a missing first-class operation (we had only single-page `copy_page`
+and whole-section `copy_section`); fixed with two new tools + one internal block-placement seam, all
+inside the existing copy / hierarchy seams (no new COM, no new invariant):
+- **`copy_pages`** (NEW tool #26): clone SEVERAL pages, in given order, as ONE contiguous block
+  (each page keeps its pageLevel); `after_page_id` places the block after that page, else section
+  end. `service/copy.py` (engine = `copy_pages`).
+- **`copy_page_subtree`** (NEW tool #27): clone a page TOGETHER WITH its subpages (the consecutive
+  following pages at a DEEPER pageLevel — OneNote's positional subpage model, computed by
+  `copy.subtree_page_ids`) as a block. Same-section DEFAULT places the block right below the source
+  subtree (like `copy_page`); `after_page_id` overrides; cross-section → section end. This is the
+  one-call fix for "copy ●ITIN and its subpages below ●Local" (page_id=●ITIN, after_page_id=●Local).
+- **`reposition_pages`** (NEW internal seam in `service/hierarchy_edit.py`, NOT an MCP tool): the
+  multi-page sibling of `reposition_page` — gathers a list of pages into a contiguous block after an
+  anchor (or section top) in ONE `UpdateHierarchy`, node-IDs conserved (SPEC §5 whole-batch). Both
+  copy facades chain it for placement; copy_pages re-raises an explicit missing anchor, copy_page_
+  subtree swallows an IMPLICIT (cross-section) one — same pattern as copy_page.
+- §4: new "copy granularity four-way" contrastive border (copy_page single / copy_pages explicit
+  list / copy_page_subtree page+subpages / copy_section whole section), with the explicit "do NOT
+  loop copy_page — it scatters" rule in both the tool descriptions and `_SERVER_INSTRUCTIONS`. SPEC
+  §4 tool table + borders updated. Tier-1: `tests/test_copy_pages.py` (+21: reposition_pages block
+  placement, subtree detection incl. deep-level rule, copy_pages engine, both facades' orchestration);
+  Tier-2: `tests/test_windows_copy.py` (+2 live round-trips, both PASS 2026-06-14).
 
 **v1.0.5 — page positioning + table-clear ergonomics (25-tool catalog). Tier-1 263 green; Tier-2
 VM-VALIDATED (reposition_page / set_rows-None / copy_page-below-source all PASS live).** Driven by
