@@ -1,9 +1,10 @@
-"""FastMCP server — the full 27-tool OneNote catalog (SPEC §4).
+"""FastMCP server — the full 28-tool OneNote catalog (SPEC §4).
 
 Every tool is a thin facade over ``onenote_com_mcp.service`` (the shared write core, the copy
 core, the hierarchy core); the orchestration lives there, not here. Descriptions carry the §4
-contract the LLM reads: contrastive borders on confusable pairs (get_page vs get_page_images vs
-get_page_files_info vs get_page_files; update_page_content vs create_table vs insert_image;
+contract the LLM reads: contrastive borders on confusable pairs (get_page vs get_page_info vs
+get_page_images vs get_page_files_info vs get_page_files; update_page_content vs create_table vs
+insert_image;
 restructure_section vs reposition_page vs reorder_sections vs move_page vs rename_node;
 delete_node vs delete_page_content vs delete_inline_content; copy vs move), DESTRUCTIVE +
 propose-then-confirm contracts in text, and
@@ -41,10 +42,14 @@ takes effect immediately in the real notebooks — there is no staging copy and 
 OneNote's own recycle bin. Work conservatively.
 
 Two-step rule for in-page objects: to edit or delete something INSIDE a page (a paragraph, \
-table, image, or attachment) you first need its objectID — read the page with get_page (text, \
-tables, images), get_page_images (image pixels), or get_page_files_info (attachments/embedded \
-objects). Picking the right tool but omitting the objectID it needs is as wrong as picking the \
-wrong tool.
+table, image, or attachment) you first need its objectID — get it from get_page_info (a cheap, \
+FLAT, EXHAUSTIVE inventory of every object's id + type + which delete tool removes it; the \
+preferred first step), get_page (the full text/style content), get_page_images (image pixels), \
+or get_page_files_info (attachment metadata). To find/delete ALL images on a page, use \
+get_page_info — it lists images nested in table cells AND page-level printout renders, which \
+get_page's nested tree can bury; do NOT eyeball get_page to hunt for images, and when sweeping \
+several pages check EACH page's inventory rather than assuming later pages match earlier ones. \
+Picking the right tool but omitting the objectID it needs is as wrong as picking the wrong tool.
 
 objectIDs and node IDs (page/section/notebook/section-group IDs) are INTERNAL plumbing — \
 use them to chain calls, but do NOT surface them to the user by default. They are long, \
@@ -131,13 +136,35 @@ def search_pages(query: str, scope_id: str = "") -> str:
 
 @logged_tool()
 def get_page(page_id: str) -> str:
-    """Read a page's full content — rich-text runs with resolved styles, structured tables,
-    and the objectID of every content object (outlines, paragraphs, tables, images,
-    attachments). This is the primary page read and the source of the objectIDs that
-    update_page_content / create_table / delete_page_content need. It returns images and
-    attachments as lightweight references (object IDs + metadata), NOT their bytes — use
-    get_page_images for image pixels and get_page_files / get_page_files_info for attachments."""
+    """Read a page's full CONTENT — rich-text runs with resolved styles, structured tables, and
+    the objectID of every content object. Includes both outline content (`outlines`) AND
+    page-level objects (`page_level_images` / `page_level_files` — printout renders and page-level
+    attachments that live outside any outline). This is the primary page read for working with
+    TEXT and the source of the objectIDs that update_page_content / create_table /
+    delete_page_content need. It returns images and attachments as lightweight references (object
+    IDs + metadata), NOT their bytes — use get_page_images for image pixels and get_page_files /
+    get_page_files_info for attachments. When you only need to know WHAT objects a page has and
+    their IDs (e.g. to find/delete every image, including page-level printout renders) — not the
+    full text — use get_page_info instead: it is a cheaper, flat, exhaustive object inventory."""
     return _json(read.get_page(get_backend(), page_id))
+
+
+@logged_tool()
+def get_page_info(page_id: str) -> str:
+    """Lightweight INVENTORY of every object on a page — each object's id, type, which delete tool
+    removes it (`delete_with`), whether it is page-level, and light type metadata (image
+    width/height/OCR-flag, table rows×cols, file name/kind, a short paragraph text preview). It
+    does NOT return full text runs, the style table, or pixels — for the full content use get_page;
+    for image pixels use get_page_images; for attachment content use get_page_files. Use this as the
+    cheap first step of the two-step objectID rule, and especially to find ALL images to delete:
+    the list is FLAT and EXHAUSTIVE — it includes images nested in table cells and page-level
+    printout renders, which get_page's structured tree can bury. Each entry's `object_id` paired
+    with its `delete_with` is DIRECTLY ACTIONABLE: pass that exact object_id to the named delete
+    tool — you do NOT need to re-read with get_page to "verify" or translate the id (it is already
+    the right target). Do NOT eyeball get_page's nested JSON to hunt for images; read this flat
+    list, and across several pages call it per page rather than assuming pages with no images near
+    the top have none lower down."""
+    return _json(read.get_page_info(get_backend(), page_id))
 
 
 # structured_output=False: the return is image content, not a JSON schema — FastMCP can't
@@ -157,12 +184,13 @@ def get_page_images(page_id: str) -> list[Image]:
 
 @logged_tool()
 def get_page_files_info(page_id: str) -> str:
-    """List a page's attachments and embedded objects (one:InsertedFile) — METADATA ONLY, for
-    ANY file type: display name, extension, size, kind (attachment_icon / printout /
-    embedded_preview), and the objectID needed to delete it with delete_page_content. Does NOT
-    read content (use get_page_files for that — this is its prerequisite) and is NOT for inline
-    images (use get_page_images). Always works regardless of type, so call this first to see
-    what a page carries before extracting anything."""
+    """File-EXTRACTION pre-check for a page's attachments/embedded objects (one:InsertedFile):
+    per file it adds size_bytes, cache_available, extension, and media_class (text / image / pdf /
+    unsupported) — i.e. whether and how get_page_files can extract its CONTENT. Use this right
+    before get_page_files (it is that tool's prerequisite), NOT as the general "what's on this
+    page" tool: to merely DISCOVER a page's files/objects and their IDs (e.g. to delete an
+    attachment) use get_page_info, which is cheaper (no disk read), covers every object type, and
+    includes page-level objects. Not for inline images (use get_page_images). Reads no content."""
     return _json(files.get_page_files_info(get_backend(), page_id))
 
 
@@ -172,7 +200,8 @@ def get_page_files(page_id: str, object_id: str = "", max_chars: int = 50000) ->
     """Extract attachment CONTENT, for three supported types ONLY: text-class files (decoded
     text), image attachments (returned as viewable image content), and PDFs (server-side text
     extraction). Other types (docx/xlsx/pptx/…) return metadata + an explicit "unsupported" —
-    run get_page_files_info first to see types and objectIDs. This reads one:InsertedFile
+    run get_page_files_info first to check each file's type/size (and get_page_info for its
+    objectID). This reads one:InsertedFile
     attachments, NOT inline page images (those are get_page_images). object_id narrows to one
     attachment; text is truncated at max_chars; a missing/unsynced cache is reported per file,
     never a crash."""
@@ -664,16 +693,21 @@ def delete_page_content(page_id: str, object_id: str, force: bool = False) -> st
 @logged_tool()
 def delete_inline_content(page_id: str, object_id: str, force: bool = False) -> str:
     """DESTRUCTIVE. Delete ONE object from INSIDE an outline — a table, a single paragraph, or an
-    inline image/attachment — by its objectID from get_page. A whole table or a paragraph is ALWAYS
-    inside an outline, so removing one ALWAYS uses THIS tool, never delete_page_content. This is the
+    inline image/attachment — by its objectID from get_page_info (or get_page). A whole table or a
+    paragraph is ALWAYS inside an outline, so removing one ALWAYS uses THIS tool, never
+    delete_page_content. This is the
     complement of delete_page_content: that tool removes PAGE-LEVEL objects (a whole outline, or a
     page-level — i.e. printout — image/attachment); this one removes content nested inside an
     outline, which DeletePageContent refuses. Sibling paragraphs in the same outline are kept, so
     "delete the table but keep the surrounding text" just works. objectID: pass the table's OWN
-    objectID to drop a whole table; pass a paragraph's objectID to drop that paragraph (an inline
-    image/attachment is dropped via its enclosing paragraph's objectID, which is what get_page
-    reports for it). To remove only SOME of a table's rows/columns use modify_table (delete_rows /
-    delete_columns) instead of this; to delete a whole page or section use delete_node.
+    objectID to drop a whole table; pass a paragraph's objectID to drop that paragraph. For an
+    inline image/attachment, pass EXACTLY the object_id that get_page_info / get_page reports for it
+    and it just works — that id is sometimes the image's own id and sometimes its enclosing
+    paragraph's (OneNote puts the id on the OE when the image has none); both resolve correctly,
+    and since an image/attachment OE holds nothing else, no sibling text is affected. Do NOT re-read
+    with get_page to "verify" the id — get_page_info's id is directly usable here. To remove only
+    SOME of a table's rows/columns use modify_table (delete_rows / delete_columns) instead of this;
+    to delete a whole page or section use delete_node.
     Concurrency-guarded; force=True only after explicit user confirmation. Confirm with the user
     before applying."""
     page_edit.delete_inline_content(get_backend(), page_id, object_id, force=force)

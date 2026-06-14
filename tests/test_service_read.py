@@ -243,3 +243,59 @@ def test_list_pages_includes_page_level(tmp_path):
     assert [(p["name"], p["page_level"]) for p in pages] == [("Top", 1), ("Sub", 2)]
     assert pages[0]["id"] == "{P1}{1}{B0}"
     assert pages[0]["date_time"] == "2026-06-01T00:00:00.000Z"
+
+
+# --- page-level objects (printout) + get_page_info inventory --------------------------
+# Real printout fixture "附件與嵌入物件-1": one page-level render Image + two page-level
+# InsertedFiles (a .docx + an .xlsx) + a one:XPSFile, all direct one:Page children OUTSIDE
+# any outline. These were INVISIBLE in get_page before the fix (only `outlines` was emitted),
+# so the printout images could not be found/deleted.
+PRINTOUT_PAGE_ID = (
+    "{65FA3E6E-E6E0-4610-B605-EE3D348FAD13}{1}{E19113778280437107490620108457794036705249631}"
+)
+PAGE_LEVEL_IMAGE_ID = "{FF3818B8-3EE5-0E18-33E2-DFECB54FC950}{77}{B0}"
+
+
+def test_get_page_surfaces_page_level_images_and_files(fixtures_dir):
+    page = read.get_page(_be(fixtures_dir), PRINTOUT_PAGE_ID)
+    # the previously-omitted page-level objects are now in the output
+    imgs = page["page_level_images"]
+    assert [i["object_id"] for i in imgs] == [PAGE_LEVEL_IMAGE_ID]
+    names = sorted(f["preferred_name"] for f in page["page_level_files"])
+    assert len(page["page_level_files"]) == 2
+    assert any(n.endswith(".docx") for n in names) and any(n.endswith(".xlsx") for n in names)
+
+
+def test_get_page_info_lists_the_page_level_image_with_delete_tool(fixtures_dir):
+    info = read.get_page_info(_be(fixtures_dir), PRINTOUT_PAGE_ID)
+    images = [o for o in info["objects"] if o["type"] == "image"]
+    # the page-level render image is present, flagged page-level, routed to delete_page_content
+    pl = [o for o in images if o["page_level"]]
+    assert any(o["object_id"] == PAGE_LEVEL_IMAGE_ID for o in pl)
+    for o in pl:
+        assert o["delete_with"] == "delete_page_content"
+
+
+def test_get_page_info_is_flat_exhaustive_and_lightweight(fixtures_dir):
+    info = read.get_page_info(_be(fixtures_dir), PRINTOUT_PAGE_ID)
+    objs = info["objects"]
+    types = {o["type"] for o in objs}
+    assert {"image", "file"} <= types  # at least the page-level media surfaced
+    # inline objects route to delete_inline_content; page-level to delete_page_content
+    assert {o["delete_with"] for o in objs} <= {"delete_inline_content", "delete_page_content"}
+    assert any(o["page_level"] for o in objs) and any(not o["page_level"] for o in objs)
+    # paragraphs carry a short preview, NOT full runs; no heavy fields leak in
+    for o in objs:
+        assert "runs" not in o and "quick_styles" not in o
+        if o["type"] == "paragraph":
+            assert "preview" in o and len(o["preview"]) <= 41  # 40 + ellipsis
+
+
+def test_get_page_info_matches_inline_image_page(fixtures_dir):
+    # a page whose images are INLINE (inside the outline) → listed, delete_inline_content
+    info = read.get_page_info(_be(fixtures_dir), IMAGE_PAGE_ID)
+    images = [o for o in info["objects"] if o["type"] == "image"]
+    assert images, "the image page must surface its inline image in the inventory"
+    assert all(not o["page_level"] for o in images)
+    assert all(o["delete_with"] == "delete_inline_content" for o in images)
+    assert all(o["object_id"] for o in images)

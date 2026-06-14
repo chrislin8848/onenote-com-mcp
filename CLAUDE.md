@@ -91,6 +91,44 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 
 ## Status (2026-06-14)
 
+**v1.0.7 — page-level object visibility + lightweight object inventory (28-tool catalog). Tier-1
+286 green; fix VM-VALIDATED live (2026-06-14).** Driven by a real-Claude-Desktop failure: asked to
+delete the printout images on `行程Final` / `Final 郵輪行程`, Claude "saw" no images and skipped them
+(and separately mis-claimed "GetPageContent failed / not synced" — that was transient, NOT
+reproducible: those pages read fine, 77k–185k chars). Root cause, VM-confirmed by a diagnostic on
+the real pages: the printout render images are **page-level** objects (direct `one:Page` children,
+OUTSIDE any outline), and `get_page` emitted ONLY `outlines` — so `page.page_images` / `page.page_files`
+were INVISIBLE in the page read. The model couldn't delete what it couldn't see (not laziness; a real
+fidelity gap). Fixed inside the read layer (no new COM, no new invariant):
+- **`get_page` now surfaces page-level objects**: new `page_level_images` / `page_level_files` keys
+  (printout renders + page-level InsertedFile variant). Previously omitted; printout images are now
+  visible and route to `delete_page_content`. `service/read.py`.
+- **`get_page_info`** (NEW tool #28): a cheap, FLAT, EXHAUSTIVE object inventory — every object's
+  `object_id` + `type` + `delete_with` (delete_page_content for page-level, delete_inline_content
+  for in-outline) + `page_level` + light metadata (image w/h/OCR-flag, table rows×cols, file
+  name/kind, a ~40-char paragraph preview). NO full runs / style table / pixels, NO disk I/O. Walks
+  outlines recursively (into children AND table cells) then appends page-level objects, so images
+  buried after a table, inside a cell, or page-level printout renders are all listed. This is the
+  "lightweight half of the two-step objectID rule" and the right tool for "find/delete ALL images".
+  `read.get_page_info` + `_page_object_inventory`. (Considered but DROPPED `find_images`: a fixed
+  `get_page` + `get_page_info` cover the verified within-page bug; the cross-page "assumed later
+  pages match earlier" miss is unproven-recurring model laziness, defer a multi-page tool until it
+  recurs — YAGNI.)
+- **§4 borders**: `get_page` (full CONTENT) ↔ `get_page_info` (lightweight INVENTORY) cross-named;
+  `_SERVER_INSTRUCTIONS` two-step rule now leads with `get_page_info` and says "to find/delete all
+  images use get_page_info, do NOT eyeball get_page's nested tree, and check EACH page's inventory".
+  Also retitled `get_page_files_info` as the file-EXTRACTION pre-check (size_bytes + media_class,
+  the get_page_files prerequisite) and pointed plain file DISCOVERY at `get_page_info` (cheaper, no
+  disk read, all object types) — the two were superficially overlapping; `get_page_files_info` kept
+  (its size/media_class need disk I/O that must stay OUT of the lightweight inventory).
+- Tier-1: `tests/test_service_read.py` (+4: get_page page-level images/files on the real printout
+  fixture `附件與嵌入物件-1`; get_page_info lists the page-level image with delete_page_content; flat
+  /exhaustive/lightweight; inline-image page routes to delete_inline_content); `test_smoke_server.py`
+  27→28 + get_page↔get_page_info + get_page_files_info→get_page_info borders. **VM live-validated
+  (2026-06-14): `行程Final` now shows 5 page-level images, `Final 郵輪行程` 2 — all delete_page_content;
+  pre-fix both showed 0.** Tier-2 windows test not yet added (read-only change; live-validated by the
+  diagnostic instead).
+
 **v1.0.6 — multi-page block copy (27-tool catalog). Tier-1 282 green; Tier-2 VM-VALIDATED
 (2026-06-14: both new subtree round-trips PASS live — `copy_page_subtree`'s subtree detection
 matches the live positional model, and a cloned subtree lands as ONE contiguous block, in source
@@ -120,6 +158,13 @@ inside the existing copy / hierarchy seams (no new COM, no new invariant):
   §4 tool table + borders updated. Tier-1: `tests/test_copy_pages.py` (+21: reposition_pages block
   placement, subtree detection incl. deep-level rule, copy_pages engine, both facades' orchestration);
   Tier-2: `tests/test_windows_copy.py` (+2 live round-trips, both PASS 2026-06-14).
+- **Installer BUILT (2026-06-14): `dist/installer/OneNoteMCP-Setup_1.0.6.exe`** (~22.9 MB,
+  sha256 70ea3a0e…5912e0) — freeze + iscc on the VM (`packaging/build.bat`), and the frozen exe's
+  COM `--selftest` passed in the interactive session (bound OneNote, 3 notebooks, `bound via:
+  vendored`). **Still pending: Chris's real-Claude-Desktop §4 acceptance** — install on the PC
+  running Claude Desktop and confirm the natural-language "copy ●ITIN and its subpages below ●Local"
+  actually routes to `copy_page_subtree` and lands as a contiguous block (the Tier-2 pass validated
+  the COM mechanics; the model's tool CHOICE is the §4 acceptance, which only real Claude Desktop tests).
 
 **v1.0.5 — page positioning + table-clear ergonomics (25-tool catalog). Tier-1 263 green; Tier-2
 VM-VALIDATED (reposition_page / set_rows-None / copy_page-below-source all PASS live).** Driven by

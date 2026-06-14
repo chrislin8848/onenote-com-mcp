@@ -20,6 +20,7 @@ EXPECTED_TOOLS = {
     "list_pages",
     "search_pages",
     "get_page",
+    "get_page_info",
     "get_page_images",
     "get_page_files_info",
     "get_page_files",
@@ -56,9 +57,9 @@ def tools():
     return {t.name: t for t in asyncio.run(mcp.list_tools())}
 
 
-def test_catalog_is_the_27_expected_tools(tools):
+def test_catalog_is_the_28_expected_tools(tools):
     assert set(tools) == EXPECTED_TOOLS
-    assert len(tools) == 27
+    assert len(tools) == 28
 
 
 def test_every_tool_has_a_real_description(tools):
@@ -78,6 +79,12 @@ def test_contrastive_borders_present(tools):
     assert "move_page" in tools["copy_page"].description  # copy vs move
     assert "restructure_section" in tools["move_page"].description  # move vs reorder-within
     assert "get_page_files" in tools["get_page_images"].description  # image vs file reads
+    # get_page (full content) vs get_page_info (lightweight object inventory) name each other
+    assert "get_page_info" in tools["get_page"].description
+    assert "get_page" in tools["get_page_info"].description
+    # file discovery (get_page_info) vs file-extraction precheck (get_page_files_info): the
+    # precheck points back to the inventory for plain discovery
+    assert "get_page_info" in tools["get_page_files_info"].description
     assert "delete_page_content" in tools["delete_node"].description  # node vs in-page
     # the inline-vs-page-level delete border names both neighbours
     assert "delete_page_content" in tools["delete_inline_content"].description

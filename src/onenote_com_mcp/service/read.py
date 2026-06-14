@@ -19,7 +19,7 @@ from typing import Any
 from onenote_com_mcp.backend.base import OneNoteBackend
 from onenote_com_mcp.enums import HierarchyScope, PageInfo
 from onenote_com_mcp.errors import OneNoteComError
-from onenote_com_mcp.xmllayer.models import Image, Paragraph, Table
+from onenote_com_mcp.xmllayer.models import Image, InsertedFile, Paragraph, Table
 from onenote_com_mcp.xmllayer.parse import parse_hierarchy, parse_page
 
 # --- hierarchy listings --------------------------------------------------------------
@@ -195,6 +195,124 @@ def get_page(backend: OneNoteBackend, page_id: str) -> dict[str, Any]:
             }
             for outline in page.outlines
         ],
+        # Page-LEVEL objects: direct one:Page children that live OUTSIDE any outline — printout
+        # render images and the page-level InsertedFile variant. Previously OMITTED here (only
+        # `outlines` was emitted), so a printout page's images were INVISIBLE to a reader of
+        # get_page and could not be found/deleted; surfaced now so the page read is complete.
+        # These are deleted with delete_page_content (they ARE page-level objects).
+        "page_level_images": [_image_dict(img) for img in page.page_images],
+        "page_level_files": [_pagelevel_file_dict(f) for f in page.page_files],
+    }
+
+
+def _pagelevel_file_dict(f: InsertedFile) -> dict[str, Any]:
+    """A page-level one:InsertedFile (own objectID; printout carrier / direct page attachment)."""
+    return {
+        "type": "file",
+        "object_id": f.object_id,
+        "kind": f.kind,
+        "preferred_name": f.preferred_name,
+    }
+
+
+def _preview(text: str | None, limit: int = 40) -> str:
+    """A short, single-line text preview so the model can tell paragraphs apart by content
+    (an object_id alone is meaningless to a human/LLM) without get_page's full run model."""
+    t = " ".join((text or "").split())
+    return t if len(t) <= limit else t[:limit] + "…"
+
+
+def _inventory_item(obj_type: str, object_id: str | None, page_level: bool, **meta: Any) -> dict:
+    return {
+        "type": obj_type,
+        "object_id": object_id,
+        # which delete tool removes it: page-level objects → delete_page_content; everything
+        # inside an outline (paragraph / table / inline image / inline attachment) →
+        # delete_inline_content. (Surfaced so the model picks the right tool without guessing.)
+        "delete_with": "delete_page_content" if page_level else "delete_inline_content",
+        "page_level": page_level,
+        **meta,
+    }
+
+
+def _page_object_inventory(page: Any) -> list[dict[str, Any]]:
+    """A FLAT, document-order list of every object on the page — the lightweight half of the
+    two-step objectID rule. Walks outlines recursively (into nested children AND table cells)
+    so nothing is buried, then appends the page-level objects (printout renders, page-level
+    attachments) that get_page's structured view used to hide. Each entry carries the object's
+    targetable object_id, which delete tool removes it, and light type metadata — NO full text
+    runs, NO style table, NO pixels. A table appears as one entry (rows×cols); its cells'
+    contents follow as their own entries (they are distinct, separately-editable objects)."""
+    items: list[dict[str, Any]] = []
+    for p in page.paragraphs:  # recursive: outline paragraphs, children, and table-cell paragraphs
+        if p.table is not None:
+            items.append(
+                _inventory_item(
+                    "table",
+                    p.table.object_id,
+                    False,
+                    rows=len(p.table.rows),
+                    columns=len(p.table.columns),
+                )
+            )
+        elif p.image is not None:
+            img = p.image
+            items.append(
+                _inventory_item(
+                    "image",
+                    _oe_object_id(img),
+                    False,
+                    width=img.width,
+                    height=img.height,
+                    has_ocr=bool(img.ocr_text),
+                    is_printout=img.is_printout,
+                )
+            )
+        elif p.inserted_file is not None:
+            items.append(
+                _inventory_item(
+                    "file",
+                    p.object_id,
+                    False,
+                    kind=p.inserted_file.kind,
+                    preferred_name=p.inserted_file.preferred_name,
+                )
+            )
+        else:
+            items.append(_inventory_item("paragraph", p.object_id, False, preview=_preview(p.text)))
+    for img in page.page_images:  # page-level printout renders — own objectID, delete_page_content
+        items.append(
+            _inventory_item(
+                "image",
+                _oe_object_id(img),
+                True,
+                width=img.width,
+                height=img.height,
+                has_ocr=bool(img.ocr_text),
+                is_printout=img.is_printout,
+            )
+        )
+    for f in page.page_files:  # page-level attachments / printout carriers
+        items.append(
+            _inventory_item("file", f.object_id, True, kind=f.kind, preferred_name=f.preferred_name)
+        )
+    return items
+
+
+def get_page_info(backend: OneNoteBackend, page_id: str) -> dict[str, Any]:
+    """A lightweight inventory of every object on a page (IDs + metadata, NOT full content).
+
+    The cheap companion to get_page: same parse, but projects only the flat object list — so
+    "what's on this page / what is its objectID / what can I delete" costs no full-text/style
+    payload. Crucially EXHAUSTIVE: nested (table-cell) and page-level (printout) objects are all
+    listed, which is exactly what get_page's structured view could bury."""
+    page = parse_page(backend.get_page_content(page_id, PageInfo.piBasic))
+    return {
+        "id": page.id,
+        "name": page.name,
+        "page_level": page.page_level,
+        "last_modified_time": page.last_modified_time,
+        "objects": _page_object_inventory(page),
     }
 
 
