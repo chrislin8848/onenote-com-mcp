@@ -46,6 +46,8 @@ _PRINTOUT_IMAGE_ATTRS = ("xpsFileIndex", "isPrintOut", "originalPageNumber")
 @dataclass
 class PageCopyResult:
     page_id: str  # the copy's ID in the target section
+    name: str | None = None  # the copy's title (== source's) — so callers report by NAME, not ID
+    page_level: int | None = None  # 1/2/3, preserved from the source
     # one line per piece of content that could NOT be transferred faithfully (SPEC §5: report
     # explicitly, never skip silently) or whose structure was changed (printout flattening)
     file_notes: list[str] = field(default_factory=list)
@@ -58,7 +60,10 @@ class PageCopyResult:
 
 @dataclass
 class PagesCopyResult:
-    page_ids: list[str]  # the copies' IDs in the target section, in copy order
+    page_ids: list[str]  # the copies' IDs in the target section, in copy order (for placement)
+    # the copies as {page_id, name, page_level}, in copy order — so the caller can report results
+    # by NAME (avoids dumping raw ID lists to the user); parallel to page_ids
+    pages: list[dict] = field(default_factory=list)
     file_notes: list[str] = field(default_factory=list)
     missing_images: int = 0
     missing_files: int = 0
@@ -171,6 +176,7 @@ def _transplant_raw_page(
 ) -> PageCopyResult:
     tree = etree.fromstring(raw_xml.encode("utf-8"), parser=_PARSER)
     source_level = tree.get("pageLevel")
+    source_name = tree.get("name")  # the page title (== the copy's name); for name-not-ID reporting
 
     # 1. pixels: every one:Image gets inline one:Data (callbacks resolve against the SOURCE).
     #    Images whose binary isn't downloaded locally are REMOVED (+ emptied OE pruned) and counted
@@ -221,6 +227,8 @@ def _transplant_raw_page(
 
     return PageCopyResult(
         page_id=new_page_id,
+        name=source_name,
+        page_level=int(source_level) if source_level else 1,
         file_notes=file_notes,
         missing_images=missing_images,
         missing_files=missing_files,
@@ -305,17 +313,22 @@ def copy_pages(
     if len(page_ids) != len(set(page_ids)):
         raise ValueError("page_ids contains duplicate IDs")
     new_ids: list[str] = []
+    pages: list[dict] = []
     file_notes: list[str] = []
     missing_images = missing_files = missing_objects = 0
     for pid in page_ids:
         result = transfer_page(backend, pid, target_section_id)
         new_ids.append(result.page_id)
+        pages.append(
+            {"page_id": result.page_id, "name": result.name, "page_level": result.page_level}
+        )
         file_notes.extend(result.file_notes)
         missing_images += result.missing_images
         missing_files += result.missing_files
         missing_objects += result.missing_objects
     return PagesCopyResult(
         page_ids=new_ids,
+        pages=pages,
         file_notes=file_notes,
         missing_images=missing_images,
         missing_files=missing_files,

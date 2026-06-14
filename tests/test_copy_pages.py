@@ -149,6 +149,8 @@ def test_copy_pages_clones_each_in_order_and_aggregates(monkeypatch):
         seen.append((page_id, target_section_id))
         return SimpleNamespace(
             page_id=f"COPY-{page_id}",
+            name=f"name-{page_id}",
+            page_level=2,
             file_notes=[f"note-{page_id}"],
             missing_images=1,
             missing_files=0,
@@ -159,6 +161,12 @@ def test_copy_pages_clones_each_in_order_and_aggregates(monkeypatch):
     result = copy.copy_pages(object(), ["A", "B", "C"], "SEC")
     assert seen == [("A", "SEC"), ("B", "SEC"), ("C", "SEC")]
     assert result.page_ids == ["COPY-A", "COPY-B", "COPY-C"]
+    # pages carries name + level so callers report by name, not raw ids
+    assert result.pages == [
+        {"page_id": "COPY-A", "name": "name-A", "page_level": 2},
+        {"page_id": "COPY-B", "name": "name-B", "page_level": 2},
+        {"page_id": "COPY-C", "name": "name-C", "page_level": 2},
+    ]
     assert result.file_notes == ["note-A", "note-B", "note-C"]
     assert (result.missing_images, result.missing_objects) == (3, 6)
 
@@ -179,6 +187,9 @@ def facade_calls(monkeypatch):
         recorded["copy_pages"] = {"ids": list(page_ids), "target": target_section_id}
         return SimpleNamespace(
             page_ids=[f"COPY-{p}" for p in page_ids],
+            pages=[
+                {"page_id": f"COPY-{p}", "name": f"name-{p}", "page_level": 1} for p in page_ids
+            ],
             missing_images=0,
             missing_files=0,
             missing_objects=0,
@@ -208,7 +219,9 @@ def facade_calls(monkeypatch):
 
 def test_copy_pages_facade_no_anchor_leaves_block_at_end(facade_calls):
     out = json.loads(server.copy_pages(["A", "B"], "SEC"))
-    assert out["page_ids"] == ["COPY-A", "COPY-B"]
+    # facade reports pages (id + name + level), not a bare id list
+    assert [p["page_id"] for p in out["pages"]] == ["COPY-A", "COPY-B"]
+    assert [p["name"] for p in out["pages"]] == ["name-A", "name-B"]
     assert "reposition" not in facade_calls  # no placement step when no anchor given
 
 
@@ -232,7 +245,11 @@ def test_subtree_facade_defaults_below_the_source_subtree(facade_calls):
     assert facade_calls["subtree"] == {"section": "SEC", "page": "ITIN"}
     assert facade_calls["copy_pages"]["target"] == "SEC"
     assert facade_calls["reposition"]["after"] == "ITIN-sub2"  # last page of the source subtree
-    assert out["page_ids"] == ["COPY-ITIN", "COPY-ITIN-sub1", "COPY-ITIN-sub2"]
+    assert [p["page_id"] for p in out["pages"]] == [
+        "COPY-ITIN",
+        "COPY-ITIN-sub1",
+        "COPY-ITIN-sub2",
+    ]
 
 
 def test_subtree_facade_explicit_anchor_wins(facade_calls):

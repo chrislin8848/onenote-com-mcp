@@ -52,12 +52,15 @@ several pages check EACH page's inventory rather than assuming later pages match
 Picking the right tool but omitting the objectID it needs is as wrong as picking the wrong tool.
 
 objectIDs and node IDs (page/section/notebook/section-group IDs) are INTERNAL plumbing — \
-use them to chain calls, but do NOT surface them to the user by default. They are long, \
-opaque, and meaningless to a human reading the conversation. Refer to things by their \
-NAME instead ("the page 測試章節1", "the third paragraph", "the first table"). Only show a \
-raw ID when the user explicitly asks for it, when names alone are genuinely ambiguous \
-(two pages share a title and the user must disambiguate), or when the user will paste it \
-back into another tool call.
+use them to chain calls, but do NOT surface them to the user. They are long, opaque, and \
+meaningless to a human reading the conversation. NEVER paste a raw ID — and ESPECIALLY never \
+a LIST of IDs — into your reply as a way to refer to pages/objects; that is exactly the wrong \
+way to report progress. Refer to things by their NAME instead ("copied ●ITIN and its 9 \
+subpages: 官網行程, D1-0107, …", "the third paragraph", "the first table"). Results that carry \
+IDs also carry names for this reason — e.g. copy_page / copy_pages / copy_page_subtree return \
+each new page's name and level alongside its id; narrate from the names. Only show a raw ID \
+when the user explicitly asks for it, when names alone are genuinely ambiguous (two pages share \
+a title and the user must disambiguate), or when the user will paste it back into a tool call.
 
 Destructive and structural operations (delete_node, delete_page_content, delete_inline_content, \
 modify_table's delete_rows/delete_columns, force overwrites, restructure_section, \
@@ -451,7 +454,8 @@ def copy_page(page_id: str, target_section_id: str, after_page_id: str = "") -> 
     source page (a same-section duplicate appears immediately after its original — what you
     usually want when no position is given). Pass after_page_id to place it after a DIFFERENT page
     instead (it must be in target_section_id). Copying to a DIFFERENT section, where the original
-    isn't present, leaves the copy at the end of that section. Returns the new page's ID. If the
+    isn't present, leaves the copy at the end of that section. Returns the new page's name + level
+    + id (refer to it by NAME, not the id). If the
     source is not fully downloaded on this machine (OneDrive files-on-demand), some
     images/files/embedded objects cannot be copied and come out blank/empty — sync_warning
     summarizes how many, and file_notes lists each. ALWAYS surface a non-null sync_warning to the
@@ -473,6 +477,8 @@ def copy_page(page_id: str, target_section_id: str, after_page_id: str = "") -> 
     return _json(
         {
             "page_id": result.page_id,
+            "name": result.name,  # report the copy by NAME, not the raw id
+            "page_level": result.page_level,
             "sync_warning": copy.sync_warning(
                 result.missing_images, result.missing_files, result.missing_objects
             ),
@@ -516,8 +522,9 @@ def copy_pages(page_ids: list[str], target_section_id: str, after_page_id: str =
     to copy, in the order you want them to end up. By DEFAULT the block lands at the END of the
     target section; pass after_page_id to place the whole block right after that page instead
     (it must be in target_section_id). Do NOT call copy_page repeatedly to copy a group of pages
-    — that scatters each copy below its own original; this places them together. Returns the new
-    page IDs. If the source is not fully downloaded on this machine, some images/files/embedded
+    — that scatters each copy below its own original; this places them together. Returns each new
+    page as name + level + id (report them by NAME, never as a raw id list). If the source is not
+    fully downloaded on this machine, some images/files/embedded
     objects cannot be copied — sync_warning summarizes how many, file_notes lists each; ALWAYS
     surface a non-null sync_warning and tell the user to fully sync the source, then copy again."""
     backend = get_backend()
@@ -530,7 +537,8 @@ def copy_pages(page_ids: list[str], target_section_id: str, after_page_id: str =
     # no anchor → leave the block at the section end (already contiguous, in order)
     return _json(
         {
-            "page_ids": result.page_ids,
+            # pages carry name + level so you report results BY NAME, not as a raw id list
+            "pages": result.pages,
             "sync_warning": copy.sync_warning(
                 result.missing_images, result.missing_files, result.missing_objects
             ),
@@ -556,8 +564,8 @@ def copy_page_subtree(
     page_id=●ITIN, after_page_id=●Local). Copying to a different section, or with no same-section
     anchor, lands the block at that section's end. Distinct from copy_page (single page, no
     subpages), copy_pages (an explicit page list), and copy_section (the whole section). Returns
-    new page IDs; the same sync_warning / file_notes rules as copy_page apply — ALWAYS surface a
-    non-null sync_warning."""
+    each new page as name + level + id (report them by NAME, never as a raw id list); the same
+    sync_warning / file_notes rules as copy_page apply — ALWAYS surface a non-null sync_warning."""
     backend = get_backend()
     target = target_section_id or section_id
     sub_ids = copy.subtree_page_ids(backend, section_id, page_id)
@@ -574,7 +582,8 @@ def copy_page_subtree(
                 raise  # an explicitly named anchor that is not in the section is a real error
     return _json(
         {
-            "page_ids": result.page_ids,
+            # pages carry name + level so you report results BY NAME, not as a raw id list
+            "pages": result.pages,
             "sync_warning": copy.sync_warning(
                 result.missing_images, result.missing_files, result.missing_objects
             ),

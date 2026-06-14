@@ -91,6 +91,26 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 
 ## Status (2026-06-14)
 
+**v1.0.8 — copy tools report by NAME + harder no-raw-ID instruction (28-tool catalog, Tier-1 286
+green).** Driven by real-Claude-Desktop UX friction: the model kept dumping raw page-ID lists to
+the user (e.g. narrating "I'll scan these 10 pages:" + 10 opaque IDs), because `copy_pages` /
+`copy_page_subtree` returned BARE `page_ids` — the model had only IDs in hand to refer to the new
+pages. Fix (no new tool, no new COM): the copy results now carry NAMES so the model narrates by
+name.
+- `transfer_page` reads the source page's title from the page-content XML root's `name` attribute
+  (already parsed — NO extra COM read) and returns it + `page_level` on `PageCopyResult`.
+- `copy_pages` aggregates a `pages: [{page_id, name, page_level}]` list (parallel to `page_ids`,
+  which stays for placement); server `copy_pages` / `copy_page_subtree` now return `pages` (not a
+  bare `page_ids` list), and `copy_page` returns `name` + `page_level` alongside `page_id`.
+- `_SERVER_INSTRUCTIONS` hardened: "NEVER paste a raw ID — especially a LIST of IDs — into your
+  reply; narrate by NAME; the copy tools return names alongside ids for exactly this." Copy tool
+  descriptions updated to say "report by NAME, never as a raw id list".
+- This is a NUDGE, not a guarantee (whether to print IDs is ultimately Claude Desktop's model
+  behavior; the most effective lever is a user-level Claude Desktop instruction). Tier-1 286 green
+  (test_copy_pages engine asserts the `pages` list; facade tests assert `out["pages"]`;
+  test_copy_page_placement transfer-stub gains name/level). Installer rebuilt as
+  OneNoteMCP-Setup_1.0.8.exe.
+
 **v1.0.7 — page-level object visibility + lightweight object inventory (28-tool catalog). Tier-1
 286 green; fix VM-VALIDATED live (2026-06-14).** Driven by a real-Claude-Desktop failure: asked to
 delete the printout images on `行程Final` / `Final 郵輪行程`, Claude "saw" no images and skipped them

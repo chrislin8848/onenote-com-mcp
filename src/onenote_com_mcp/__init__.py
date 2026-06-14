@@ -5,4 +5,4 @@ Windows; fixture replay on Linux). There is intentionally **no** Microsoft Graph
 HTTP, or Azure/token code anywhere in this package (SPEC §9 red line).
 """
 
-__version__ = "1.0.7"
+__version__ = "1.0.8"

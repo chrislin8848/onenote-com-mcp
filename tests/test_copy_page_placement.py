@@ -33,6 +33,8 @@ def calls(monkeypatch):
         recorded["transfer"] = (page_id, target_section_id)
         return SimpleNamespace(
             page_id="COPY-ID",
+            name="複製頁",
+            page_level=1,
             missing_images=[],
             missing_files=[],
             missing_objects=[],
