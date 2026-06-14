@@ -147,6 +147,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 | `list_pages` | 列某節的頁(**範圍化,含 `pageLevel` 子頁階層**) | `GetHierarchy(sectionId, hsPages)` |
 | `search_pages` | 跨/範圍文字搜尋 | `FindPages` |
 | `get_page` | 取單頁內容(**保真富文字** + 結構化表格) | `GetPageContent(pageId)` |
+| `get_table` | 取**單一表格**結構化內容(欄/列/每格文字+樣式+底色 + row/cell objectID),不含整頁其餘——大表頁(長 Guest List 等)的精簡讀法,避免 `get_page` 巨大 payload 被客戶端轉存成檔案 | `GetPageContent` → 依 objectID 找該 `one:Table`(含巢狀)投影 |
 | `get_page_images` | 取頁面圖片(二進位) | `GetPageContent` → `GetBinaryPageContent(callbackId)` |
 | `get_page_files_info` | 列頁面**附件/嵌入物件**(如 Excel 試算表)中繼資料:名稱/大小/型別/objectID,**不解析內容** | `GetPageContent` 解析 `one:InsertedFile` + 讀 `pathCache` 檔案屬性 |
 | `get_page_files` | 取**附件內容**供 Claude 分析(**僅限**:文字類解碼/圖片/PDF 抽文字;其餘型別回中繼資料並明示不支援) | 讀 `pathCache` 本機快取檔(**非** `GetBinaryPageContent`)+ server 端型別感知抽取 |
@@ -155,7 +156,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 | `create_page` | 在指定節建新頁(可設 `pageLevel` 子頁);**預設把新頁放在目前所在頁(get_current_context)正下方**,`after_page_id` 可指定別頁,無視窗/目前頁不在該節則落節尾 | `CreateNewPage` (+ `UpdateHierarchy` 設 pageLevel) + `UpdatePageContent` + 預設接 `reposition_page`(錨點=目前頁;讀視窗在建頁前;錨點不在該節→吞掉退回節尾) |
 | `update_page_content` | 改頁面內容:append / insert / replace(含改表格儲存格文字、樣式大小/字型/顏色/底色、超連結 `<a href>`) | `GetPageContent` → 改 XML → `UpdatePageContent`(純 append 可免讀全頁) |
 | `create_table` | 新增**新**表格(僅建立) | 組 `one:Table` XML → `UpdatePageContent` |
-| `modify_table` | 改**既有**表格:形狀(`insert_rows`/`add_columns`、`delete_rows`/`delete_columns`(DESTRUCTIVE);列欄對稱;空 cell 補最小段落)**或** `set_rows`(二維陣列就地覆蓋既有列內容,固定維度、保留每格 objectID;只覆蓋既有列,加列用 `insert_rows`;cell 給 `None` 則該格不動,`[None,"",…]` = 保留第一欄、清空其餘) | `GetPageContent` → 改 `one:Table`(Columns 重編 index、每列增/刪/改 Cell)→ `UpdatePageContent` |
+| `modify_table` | 改**既有**表格:**形狀**(`insert_rows`/`insert_columns`(`insert_columns` 可帶 `values` 一次填新欄內容)、`delete_rows`/`delete_columns`(DESTRUCTIVE);列欄對稱;空 cell 補最小段落)、**順序**(`reorder_columns`/`reorder_rows`,傳**完整目標排列** order、cell 隨欄/列移動且保留 objectID,不重打字)、或**內容**(`set_rows` 覆蓋整列/整表;`set_column` 精簡覆蓋**單欄**(一格一值);皆固定維度、保留每格 objectID,cell 給 `None` 不動,`[None,"",…]` = 保留第一欄、清空其餘) | `GetPageContent` → 改 `one:Table`(Columns 重編 index、移動/增/刪/改 Cell)→ `UpdatePageContent` |
 | `insert_svg_image` | 從 **SVG markup** 插入向量圖(伺服器端光柵化成 PNG)| `resvg_py` 渲染 SVG→PNG → 組 `one:Image` + base64 `one:Data` → `UpdatePageContent`(僅吃向量;內嵌 raster data: URI 拒絕;照片手動插)|
 | `delete_node` | 刪頁/節/節群組/筆記本(層級) | `DeleteHierarchy(objectId)` |
 | `delete_page_content` | 刪**頁層**內容物件(整個大綱/頁層圖片/頁層附件) | `DeletePageContent(pageId, objectId)` |
@@ -184,10 +185,10 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 
 1. **對比式/反向標註** — 針對本專案會互相混淆的工具組,在描述裡互相點名界線:
    - **刪除三角:** `delete_node`(刪整個頁/節/節群組/筆記本節點) vs `delete_page_content`(刪**頁層**物件:整個大綱/頁層圖/頁層附件,頁面保留) vs `delete_inline_content`(刪**大綱內**物件:表格/段落/行內圖/行內附件)。關鍵界線:**整個表格、段落永遠在大綱內,故刪它們一律用 `delete_inline_content`,絕不用 `delete_page_content`**;三者描述互相點名(both-way,guard-tested)。
-   - `update_page_content`(加/改文字、樣式、超連結、**單一**儲存格文字) vs `create_table`(建**新**表格) vs `modify_table`(改既有表格:`insert_rows`/`add_columns`/`delete_*` 形狀,或 `set_rows` 一次覆蓋整列/整表內容) vs `insert_svg_image`(從 SVG 插**向量**圖;照片/點陣須手動)——`update_page_content` 描述須註明「若加的是表格、改的是行列數、或插圖,改用對應工具」;`create_table` 只建新表、`modify_table` 改既有表(形狀或整列內容),兩者互相點名;表格內容替換的分工 = `update_page_content "replace"`(一格)vs `modify_table set_rows`(整列/整表)。
+   - `update_page_content`(加/改文字、樣式、超連結、**單一**儲存格文字) vs `create_table`(建**新**表格) vs `modify_table`(改既有表格:`insert_rows`/`insert_columns`/`delete_*` 形狀、`reorder_columns`/`reorder_rows` 重排、或 `set_rows`/`set_column` 覆蓋內容) vs `insert_svg_image`(從 SVG 插**向量**圖;照片/點陣須手動)——`update_page_content` 描述須註明「若加的是表格、改的是行列數、或插圖,改用對應工具」;`create_table` 只建新表、`modify_table` 改既有表(形狀/順序/內容),兩者互相點名;表格內容替換的分工 = `update_page_content "replace"`(一格)vs `modify_table set_column`(整欄)vs `modify_table set_rows`(整列/整表);**重排欄/列用 `reorder_columns`/`reorder_rows`,不要用 `set_rows` 清空再重打**;改整欄**樣式/顏色**(非文字)用 `apply_text_style(columns=[j])`。
    - `reposition_page`(**同節內**把**一頁**移到某頁之後,只給 ID) vs `restructure_section`(**同節內**重排**多頁** + `pageLevel`,須完整清單) vs `reorder_sections`(**一本內**節順序) vs `move_page`(把頁搬到**別節**) vs `rename_node`(只改名)。關鍵:移**單一**頁用 `reposition_page`(不必交 46 筆清單,避免模型去寫外部暫存檔);`copy_page` / `create_page` **預設**都把新頁放在「自然錨點」正下方——`copy_page` 在**來源頁**之下、`create_page` 在**目前所在頁**(get_current_context)之下,所以「複製這頁」「在這裡建頁」都不必指定位置,`after_page_id` 才是覆蓋;要移**既有**頁才用 `reposition_page`。
    - **複製粒度四選一:** `copy_page`(**單頁**) vs `copy_pages`(**多頁**明確清單) vs `copy_page_subtree`(**一頁 + 其子頁**,自動算出子頁) vs `copy_section`(**整節**)。關鍵界線:複製**多頁到某位置**時**絕不**重複呼叫 `copy_page`——`copy_page` 預設把每份副本貼在**各自來源頁**之下,會把整組副本打散(real-Claude-Desktop 實測:「把 ●ITIN 及其子頁複製到 ●Local 下方」因此亂放);`copy_pages` / `copy_page_subtree` 把副本排成**一個連續區塊**、一次定位到 `after_page_id` 之後。
-   - `get_page`(文字 + 結構化表格) vs `get_page_images`(取圖片二進位供視覺辨識) vs `get_page_files_info`(附件/嵌入物件**中繼資料**,任何型別) vs `get_page_files`(附件**內容**抽取,僅文字類/圖片/PDF)——info 是 files 的前置;非支援型別(docx/xlsx 等)只能取 info,不能取內容。
+   - `get_page`(文字 + 結構化表格;大表頁可改用 `get_table` 只取單表、避免巨大 payload) vs `get_table`(**單一**表格的結構化內容) vs `get_page_images`(取圖片二進位供視覺辨識) vs `get_page_files_info`(附件/嵌入物件**中繼資料**,任何型別) vs `get_page_files`(附件**內容**抽取,僅文字類/圖片/PDF)——info 是 files 的前置;非支援型別(docx/xlsx 等)只能取 info,不能取內容。
    - 命名小疙瘩:`restructure_section` 與 `reorder_sections` 的動詞/單複數不一致,若描述尚未對外凍結可考慮統一,降低模型猶豫。
 2. **把程式碼強制不了的行為契約寫進描述文字**(那是唯一落地處):
    - 破壞性工具(`delete_node`、`delete_page_content`、`delete_inline_content`、`modify_table` 的 `delete_rows`/`delete_columns`、覆蓋式 `update_page_content`)醒目標 **DESTRUCTIVE**。

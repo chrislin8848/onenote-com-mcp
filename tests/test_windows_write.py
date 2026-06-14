@@ -315,9 +315,9 @@ def test_modify_table_shape_roundtrips(backend, temp_section):
     ]
 
     # add a column at the end → every row gains an (empty) cell, table stays rectangular
-    page_edit.modify_table(backend, page_id, tid, "add_columns")
+    page_edit.modify_table(backend, page_id, tid, "insert_columns")
     t = table()
-    assert all(len(r) == 3 for r in t["rows"]), "every row has 3 cells after add_columns"
+    assert all(len(r) == 3 for r in t["rows"]), "every row has 3 cells after insert_columns"
     assert [c["text"] for c in t["rows"][0]] == ["a", "b", ""], "new cell is empty"
 
     # delete the middle column (index 1) → drops that column from every row
@@ -375,6 +375,54 @@ def test_modify_table_set_rows_roundtrip(backend, temp_section):
         ["3", ""],
         ["5", ""],
     ]
+
+
+def test_modify_table_reorder_set_column_and_add_values_roundtrip(backend, temp_section):
+    page_id = create.create_page(backend, temp_section, "表格欄列重排頁")
+    page_edit.add_table(backend, page_id, [["a", "b", "c"], ["d", "e", "f"], ["g", "h", "i"]])
+
+    def table():
+        return next(
+            b
+            for o in read.get_page(backend, page_id)["outlines"]
+            for b in o["blocks"]
+            if b["type"] == "table"
+        )
+
+    tid = table()["object_id"]
+    cell_ids_before = {c["object_id"] for r in table()["rows"] for c in r}
+
+    # reorder columns: [2,0,1] moves column 2 to the front; cells move with their column, IDs kept
+    page_edit.modify_table(backend, page_id, tid, "reorder_columns", order=[2, 0, 1])
+    t = table()
+    assert [[c["text"] for c in r] for r in t["rows"]] == [
+        ["c", "a", "b"],
+        ["f", "d", "e"],
+        ["i", "g", "h"],
+    ]
+    assert {c["object_id"] for r in t["rows"] for c in r} == cell_ids_before, "no cell retyped"
+
+    # reorder rows: move the last row to the top
+    page_edit.modify_table(backend, page_id, tid, "reorder_rows", order=[2, 0, 1])
+    assert [[c["text"] for c in r] for r in table()["rows"]] == [
+        ["i", "g", "h"],
+        ["c", "a", "b"],
+        ["f", "d", "e"],
+    ]
+
+    # set_column: rewrite ONLY the middle column compactly (one value per row, no full grid)
+    page_edit.modify_table(backend, page_id, tid, "set_column", at_index=1, values=["1", "2", "3"])
+    assert [[c["text"] for c in r] for r in table()["rows"]] == [
+        ["i", "1", "h"],
+        ["c", "2", "b"],
+        ["f", "3", "e"],
+    ]
+
+    # add a column WITH content in one call (no add-then-fill two-step)
+    page_edit.modify_table(backend, page_id, tid, "insert_columns", values=["X", "Y", "Z"])
+    t = table()
+    assert all(len(r) == 4 for r in t["rows"]), "every row gained the new column"
+    assert [r[-1]["text"] for r in t["rows"]] == ["X", "Y", "Z"]
 
 
 def test_delete_inline_content_drops_table_keeps_paragraphs(backend, temp_section):

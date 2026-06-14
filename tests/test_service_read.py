@@ -129,6 +129,31 @@ def test_get_page_table_is_structured_with_object_ids(fixtures_dir):
     assert table["rows"][9][1]["text"] == "範例飯店"
 
 
+def test_get_table_returns_one_table_compactly(fixtures_dir):
+    # the table-only read: find the page's table by its objectID and project just it (the compact
+    # companion to get_page for a big table-heavy page)
+    page = read.get_page(_be(fixtures_dir), TABLE_PAGE_ID)
+    table_id = next(b["object_id"] for b in page["outlines"][0]["blocks"] if b["type"] == "table")
+
+    out = read.get_table(_be(fixtures_dir), TABLE_PAGE_ID, table_id)
+    assert out["page_id"] == TABLE_PAGE_ID
+    assert out["last_modified_time"]
+    table = out["table"]
+    assert table["object_id"] == table_id
+    # same structured shape get_page emits for a table — columns, rows, row/cell objectIDs
+    assert len(table["columns"]) == 2
+    assert len(table["rows"]) == 10
+    assert len(table["row_object_ids"]) == 10
+    assert table["rows"][0][0]["text"] == "DAY 1"
+
+
+def test_get_table_raises_for_unknown_table_id(fixtures_dir):
+    from onenote_com_mcp.errors import NodeNotFoundError
+
+    with pytest.raises(NodeNotFoundError, match="no table"):
+        read.get_table(_be(fixtures_dir), TABLE_PAGE_ID, "{NOPE}{1}{B0}")
+
+
 def test_get_page_image_block_has_callback_and_ocr(fixtures_dir):
     page = read.get_page(_be(fixtures_dir), IMAGE_PAGE_ID)
     images = [b for b in page["outlines"][0]["blocks"] if b["type"] == "image"]

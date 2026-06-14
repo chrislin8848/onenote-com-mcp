@@ -1,10 +1,10 @@
-"""FastMCP server — the full 28-tool OneNote catalog (SPEC §4).
+"""FastMCP server — the full 30-tool OneNote catalog (SPEC §4).
 
 Every tool is a thin facade over ``onenote_com_mcp.service`` (the shared write core, the copy
 core, the hierarchy core); the orchestration lives there, not here. Descriptions carry the §4
 contract the LLM reads: contrastive borders on confusable pairs (get_page vs get_page_info vs
-get_page_images vs get_page_files_info vs get_page_files; update_page_content vs create_table vs
-modify_table;
+get_table vs get_page_images vs get_page_files_info vs get_page_files; update_page_content vs
+create_table vs modify_table;
 restructure_section vs reposition_page vs reorder_sections vs move_page vs rename_node;
 delete_node vs delete_page_content vs delete_inline_content; copy vs move), DESTRUCTIVE +
 propose-then-confirm contracts in text, and
@@ -110,6 +110,17 @@ update_page_content("replace") is for rewriting ONE paragraph's text; apply_text
 style only, never the words. To restyle a page AND its subpages, enumerate with list_pages, then \
 call it per page.
 
+Editing tables: pick the narrowest operation instead of rebuilding the table. To READ just one \
+table (e.g. a long Guest List) use get_table, not the whole-page get_page. To REARRANGE columns or \
+rows — move a column to the front, drop one and shift the rest — use modify_table \
+reorder_columns / reorder_rows with the complete target order (e.g. order=[2,0,1]); do NOT \
+clear and re-type cells \
+with set_rows just to reorder. To rewrite ONE column's text use modify_table set_column (a flat \
+list, one value per row) rather than a full set_rows grid of mostly-unchanged cells; to add a \
+column WITH content in one step use insert_columns with values; to change a whole column's STYLE \
+or COLOR (not its text) use apply_text_style(columns=[j]); to edit ONE cell's text use \
+update_page_content("replace") on that cell's paragraph objectID.
+
 Editing a page = edit it IN PLACE (update_page_content, modify_table, delete_inline_content, \
 insert_svg_image); this is the normal, expected, safe-enough path for ordinary changes. Do NOT \
 rebuild a page from scratch (create a new page, re-emit the content, recycle the old) just to \
@@ -121,7 +132,7 @@ edit the COPY freely — the original is your backup.
 
 Match how much you confirm to the RISK; do NOT gate everything. Just DO it and report afterwards \
 (no pre-confirm) for reversible or lossless operations: editing in place (update_page_content, \
-modify_table insert_rows/add_columns/set_rows), rename_node, reposition_page, reorder_sections, \
+modify_table insert_rows/insert_columns/set_rows), rename_node, reposition_page, reorder_sections, \
 restructure_section (these only rename, reorder, or re-level — no data is lost), and moving a \
 SINGLE page or section to the recycle bin (do it, then report that it is recoverable). Propose and \
 get explicit go-ahead FIRST for irreversible or large-scope operations: permanent deletes \
@@ -221,7 +232,9 @@ def get_page(page_id: str) -> str:
     IDs + metadata), NOT their bytes — use get_page_images for image pixels and get_page_files /
     get_page_files_info for attachments. When you only need to know WHAT objects a page has and
     their IDs (e.g. to find/delete every image, including page-level printout renders) — not the
-    full text — use get_page_info instead: it is a cheaper, flat, exhaustive object inventory."""
+    full text — use get_page_info instead: it is a cheaper, flat, exhaustive object inventory.
+    When you only need ONE table's contents (e.g. a big table-heavy page where this full read is
+    large), use get_table — it returns just that table, compactly."""
     return _json(read.get_page(get_backend(), page_id))
 
 
@@ -241,6 +254,19 @@ def get_page_info(page_id: str) -> str:
     list, and across several pages call it per page rather than assuming pages with no images near
     the top have none lower down."""
     return _json(read.get_page_info(get_backend(), page_id))
+
+
+@logged_tool()
+def get_table(page_id: str, table_object_id: str) -> str:
+    """Read ONE table's structured content — its columns, every cell (text, runs, shading color),
+    and the row/cell objectIDs — without the rest of the page. Use this instead of get_page when you
+    only care about a specific table, especially on a big table-heavy page (a long Guest List etc.)
+    where get_page returns a large payload: this is the compact, table-only read. Get the
+    table_object_id from get_page or get_page_info first (get_page_info lists each table with its id
+    + rows×cols but NOT its cell contents; get_table is what returns the contents). It finds the
+    table anywhere on the page, including one nested inside a cell. To then EDIT the table use
+    modify_table (shape/bulk content) or update_page_content ("replace" for one cell)."""
+    return _json(read.get_table(get_backend(), page_id, table_object_id))
 
 
 # structured_output=False: the return is image content, not a JSON schema — FastMCP can't
@@ -436,25 +462,38 @@ def create_table(
 def modify_table(
     page_id: str,
     table_object_id: str,
-    operation: Literal["add_columns", "insert_rows", "set_rows", "delete_columns", "delete_rows"],
+    operation: Literal[
+        "insert_columns",
+        "insert_rows",
+        "set_rows",
+        "set_column",
+        "reorder_columns",
+        "reorder_rows",
+        "delete_columns",
+        "delete_rows",
+    ],
     rows: list[list[str | dict | None]] | None = None,
     indices: list[int] | None = None,
+    order: list[int] | None = None,
+    values: list[str | dict | None] | None = None,
     at_index: int | None = None,
     count: int = 1,
     width: float | None = None,
     force: bool = False,
 ) -> str:
-    """Change an EXISTING table in place — its SHAPE (row/column count) or, with set_rows, the
-    bulk CONTENT of whole rows — keeping the table's objectID and every untouched cell's identity.
-    Pair with create_table (which only makes NEW tables) and update_page_content ("replace" to edit
-    ONE cell's TEXT). Get table_object_id and the row/column layout from get_page first.
+    """Change an EXISTING table in place — its SHAPE (row/column count or ORDER) or its CONTENT (a
+    whole row, a whole column, or every row) — keeping the table's objectID and every untouched
+    cell's identity. Pair with create_table (which only makes NEW tables) and update_page_content
+    ("replace" to edit ONE cell's TEXT). Get table_object_id and the row/column layout from get_page
+    (or get_table for just that one table) first.
 
     operation (row and column edits are symmetric):
       "insert_rows"    — insert rows at 0-based at_index (omit at_index → append at the end).
                          rows = cell content, same shape as create_table.
-      "add_columns"    — insert count empty columns at 0-based at_index (omit → append at the
+      "insert_columns" — insert count empty columns at 0-based at_index (omit → append at the
                          end); width defaults to the last column's. Every row gains an empty cell.
-                         Fill the new cells afterwards with update_page_content ("replace").
+                         values (only with count=1) fills the new column in the SAME call — a flat
+                         list, one cell value per row; otherwise fill later with set_column.
       "set_rows"       — OVERWRITE the content of rows that ALREADY exist with rows (cell content,
                          same shape as create_table) from at_index (omit → row 0), one input row per
                          existing row. set_rows only rewrites existing rows — to ADD new rows use
@@ -465,6 +504,18 @@ def modify_table(
                          row + at_index to overwrite a single row; pass every row to refresh the
                          whole table (vs update_page_content "replace", which rewrites ONE cell).
                          Writing past the last row, or a row wider than the table, is refused.
+      "set_column"     — OVERWRITE the content of ONE column (at_index = the 0-based column) with
+                         values, a flat list of one cell value per row from the top. The compact way
+                         to rewrite a single column without re-supplying the whole table; same
+                         fixed-shape/keep-identity rules as set_rows (short list leaves trailing
+                         rows, None leaves that cell). To set a whole column's STYLE/COLOR (not its
+                         text), use apply_text_style(columns=[j]).
+      "reorder_columns"— reorder the columns into order: a COMPLETE permutation of the current
+                         column indices ([2,0,1] puts column 2 first). The matching cell in every
+                         row moves with its column; nothing is added, removed, or retyped. Use this
+                         to rearrange columns instead of clearing+rewriting them with set_rows.
+      "reorder_rows"   — reorder the rows into order: a COMPLETE permutation of the current row
+                         indices. Each row keeps its objectID and content; only its position moves.
       "delete_rows"    — DESTRUCTIVE: remove the rows at indices (0-based list).
       "delete_columns" — DESTRUCTIVE: remove the columns at indices (0-based) plus the matching
                          cell in every row.
@@ -478,6 +529,8 @@ def modify_table(
         operation,
         rows=rows,
         indices=indices,
+        order=order,
+        values=values,
         at_index=at_index,
         count=count,
         width=width,

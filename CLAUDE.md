@@ -91,6 +91,55 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 
 ## Status (2026-06-14)
 
+**v1.2.0 — table-editing ergonomics: `get_table` (NEW tool #30) + modify_table gains
+`reorder_columns`/`reorder_rows`/`set_column` + `insert_columns` `values`. NAMING: `add_columns`
+was RENAMED to `insert_columns` (verb-consistent with `insert_rows`; clean rename, NO alias, done
+PRE-PUSH so nothing public broke; `set_column` kept SINGULAR deliberately — plural `set_rows`/2D vs
+singular `set_column`/flat telegraphs the shape; no 2D column-content param — transpose footgun,
+"insert empty → set_column" covers it). Catalog 29→30; Tier-1 329 green. Tier-2 VM-VALIDATED
+2026-06-14 (72 tests, 65 passed / 7 skip / 0 fail, 530s; new round-trips `get_table` live +
+reorder/set_column/insert_columns-values PASS) — that run PREDATES the rename, which is a pure
+operation-string relabel (identical COM mechanics; Tier-1 covers the dispatch, so no Tier-2 re-run).
+Installer rebuilt post-rename as OneNoteMCP-Setup_1.2.0.exe (sha256
+259a96fe8451f4695afecb92d4043a908eae82f3d4ed50f836848b2923c3e6d6, ~24.65MB; frozen --selftest OK
+"3 notebooks, vendored"); committed locally, NOT pushed. Driven by real-Claude-Desktop table
+feedback Chris relayed — four
+friction points, all built INSIDE the existing modify_table / read seams (no new COM, no new
+invariant):**
+- **`get_table`** (NEW read tool, #30): read ONE table's structured content (columns, every cell
+  text+runs+shading, row/cell objectIDs) WITHOUT the rest of the page — the compact companion to
+  get_page for big table-heavy pages (a long Guest List) whose full get_page payload a client may
+  spill to a file. Finds the table anywhere on the page (incl. nested in a cell). `service/read.get_table`
+  reuses `_table_dict`; raises NodeNotFoundError on an unknown id.
+- **modify_table `reorder_columns` / `reorder_rows`**: rearrange a table by passing a COMPLETE
+  permutation `order` (e.g. `[2,0,1]`) — the whole-batch discipline (a partial/dup/out-of-range
+  order is refused via `_validate_permutation`). Columns are positional (no objectID); the matching
+  one:Cell in every row moves with its column (lxml append = move), each cell/row keeping its
+  objectID — NO retyping. Fixes the worst gap: previously rearranging columns meant set_rows
+  rewriting every cell then delete_columns (error-prone manual remap).
+- **modify_table `set_column`**: overwrite ONE column (the `at_index`-th cell of every row) with a
+  flat `values` list (one per row) — the compact single-column counterpart of set_rows, no
+  re-supplying the whole grid. Same fixed-shape/keep-identity rules (short list leaves trailing
+  rows, `None` leaves that cell). (For a column's STYLE/COLOR not text, apply_text_style(columns=[j])
+  already exists since 1.1.4 — a discoverability point the §4 borders now spell out.)
+- **modify_table `insert_columns` (renamed from add_columns) gains `values`**: fill the new
+  column's cells in the SAME call (only with count=1; multi-column-with-content refused) — no
+  add-then-fill two-step.
+- §4: `get_table` borders get_page both ways; modify_table description + operation enum +
+  `order`/`values` params; `_SERVER_INSTRUCTIONS` gained an "Editing tables" paragraph (reorder vs
+  clear+retype; set_column; insert_columns values; get_table for big tables; apply_text_style(columns)
+  for column style). SPEC §4 tool table + borders updated. Version 1.1.4→1.2.0 (pyproject + __init__
+  + .iss + uv.lock).
+- Tier-1 (329, +12): `test_page_edit_content.py` (reorder columns/rows swap keeping ids; reorder
+  rejects partial permutation / requires order; set_column rewrites one column leaving others +
+  short-list/None + rejects out-of-range/missing values; insert_columns values fills new column +
+  rejects multi-column), `test_service_read.py` (get_table returns one table / raises on unknown id),
+  `test_smoke_server.py` (30 catalog + get_table↔get_page border + modify_table op enum + order/values
+  params + instructions asserts). Tier-2 `test_windows_write.py` (reorder+set_column+add-values
+  round-trip, cell-ids kept) + `test_windows_read.py` (get_table live) — **VM-VALIDATED (65 passed/
+  7 skip/0 fail). Installer rebuilt + pulled (OneNoteMCP-Setup_1.2.0.exe, sha256 b85f961d…c521a).
+  Committed locally, NOT pushed (Chris's call). Remaining: push + real-Claude-Desktop §4 acceptance.**
+
 **v1.1.4 — apply_text_style: highlight-clear bug fix + `cell_shading` (set/clear) + TABLE ROW +
 COLUMN granularity (29-tool catalog unchanged; Tier-1 317 green; Tier-2 PENDING VM run). One
 release, three threads, all inside the apply_text_style seam.**

@@ -340,7 +340,7 @@ def _insert_table_rows(table: etree._Element, rows: list[list[Any]], at_index: i
     if widest > n_cols:
         raise ValueError(
             f"a row has {widest} cells but the table has {n_cols} columns — "
-            "add columns first (modify_table operation='add_columns')"
+            "add columns first (modify_table operation='insert_columns')"
         )
     existing = table.findall(qn("Row"))
     n_rows = len(existing)
@@ -357,13 +357,27 @@ def _insert_table_rows(table: etree._Element, rows: list[list[Any]], at_index: i
             table.append(nr)
 
 
-def _add_table_columns(
-    table: etree._Element, at_index: int | None, count: int, width: float | None
+def _insert_table_columns(
+    table: etree._Element,
+    at_index: int | None,
+    count: int,
+    width: float | None,
+    values: list[Any] | None = None,
 ) -> None:
     """Insert ``count`` empty columns at a 0-based position (None = append at the end). Adds an
-    empty cell to every row at the same position so the table stays rectangular."""
+    empty cell to every row at the same position so the table stays rectangular.
+
+    ``values`` (only when ``count == 1``) fills the new column's cells from the top — one input
+    value per row, same cell shape as create_table; a ``None`` value leaves that row's new cell
+    empty. Adding several columns with content at once is refused (add them, then fill with
+    set_column / update_page_content) so the value-to-column mapping stays unambiguous."""
     if count < 1:
         raise ValueError("count must be >= 1")
+    if values is not None and count != 1:
+        raise ValueError(
+            "insert_columns values is only supported when adding a SINGLE column (count=1) — "
+            "add the columns, then fill them with set_column / update_page_content"
+        )
     columns = _table_columns_el(table)
     cols = columns.findall(qn("Column"))
     n_cols = len(cols)
@@ -371,6 +385,11 @@ def _add_table_columns(
         at_index = n_cols
     if not (0 <= at_index <= n_cols):
         raise ValueError(f"at_index {at_index} is out of range 0..{n_cols}")
+    rows = table.findall(qn("Row"))
+    if values is not None and len(values) > len(rows):
+        raise ValueError(
+            f"insert_columns got {len(values)} values but the table has {len(rows)} rows"
+        )
     if width is None:
         last = cols[-1].get("width") if cols else None
         width = float(last) if last else 120.0
@@ -379,9 +398,15 @@ def _add_table_columns(
         col.set("width", str(float(width)))
         columns.insert(at_index + i, col)
     _renumber_columns(columns)
-    for row in table.findall(qn("Row")):
+    for row in rows:
         for i in range(count):
             row.insert(at_index + i, _empty_cell())
+    if values is not None:
+        for i, val in enumerate(values):
+            if val is None:
+                continue
+            runs, shading_color, alignment = _cell_runs(val)
+            _set_cell_content(rows[i].findall(qn("Cell"))[at_index], runs, shading_color, alignment)
 
 
 def _delete_table_rows(table: etree._Element, indices: list[int]) -> None:
@@ -446,8 +471,8 @@ def _set_table_rows(table: etree._Element, rows: list[list[Any]], at_index: int 
     existing row. Fixed-shape: rows/columns are never added or removed — every one:Cell keeps its
     objectID. A short input row leaves the trailing columns untouched, and a ``None`` cell leaves
     THAT cell unchanged (so ``[None, "", ""]`` keeps column 0 and clears the rest). Out-of-range
-    writes are refused (point at insert_rows / add_columns) so a content edit never silently grows
-    it."""
+    writes are refused (point at insert_rows / insert_columns) so a content edit never silently
+    grows it."""
     existing = table.findall(qn("Row"))
     n_rows = len(existing)
     n_cols = len(_table_columns_el(table).findall(qn("Column")))
@@ -465,7 +490,7 @@ def _set_table_rows(table: etree._Element, rows: list[list[Any]], at_index: int 
     if widest > n_cols:
         raise ValueError(
             f"a row has {widest} cells but the table has {n_cols} columns — "
-            "add columns first (modify_table operation='add_columns')"
+            "add columns first (modify_table operation='insert_columns')"
         )
     for j, row_input in enumerate(rows):
         cells = existing[at_index + j].findall(qn("Cell"))
@@ -474,6 +499,72 @@ def _set_table_rows(table: etree._Element, rows: list[list[Any]], at_index: int 
                 continue  # None = leave this cell exactly as it is (keep its content + identity)
             runs, shading_color, alignment = _cell_runs(cell_input)
             _set_cell_content(cells[k], runs, shading_color, alignment)
+
+
+def _set_table_column(table: etree._Element, col_index: int | None, values: list[Any]) -> None:
+    """Overwrite the CONTENT of ONE column — the ``col_index``-th cell of every row — from the top,
+    one input value per row (same cell shape as create_table). Fixed-shape: no row/column added or
+    removed, every cell keeps its objectID; a short ``values`` list leaves trailing rows untouched,
+    and a ``None`` value leaves THAT cell unchanged. The compact way to rewrite a single column
+    without re-supplying the whole table (set_rows). Out-of-range column / too many values is
+    refused."""
+    if col_index is None:
+        raise ValueError("set_column requires at_index — the 0-based column to overwrite")
+    rows = table.findall(qn("Row"))
+    n_rows = len(rows)
+    n_cols = len(_table_columns_el(table).findall(qn("Column")))
+    if not (0 <= col_index < n_cols):
+        raise ValueError(f"at_index {col_index} is out of range 0..{n_cols - 1}")
+    if len(values) > n_rows:
+        raise ValueError(
+            f"set_column got {len(values)} values but the table has {n_rows} rows — "
+            "add rows first (modify_table operation='insert_rows')"
+        )
+    for i, val in enumerate(values):
+        if val is None:
+            continue
+        cells = rows[i].findall(qn("Cell"))
+        if col_index < len(cells):
+            runs, shading_color, alignment = _cell_runs(val)
+            _set_cell_content(cells[col_index], runs, shading_color, alignment)
+
+
+def _validate_permutation(order: list[int], n: int, what: str) -> None:
+    """``order`` must be a COMPLETE permutation of 0..n-1 — every current index exactly once. The
+    whole-batch discipline (SPEC §5): a partial / duplicated / out-of-range order is refused, so a
+    reorder can never silently drop or duplicate a row/column."""
+    if sorted(order) != list(range(n)):
+        raise ValueError(
+            f"reorder order must be a permutation of every {what} index 0..{n - 1} (each exactly "
+            f"once) — got {order}"
+        )
+
+
+def _reorder_table_columns(table: etree._Element, order: list[int]) -> None:
+    """Reorder the table's COLUMNS into ``order`` (a full permutation of the current column
+    indices), moving the matching one:Cell in every row so columns stay aligned. A column is
+    positional (no objectID); each cell keeps its objectID, only its position changes."""
+    columns = _table_columns_el(table)
+    cols = columns.findall(qn("Column"))
+    _validate_permutation(order, len(cols), "column")
+    for idx in order:
+        columns.append(cols[idx])  # appending an existing child MOVES it (lxml) → target order
+    _renumber_columns(columns)
+    for row in table.findall(qn("Row")):
+        cells = row.findall(qn("Cell"))
+        if len(cells) == len(cols):  # rectangular (the invariant) — reorder its cells to match
+            for idx in order:
+                row.append(cells[idx])
+
+
+def _reorder_table_rows(table: etree._Element, order: list[int]) -> None:
+    """Reorder the table's ROWS into ``order`` (a full permutation of the current row indices). Each
+    row keeps its objectID and cells; only its position changes. one:Columns stays first (never
+    moved), so the rows re-sort after it."""
+    rows = table.findall(qn("Row"))
+    _validate_permutation(order, len(rows), "row")
+    for idx in order:
+        table.append(rows[idx])  # moves each row to the end in target order; Columns stays first
 
 
 # --- Composable mutators + the facades the MCP write tools delegate to ---------------
@@ -591,8 +682,26 @@ def add_table(
     apply_page_edit(backend, page_id, mutate, force=force)
 
 
-_TABLE_OPS = ("add_columns", "insert_rows", "delete_columns", "delete_rows", "set_rows")
-TableOp = Literal["add_columns", "insert_rows", "delete_columns", "delete_rows", "set_rows"]
+_TABLE_OPS = (
+    "insert_columns",
+    "insert_rows",
+    "delete_columns",
+    "delete_rows",
+    "set_rows",
+    "set_column",
+    "reorder_columns",
+    "reorder_rows",
+)
+TableOp = Literal[
+    "insert_columns",
+    "insert_rows",
+    "delete_columns",
+    "delete_rows",
+    "set_rows",
+    "set_column",
+    "reorder_columns",
+    "reorder_rows",
+]
 
 
 def modify_table(
@@ -603,26 +712,41 @@ def modify_table(
     *,
     rows: list[list[Any]] | None = None,
     indices: list[int] | None = None,
+    order: list[int] | None = None,
+    values: list[Any] | None = None,
     at_index: int | None = None,
     count: int = 1,
     width: float | None = None,
     force: bool = False,
 ) -> None:
-    """Change an EXISTING table's shape in place (its objectID + every cell's identity are kept).
+    """Change an EXISTING table's shape OR content in place (its objectID + every cell's identity
+    are kept).
 
     operation:
       * ``insert_rows``  — insert ``rows`` (cell content, same shape as create_table) at the
         0-based ``at_index``; omit ``at_index`` to append at the end.
-      * ``add_columns``  — insert ``count`` empty columns at ``at_index`` (omit = append at the
+      * ``insert_columns`` — insert ``count`` empty columns at ``at_index`` (omit = append at the
         end); ``width`` defaults to the last column's. Every row gets an empty cell so the table
-        stays rectangular. Fill the new cells afterwards with update_page_content (replace).
+        stays rectangular. ``values`` (only with ``count == 1``) fills the new column's cells from
+        the top — one per row — in the SAME call; otherwise fill later with set_column /
+        update_page_content.
       * ``set_rows``     — REPLACE the content of existing rows with ``rows`` (cell content, same
         shape as create_table), starting at ``at_index`` (omit = row 0), one input row per existing
         row. Fixed-shape: no row/column is added or removed and every cell keeps its objectID; a
         short input row leaves trailing columns untouched, and a ``None`` cell leaves THAT cell
         unchanged (``[None, "", ""]`` keeps column 0, clears the rest). Give one row + ``at_index``
         to replace a single row. Writing past the last row / wider than the table is refused (grow
-        it first with insert_rows / add_columns).
+        it first with insert_rows / insert_columns).
+      * ``set_column``   — REPLACE the content of ONE column (the ``at_index``-th cell of every row)
+        with ``values`` — a flat list, one value per row from the top. Fixed-shape, every cell keeps
+        its objectID; a short list leaves trailing rows untouched, a ``None`` value leaves that cell
+        unchanged. The compact single-column counterpart of set_rows (no need to re-supply the whole
+        table). Out-of-range column / too many values is refused.
+      * ``reorder_columns`` — reorder the columns into ``order``, a COMPLETE permutation of the
+        current column indices (e.g. ``[2, 0, 1]`` moves column 2 to the front); the matching cell
+        in every row moves with its column, each keeping its objectID. A partial order is refused.
+      * ``reorder_rows`` — reorder the rows into ``order``, a COMPLETE permutation of the current
+        row indices; each row keeps its objectID and content, only its position changes.
       * ``delete_rows``    — remove the rows at ``indices`` (0-based). DESTRUCTIVE.
       * ``delete_columns`` — remove the columns at ``indices`` (0-based) and the matching cell in
         every row. DESTRUCTIVE.
@@ -636,6 +760,10 @@ def modify_table(
         raise ValueError(f"{operation} requires non-empty rows")
     if operation in ("delete_rows", "delete_columns") and not indices:
         raise ValueError(f"{operation} requires non-empty indices")
+    if operation in ("reorder_columns", "reorder_rows") and not order:
+        raise ValueError(f"{operation} requires a non-empty order (the complete target order)")
+    if operation == "set_column" and not values:
+        raise ValueError("set_column requires non-empty values (one cell value per row)")
 
     def mutate(tree: etree._Element) -> None:
         table = _find_content_object(tree, table_object_id)
@@ -646,10 +774,16 @@ def modify_table(
             )
         if operation == "insert_rows":
             _insert_table_rows(table, rows, at_index)
-        elif operation == "add_columns":
-            _add_table_columns(table, at_index, count, width)
+        elif operation == "insert_columns":
+            _insert_table_columns(table, at_index, count, width, values)
         elif operation == "set_rows":
             _set_table_rows(table, rows, at_index)
+        elif operation == "set_column":
+            _set_table_column(table, at_index, values)
+        elif operation == "reorder_columns":
+            _reorder_table_columns(table, order)
+        elif operation == "reorder_rows":
+            _reorder_table_rows(table, order)
         elif operation == "delete_rows":
             _delete_table_rows(table, indices)
         else:  # delete_columns

@@ -21,6 +21,7 @@ EXPECTED_TOOLS = {
     "search_pages",
     "get_page",
     "get_page_info",
+    "get_table",
     "get_page_images",
     "get_page_files_info",
     "get_page_files",
@@ -58,9 +59,9 @@ def tools():
     return {t.name: t for t in asyncio.run(mcp.list_tools())}
 
 
-def test_catalog_is_the_29_expected_tools(tools):
+def test_catalog_is_the_30_expected_tools(tools):
     assert set(tools) == EXPECTED_TOOLS
-    assert len(tools) == 29
+    assert len(tools) == 30
     # RASTER image insertion was deliberately removed (base64-through-the-model is too slow):
     # the only picture-insert path is insert_svg_image (vector SVG, rendered server-side). There
     # is no raster insert_image / insert_file tool.
@@ -89,6 +90,9 @@ def test_contrastive_borders_present(tools):
     # get_page (full content) vs get_page_info (lightweight object inventory) name each other
     assert "get_page_info" in tools["get_page"].description
     assert "get_page" in tools["get_page_info"].description
+    # get_table (single-table compact read) borders get_page both ways
+    assert "get_table" in tools["get_page"].description
+    assert "get_page" in tools["get_table"].description
     # file discovery (get_page_info) vs file-extraction precheck (get_page_files_info): the
     # precheck points back to the inventory for plain discovery
     assert "get_page_info" in tools["get_page_files_info"].description
@@ -119,6 +123,22 @@ def test_contrastive_borders_present(tools):
 def test_update_mode_is_a_per_value_enum(tools):
     mode = tools["update_page_content"].inputSchema["properties"]["mode"]
     assert mode.get("enum") == ["append", "insert_before", "insert_after", "replace"]
+
+
+def test_modify_table_operation_enum_covers_reorder_and_set_column(tools):
+    op = tools["modify_table"].inputSchema["properties"]["operation"]
+    assert set(op.get("enum")) == {
+        "insert_columns",
+        "insert_rows",
+        "set_rows",
+        "set_column",
+        "reorder_columns",
+        "reorder_rows",
+        "delete_columns",
+        "delete_rows",
+    }
+    props = tools["modify_table"].inputSchema["properties"]
+    assert "order" in props and "values" in props  # the reorder / single-column params
 
 
 def test_insert_svg_image_can_be_positioned_mid_page(tools):
@@ -163,6 +183,11 @@ def test_server_instructions_present():
     # 1.1.1: enumerate pages/subpages with list_pages, not search_pages (full-text, silently misses)
     assert "list_pages" in mcp.instructions
     assert "search_pages" in mcp.instructions
+    # 1.2.0: table editing — rearrange with reorder_columns/reorder_rows (not clear+retype), rewrite
+    # one column with set_column, and read one big table compactly with get_table
+    assert "reorder_columns" in mcp.instructions
+    assert "set_column" in mcp.instructions
+    assert "get_table" in mcp.instructions
 
 
 def test_selftest_reports_failure_cleanly(monkeypatch, capsys):

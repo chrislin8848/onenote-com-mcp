@@ -121,6 +121,23 @@ def test_get_page_table_is_structured_live(backend, pages_by_name):
     assert all(isinstance(row, list) for row in table["rows"])  # structured, never one string
 
 
+def test_get_table_reads_one_table_live(backend, pages_by_name):
+    pid = pages_by_name.get("表格頁")
+    if pid is None:
+        pytest.skip("表格頁 not present")
+    table_id = next(
+        b["object_id"]
+        for o in read.get_page(backend, pid)["outlines"]
+        for b in o["blocks"]
+        if b["type"] == "table"
+    )
+    out = read.get_table(backend, pid, table_id)
+    assert out["page_id"] == pid
+    assert out["table"]["object_id"] == table_id
+    assert len(out["table"]["rows"]) >= 2
+    assert all(isinstance(row, list) for row in out["table"]["rows"])
+
+
 def test_get_page_images_returns_binary_live(backend, pages_by_name):
     pid = pages_by_name.get("圖片頁")
     if pid is None:

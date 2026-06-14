@@ -297,12 +297,12 @@ def test_modify_table_insert_rows_rejects_rows_wider_than_table(be, table_page):
     assert not [c for c in be.calls if c.method == "update_page_content"]
 
 
-def test_modify_table_add_columns_appends_column_to_every_row(be, table_page):
+def test_modify_table_insert_columns_appends_column_to_every_row(be, table_page):
     table = next(table_page.iter(qn("Table")))
     n_cols = len(table.findall(f"{qn('Columns')}/{qn('Column')}"))
     n_rows = len(table.findall(qn("Row")))
 
-    page_edit.modify_table(be, table_page.get("ID"), table.get("objectID"), "add_columns")
+    page_edit.modify_table(be, table_page.get("ID"), table.get("objectID"), "insert_columns")
     _, sent = _sent_payload(be)
     sent_table = next(sent.iter(qn("Table")))
     cols = sent_table.findall(f"{qn('Columns')}/{qn('Column')}")
@@ -313,14 +313,14 @@ def test_modify_table_add_columns_appends_column_to_every_row(be, table_page):
     # the new cell is a valid, empty cell (OEChildren > OE), never an empty <Cell/>
     last_cell = sent_table.findall(qn("Row"))[0].findall(qn("Cell"))[-1]
     assert last_cell.find(f"{qn('OEChildren')}/{qn('OE')}") is not None
-    assert n_rows == len(sent_table.findall(qn("Row")))  # add_columns doesn't change row count
+    assert n_rows == len(sent_table.findall(qn("Row")))  # insert_columns doesn't change row count
 
 
-def test_modify_table_add_columns_at_position(be, table_page):
+def test_modify_table_insert_columns_at_position(be, table_page):
     table = next(table_page.iter(qn("Table")))
     n_cols = len(table.findall(f"{qn('Columns')}/{qn('Column')}"))
     page_edit.modify_table(
-        be, table_page.get("ID"), table.get("objectID"), "add_columns", at_index=0, count=2
+        be, table_page.get("ID"), table.get("objectID"), "insert_columns", at_index=0, count=2
     )
     _, sent = _sent_payload(be)
     cols = next(sent.iter(qn("Table"))).findall(f"{qn('Columns')}/{qn('Column')}")
@@ -471,6 +471,165 @@ def test_modify_table_set_rows_none_cell_leaves_that_cell_unchanged(be, table_pa
     assert "改第二格" in _cdata(changed)
 
 
+# --- modify_table reorder_columns / reorder_rows: rearrange without retyping ----------
+
+
+def _oe_text(cell: etree._Element) -> str:
+    return _cdata(cell.find(f"{qn('OEChildren')}/{qn('OE')}"))
+
+
+def test_modify_table_reorder_columns_swaps_cells_keeping_ids(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    assert len(table.findall(f"{qn('Columns')}/{qn('Column')}")) == 2
+    cells_before = table.findall(qn("Row"))[0].findall(qn("Cell"))
+    ids_before = [c.get("objectID") for c in cells_before]
+    texts_before = [_oe_text(c) for c in cells_before]
+
+    page_edit.modify_table(
+        be, table_page.get("ID"), table.get("objectID"), "reorder_columns", order=[1, 0]
+    )
+    _, sent = _sent_payload(be)
+    sent_table = next(sent.iter(qn("Table")))
+    cols = sent_table.findall(f"{qn('Columns')}/{qn('Column')}")
+    assert [c.get("index") for c in cols] == ["0", "1"], "columns re-indexed after the move"
+    sent_cells = sent_table.findall(qn("Row"))[0].findall(qn("Cell"))
+    # columns swapped: cell order reversed, each cell keeps its own objectID (no retyping)
+    assert [c.get("objectID") for c in sent_cells] == ids_before[::-1]
+    assert [_oe_text(c) for c in sent_cells] == texts_before[::-1]
+    # every row stays rectangular and re-aligned
+    for row in sent_table.findall(qn("Row")):
+        assert len(row.findall(qn("Cell"))) == 2
+
+
+def test_modify_table_reorder_rows_reorders_keeping_row_ids(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    rows_before = table.findall(qn("Row"))
+    n = len(rows_before)
+    ids_before = [r.get("objectID") for r in rows_before]
+    order = [1, 0] + list(range(2, n))  # swap the first two rows, keep the rest
+
+    page_edit.modify_table(
+        be, table_page.get("ID"), table.get("objectID"), "reorder_rows", order=order
+    )
+    _, sent = _sent_payload(be)
+    sent_table = next(sent.iter(qn("Table")))
+    assert sent_table[0].tag == qn("Columns"), "one:Columns stays the first child"
+    sent_rows = sent_table.findall(qn("Row"))
+    assert [r.get("objectID") for r in sent_rows] == [ids_before[i] for i in order]
+
+
+def test_modify_table_reorder_rejects_partial_permutation(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    with pytest.raises(ValueError, match="permutation"):  # must list EVERY column index once
+        page_edit.modify_table(
+            be, table_page.get("ID"), table.get("objectID"), "reorder_columns", order=[0]
+        )
+    assert not [c for c in be.calls if c.method == "update_page_content"]
+
+
+def test_modify_table_reorder_requires_order(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    with pytest.raises(ValueError, match="order"):
+        page_edit.modify_table(be, table_page.get("ID"), table.get("objectID"), "reorder_rows")
+    assert not [c for c in be.calls if c.method == "update_page_content"]
+
+
+# --- modify_table set_column: rewrite ONE column compactly ----------------------------
+
+
+def test_modify_table_set_column_rewrites_one_column_leaving_others(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    rows = table.findall(qn("Row"))
+    n_rows = len(rows)
+    col1_before = [etree.tostring(r.findall(qn("Cell"))[1], with_tail=False) for r in rows]
+    ids0_before = [r.findall(qn("Cell"))[0].get("objectID") for r in rows]
+
+    page_edit.modify_table(
+        be,
+        table_page.get("ID"),
+        table.get("objectID"),
+        "set_column",
+        at_index=0,
+        values=[f"第{i}" for i in range(n_rows)],
+    )
+    _, sent = _sent_payload(be)
+    sent_rows = next(sent.iter(qn("Table"))).findall(qn("Row"))
+    # column 0 rewritten, cell identities kept...
+    assert "第0" in _oe_text(sent_rows[0].findall(qn("Cell"))[0])
+    assert "第9" in _oe_text(sent_rows[-1].findall(qn("Cell"))[0])
+    assert [r.findall(qn("Cell"))[0].get("objectID") for r in sent_rows] == ids0_before
+    # ...column 1 byte-identical
+    for r, before in zip(sent_rows, col1_before, strict=True):
+        assert etree.tostring(r.findall(qn("Cell"))[1], with_tail=False) == before
+
+
+def test_modify_table_set_column_short_list_and_none_leave_cells(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    rows = table.findall(qn("Row"))
+    last0_before = etree.tostring(rows[-1].findall(qn("Cell"))[0], with_tail=False)
+    row0c0_before = etree.tostring(rows[0].findall(qn("Cell"))[0], with_tail=False)
+
+    page_edit.modify_table(
+        be,
+        table_page.get("ID"),
+        table.get("objectID"),
+        "set_column",
+        at_index=0,
+        values=[None, "乙"],
+    )
+    _, sent = _sent_payload(be)
+    sent_rows = next(sent.iter(qn("Table"))).findall(qn("Row"))
+    assert etree.tostring(sent_rows[0].findall(qn("Cell"))[0], with_tail=False) == row0c0_before
+    assert "乙" in _oe_text(sent_rows[1].findall(qn("Cell"))[0])
+    # rows past the short list are untouched
+    assert etree.tostring(sent_rows[-1].findall(qn("Cell"))[0], with_tail=False) == last0_before
+
+
+def test_modify_table_set_column_rejects_out_of_range_and_missing_values(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    with pytest.raises(ValueError, match="out of range"):
+        page_edit.modify_table(
+            be, table_page.get("ID"), table.get("objectID"), "set_column", at_index=9, values=["x"]
+        )
+    with pytest.raises(ValueError, match="values"):
+        page_edit.modify_table(
+            be, table_page.get("ID"), table.get("objectID"), "set_column", at_index=0
+        )
+    assert not [c for c in be.calls if c.method == "update_page_content"]
+
+
+# --- modify_table insert_columns with values: add a column WITH content in one step ------
+
+
+def test_modify_table_insert_columns_with_values_fills_new_column(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    n_rows = len(table.findall(qn("Row")))
+    n_cols = len(table.findall(f"{qn('Columns')}/{qn('Column')}"))
+
+    page_edit.modify_table(
+        be,
+        table_page.get("ID"),
+        table.get("objectID"),
+        "insert_columns",
+        values=[f"備註{i}" for i in range(n_rows)],
+    )
+    _, sent = _sent_payload(be)
+    sent_table = next(sent.iter(qn("Table")))
+    assert len(sent_table.findall(f"{qn('Columns')}/{qn('Column')}")) == n_cols + 1
+    sent_rows = sent_table.findall(qn("Row"))
+    assert "備註0" in _oe_text(sent_rows[0].findall(qn("Cell"))[-1])  # the new last column
+    assert "備註9" in _oe_text(sent_rows[-1].findall(qn("Cell"))[-1])
+
+
+def test_modify_table_insert_columns_values_rejects_multiple_columns(be, table_page):
+    table = next(table_page.iter(qn("Table")))
+    with pytest.raises(ValueError, match="SINGLE column"):
+        page_edit.modify_table(
+            be, table_page.get("ID"), table.get("objectID"), "insert_columns", count=2, values=["a"]
+        )
+    assert not [c for c in be.calls if c.method == "update_page_content"]
+
+
 # --- nested tables (a table inside a cell — the 業務塔斯作業 PAYMENT layout) --------------
 
 _ONE_NS = "http://schemas.microsoft.com/office/onenote/2013/onenote"
@@ -523,7 +682,7 @@ def test_modify_table_on_inner_table_does_not_touch_outer():
     inner = page_edit._find_content_object(tree, "T-INNER")
     outer = page_edit._find_content_object(tree, "T-OUTER")
 
-    page_edit._add_table_columns(inner, None, 1, None)  # add a column to the INNER table
+    page_edit._insert_table_columns(inner, None, 1, None)  # add a column to the INNER table
 
     assert len(inner.findall(f"{qn('Columns')}/{qn('Column')}")) == 3
     for row in inner.findall(qn("Row")):

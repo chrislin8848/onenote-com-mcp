@@ -18,7 +18,7 @@ from typing import Any
 
 from onenote_com_mcp.backend.base import OneNoteBackend
 from onenote_com_mcp.enums import HierarchyScope, PageInfo
-from onenote_com_mcp.errors import OneNoteComError
+from onenote_com_mcp.errors import NodeNotFoundError, OneNoteComError
 from onenote_com_mcp.xmllayer.models import Image, InsertedFile, Paragraph, Table
 from onenote_com_mcp.xmllayer.parse import parse_hierarchy, parse_page
 
@@ -205,6 +205,29 @@ def get_page(backend: OneNoteBackend, page_id: str) -> dict[str, Any]:
         # These are deleted with delete_page_content (they ARE page-level objects).
         "page_level_images": [_image_dict(img) for img in page.page_images],
         "page_level_files": [_pagelevel_file_dict(f) for f in page.page_files],
+    }
+
+
+def get_table(backend: OneNoteBackend, page_id: str, table_object_id: str) -> dict[str, Any]:
+    """Read ONE table's structured content — its columns, every cell (text + runs + shading), and
+    the row/cell objectIDs — WITHOUT the rest of the page.
+
+    The compact companion to get_page for table-heavy pages: a Guest-List page's full get_page can
+    be huge (every outline, run, and the style table), which a client may spill to a file; this
+    returns just the one table the caller named, found anywhere on the page (including nested in a
+    cell). Get the table_object_id from get_page / get_page_info first. Raises if no such table is
+    on the page."""
+    page = parse_page(backend.get_page_content(page_id, PageInfo.piBasic))
+    table = next((t for t in page.tables if t.object_id == table_object_id), None)
+    if table is None:
+        raise NodeNotFoundError(
+            f"no table with objectID {table_object_id!r} on this page — table object IDs come "
+            "from get_page / get_page_info"
+        )
+    return {
+        "page_id": page.id,
+        "last_modified_time": page.last_modified_time,
+        "table": _table_dict(table),
     }
 
 
