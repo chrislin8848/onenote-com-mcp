@@ -110,6 +110,17 @@ name.
   (test_copy_pages engine asserts the `pages` list; facade tests assert `out["pages"]`;
   test_copy_page_placement transfer-stub gains name/level). Installer rebuilt as
   OneNoteMCP-Setup_1.0.8.exe.
+- Follow-up (SAME 1.0.8 version, SEPARATE commit since 1.0.8 was already pushed): `_SERVER_INSTRUCTIONS`
+  gained a "keep narration BRIEF — don't walk the user through tool names / param shapes (set_rows
+  arrays, 0-indexed columns) / objectIDs / step-by-step mechanics; say it in human terms" paragraph;
+  and the installer now shows a **Traditional-Chinese post-install page** (`packaging/post_install_zh-TW.txt`,
+  UTF-8 BOM, wired via `InfoAfterFile`) reminding the user to paste the recommended Claude Desktop
+  custom instruction. RATIONALE: Claude Desktop user custom instructions are ACCOUNT-level cloud
+  settings (not a local file) — an installer CANNOT auto-apply them (`claude_desktop_config.json`
+  holds only `mcpServers`). So the strong lever (account custom instruction) stays a one-time MANUAL
+  user step; the server `instructions` nudge + the install-time reminder are the most the
+  server/installer can do. (InfoAfterFile shows on a normal install; `/VERYSILENT` skips it.) The
+  rebuilt 1.0.8 installer therefore has a NEW sha (supersedes the earlier 1.0.8 artifact).
 
 **v1.0.7 — page-level object visibility + lightweight object inventory (28-tool catalog). Tier-1
 286 green; fix VM-VALIDATED live (2026-06-14).** Driven by a real-Claude-Desktop failure: asked to

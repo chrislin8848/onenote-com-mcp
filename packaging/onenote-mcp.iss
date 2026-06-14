@@ -27,6 +27,10 @@ OutputBaseFilename=OneNoteMCP-Setup_{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; Post-install info page (Traditional Chinese): reminds the user to paste the recommended
+; Claude Desktop custom instruction (account-level, can't be auto-applied by an installer).
+; Shown on a normal install; skipped by /VERYSILENT. UTF-8 (with BOM) so CJK renders.
+InfoAfterFile={#SourcePath}post_install_zh-TW.txt
 ; The server needs the 64-bit OneNote desktop COM server; ship a 64-bit build.
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
