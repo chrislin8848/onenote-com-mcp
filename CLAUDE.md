@@ -91,6 +91,45 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 
 ## Status (2026-06-14)
 
+**v1.1.0 — `apply_text_style` (NEW tool #29) + `insert_svg_image` positioning. Tier-1 304 green;
+Tier-2 VM-VALIDATED (57 passed, the 4 new write round-trips PASS live).** Two tool-surface features
+(no new COM, both inside the existing apply_page_edit seam):
+- **`apply_text_style`** (NEW tool, catalog 28→29): batch-patch font-family / size / color across
+  EVERY text run in scope (default whole page; or an outline/table/paragraph objectID) in ONE
+  read-mutate-write, preserving everything else (bold/italic/underline, untouched colors+sizes,
+  highlight, hyperlinks, images, tables). Collapses "dozens of update_page_content(replace) + a
+  get_page each" into one call. **Mechanism (empirically grounded, docs/PROPOSAL-apply-text-style.md):
+  per-run SPAN OVERLAY is the workhorse — the span layer WINS the QuickStyleDef ← OE-style ← span
+  cascade, so writing the font into each run's span makes it effective for all existing visible text
+  in any scope.** Whole-page scope ALSO rewrites the page-global QuickStyleDef baseline (font/
+  fontSize/fontColor) for empty paragraphs + future typing; a SUB-scope must NOT touch the shared
+  QuickStyleDef (Tier-2 confirms siblings are not swept). ≥1 of font/size/color required; size in
+  pt, color hex. `service/page_edit.apply_text_style`. Known limit (deferred): an empty paragraph
+  whose OE @style pins an old font isn't reached by the span overlay (rare; visible text is always
+  correct).
+- **`insert_svg_image` gains `mode`** (append / insert_before / insert_after): the picture can now
+  land MID-page (before/after a paragraph objectID), not only at an outline's end — closes a
+  tool-surface gap (it had inherited the old raster insert's append-only shape). Mirrors
+  update_page_content's positioning.
+- **Two fidelity fixes in `build_spans` (benefit ALL edit paths):** (1) `lang` was silently dropped
+  on every rebuild — real runs carry en-US/zh-TW; now preserved. (2) **Latent quote-collision bug:**
+  build_spans wraps the style in SINGLE quotes but build_style_attr quoted a multiword font-family
+  (e.g. "Microsoft JhengHei") ALSO in single quotes → `style='font-family:'Microsoft JhengHei';...'`
+  collided, parse read `font-family:''` and DROPPED font-size/color. Fixed to DOUBLE quotes (OneNote
+  itself alternates: `style='font-family:"Microsoft JhengHei"'`). Would have hit any edit rebuilding
+  a spaced-font run.
+- **§4 + instructions**: apply_text_style description borders update_page_content(replace) /
+  modify_table(set_rows) (style-only patch vs content rewrite); `_SERVER_INSTRUCTIONS` gained a
+  "Restyling text in bulk" para + an "image can be POSITIONED" note. **The OneNote App Ctrl+A
+  shortcut is deliberately NOT mentioned (Chris: users already know it)** — smoke test asserts it's
+  absent. Catalog 28→29.
+- Tier-1: `test_spans.py` (lang round-trip, multiword-font regression), `test_page_edit_content.py`
+  (apply_text_style whole-page/sub-scope/size-only/validation; insert_svg positioning), `test_smoke_
+  server.py` (29 catalog, borders, mode enum, instructions). Tier-2: `test_windows_write.py` (+4:
+  whole-page restyle keeps emphasis, size-only keeps font, sub-scope isolates siblings, insert_svg
+  mid-page) — **all PASS live 2026-06-14 (57 passed)**. Version 1.0.10→1.1.0 (pyproject + __init__ +
+  .iss + uv.lock). **Installer rebuilt as OneNoteMCP-Setup_1.1.0.exe.**
+
 **v1.0.10 — `_SERVER_INSTRUCTIONS` behavior batch (instruction-only, 28-tool catalog unchanged,
 Tier-1 293 green).** Driven by real-Claude-Desktop testing of 1.0.9 — three nudges folded into the
 server instructions, NO code/tool/Tier-2 logic change (patch bump, NOT a feature; 1.1.0+ is reserved

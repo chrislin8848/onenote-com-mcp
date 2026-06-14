@@ -117,8 +117,20 @@ def test_parse_br_becomes_newline():
 
 
 def test_build_style_attr_quotes_multiword_font():
+    # DOUBLE quotes: build_spans wraps the style in single quotes, so a single-quoted font value
+    # would collide and truncate it (OneNote itself uses style='font-family:"Microsoft JhengHei"').
     s = build_style_attr({"font-family": "Microsoft JhengHei", "font-size": "12.0pt"})
-    assert s == "font-family:'Microsoft JhengHei';font-size:12.0pt"
+    assert s == 'font-family:"Microsoft JhengHei";font-size:12.0pt'
+
+
+def test_build_spans_multiword_font_survives_round_trip():
+    # regression: the single-quote collision dropped font-size/color and emptied font-family
+    cdata = build_spans(
+        [{"text": "x", "style": {"font-family": "Microsoft JhengHei", "font-size": "18.0pt"}}]
+    )
+    run = parse_spans(cdata)[0]
+    assert run.span_style["font-family"] == "Microsoft JhengHei"
+    assert run.span_style["font-size"] == "18.0pt"
 
 
 def test_build_style_attr_highlight_writes_both_attributes():
@@ -192,3 +204,20 @@ def test_hyperlink_round_trips_text_style_and_href():
     assert runs[0].link is None
     assert runs[1].link == "https://example.com/p?x=1&y=2"
     assert runs[1].span_style["font-weight"] == "bold"
+
+
+# --- lang round-trips through build (real runs carry en-US / zh-TW; the builder must keep it) ---
+
+
+def test_build_preserves_lang():
+    from onenote_com_mcp.xmllayer.spans import Run
+
+    original = [
+        Run(text="哈囉", span_style={"font-family": "Calibri"}, lang="zh-TW"),
+        Run(text="hi", lang="en-US"),  # bare text + lang: still needs a span to carry the lang
+    ]
+    cdata = build_spans(original)
+    runs = parse_spans(cdata)
+    assert [r.lang for r in runs] == ["zh-TW", "en-US"]
+    assert runs[0].span_style["font-family"] == "Calibri"
+    assert [r.text for r in runs] == ["哈囉", "hi"]

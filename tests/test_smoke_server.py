@@ -31,6 +31,7 @@ EXPECTED_TOOLS = {
     "create_table",
     "modify_table",
     "insert_svg_image",
+    "apply_text_style",
     "copy_page",
     "copy_pages",
     "copy_page_subtree",
@@ -57,9 +58,9 @@ def tools():
     return {t.name: t for t in asyncio.run(mcp.list_tools())}
 
 
-def test_catalog_is_the_28_expected_tools(tools):
+def test_catalog_is_the_29_expected_tools(tools):
     assert set(tools) == EXPECTED_TOOLS
-    assert len(tools) == 28
+    assert len(tools) == 29
     # RASTER image insertion was deliberately removed (base64-through-the-model is too slow):
     # the only picture-insert path is insert_svg_image (vector SVG, rendered server-side). There
     # is no raster insert_image / insert_file tool.
@@ -116,6 +117,19 @@ def test_update_mode_is_a_per_value_enum(tools):
     assert mode.get("enum") == ["append", "insert_before", "insert_after", "replace"]
 
 
+def test_insert_svg_image_can_be_positioned_mid_page(tools):
+    mode = tools["insert_svg_image"].inputSchema["properties"]["mode"]
+    assert mode.get("enum") == ["append", "insert_before", "insert_after"]
+
+
+def test_apply_text_style_borders_update_page_content(tools):
+    # the bulk style patch names the per-paragraph editor (and vice versa) so a "restyle the whole
+    # page" ask routes away from a string of update_page_content("replace") calls
+    desc = tools["apply_text_style"].description
+    assert "update_page_content" in desc
+    assert "font" in desc.lower()
+
+
 def test_server_instructions_present():
     assert mcp.instructions and "live" in mcp.instructions.lower()
     # the cross-tool rules SPEC §4 asked for
@@ -131,6 +145,10 @@ def test_server_instructions_present():
     assert "in place" in mcp.instructions.lower()
     assert "recycle bin" in mcp.instructions.lower()
     assert "copy-then-modify" in mcp.instructions.lower()
+    # 1.1.0: the bulk restyle tool is surfaced, and the App Ctrl+A shortcut is deliberately NOT
+    # mentioned (users already know it — Chris 2026-06-14)
+    assert "apply_text_style" in mcp.instructions
+    assert "ctrl+a" not in mcp.instructions.lower()
 
 
 def test_selftest_reports_failure_cleanly(monkeypatch, capsys):

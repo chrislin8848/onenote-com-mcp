@@ -578,3 +578,83 @@ def test_move_page_experimental_gate(backend, notebook_id):
     finally:
         backend.delete_hierarchy(target, permanent=True)
         backend.delete_hierarchy(source, permanent=True)
+
+
+# --- 6. apply_text_style (v1.1.0): bulk font/size/color patch, format-preserving -----------
+
+_SVG_DOT = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">'
+    '<rect width="20" height="20" fill="#3366cc"/></svg>'
+)
+
+
+def test_apply_text_style_whole_page_restyles_every_run_and_preserves_emphasis(
+    backend, temp_section
+):
+    """Whole-page font change: every visible run becomes the new font (span wins the cascade),
+    while bold and a custom colour ride through. Self-cleaning throwaway page."""
+    page_id = create.create_page(backend, temp_section, "字型整頁測試", "甲乙丙")
+    page_edit.edit_page_content(
+        backend,
+        page_id,
+        [
+            {
+                "runs": [
+                    {"text": "粗體", "style": {"font-weight": "bold"}},
+                    {"text": "紅字", "style": {"color": "#FA0000"}},
+                ]
+            }
+        ],
+    )
+
+    page_edit.apply_text_style(backend, page_id, font_family="標楷體")
+
+    styles = [r["style"] for p in _paragraphs(backend, page_id) for r in p["runs"]]
+    assert styles, "the page has text runs"
+    assert all(s.get("font-family") == "標楷體" for s in styles), "every run is now 標楷體"
+    assert any(s.get("font-weight") == "bold" for s in styles), "bold survived the restyle"
+    assert any(s.get("color") == "#FA0000" for s in styles), "the custom colour survived"
+
+
+def test_apply_text_style_size_only_keeps_font(backend, temp_section):
+    page_id = create.create_page(backend, temp_section, "字級測試", "一\n二")
+    page_edit.apply_text_style(backend, page_id, size=18)
+    styles = [r["style"] for p in _paragraphs(backend, page_id) for r in p["runs"]]
+    assert styles and all(s.get("font-size") == "18.0pt" for s in styles)
+
+
+def test_apply_text_style_sub_scope_isolates_siblings(backend, temp_section):
+    """A paragraph-scoped restyle changes ONLY that paragraph; its siblings keep their font and
+    the page-global QuickStyleDef is left alone (so siblings are not swept along)."""
+    page_id = create.create_page(backend, temp_section, "範圍測試", "一\n二\n三")
+    paras = _paragraphs(backend, page_id)
+    target_id = paras[1]["object_id"]
+
+    page_edit.apply_text_style(backend, page_id, font_family="標楷體", scope_object_id=target_id)
+
+    after = _paragraphs(backend, page_id)
+    assert all(r["style"].get("font-family") == "標楷體" for r in after[1]["runs"]), (
+        "the targeted paragraph is restyled"
+    )
+    siblings = after[0]["runs"] + after[2]["runs"]
+    assert all(r["style"].get("font-family") != "標楷體" for r in siblings), (
+        "sibling paragraphs are untouched (QuickStyleDef not swept)"
+    )
+
+
+def test_insert_svg_image_lands_mid_page(backend, temp_section):
+    """insert_before/insert_after places the picture relative to a paragraph, not at the end."""
+    page_id = create.create_page(backend, temp_section, "插圖定位測試", "上段\n下段")
+    first_id = _paragraphs(backend, page_id)[0]["object_id"]
+
+    page_edit.insert_svg_image(
+        backend, page_id, _SVG_DOT, mode="insert_after", target_object_id=first_id
+    )
+
+    blocks = [b for o in read.get_page(backend, page_id)["outlines"] for b in o["blocks"]]
+    types = [b["type"] for b in blocks]
+    assert "image" in types, "the rendered SVG is on the page"
+    img_idx = types.index("image")
+    before = [b.get("text") for b in blocks[:img_idx] if b["type"] == "paragraph"]
+    after = [b.get("text") for b in blocks[img_idx + 1 :] if b["type"] == "paragraph"]
+    assert "上段" in before and "下段" in after, "the image sits BETWEEN the two paragraphs"

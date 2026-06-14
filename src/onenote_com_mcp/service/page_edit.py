@@ -37,7 +37,7 @@ from onenote_com_mcp.xmllayer.build import (
     make_text_oe,
 )
 from onenote_com_mcp.xmllayer.namespaces import local_name, qn
-from onenote_com_mcp.xmllayer.spans import build_spans
+from onenote_com_mcp.xmllayer.spans import build_spans, parse_spans
 
 # A mutation edits the parsed page tree IN PLACE (SPEC §5 — never rebuild from a slimmed model,
 # or untouched paragraphs lose their formatting).
@@ -697,6 +697,9 @@ def delete_inline_content(
     apply_page_edit(backend, page_id, mutate, force=force)
 
 
+_IMAGE_MODES = ("append", "insert_before", "insert_after")
+
+
 def insert_svg_image(
     backend: OneNoteBackend,
     page_id: str,
@@ -704,12 +707,20 @@ def insert_svg_image(
     *,
     width: float | None = None,
     height: float | None = None,
+    mode: str = "append",
     target_object_id: str = "",
     force: bool = False,
 ) -> None:
-    """Rasterize SVG markup to a PNG and append it (inline one:Data) to an outline, wrapped in its
-    own one:OE — the OE carries the deletable objectID (a one:Image has none). Vector-only: an SVG
-    that embeds a raster image is rejected before any write (service.svg.rasterize_svg)."""
+    """Rasterize SVG markup to a PNG and place it (inline one:Data) wrapped in its own one:OE — the
+    OE carries the deletable objectID (a one:Image has none). Vector-only: an SVG that embeds a
+    raster image is rejected before any write (service.svg.rasterize_svg).
+
+    Placement mirrors update_page_content: ``append`` (default) adds the image at the END of an
+    outline (``target_object_id`` = an outline objectID, or omitted = the page's last outline);
+    ``insert_before`` / ``insert_after`` place it right before/after a target PARAGRAPH
+    (``target_object_id`` = a one:OE objectID from get_page) so the picture can land MID-page."""
+    if mode not in _IMAGE_MODES:
+        raise ValueError(f"mode must be one of {_IMAGE_MODES}, got {mode!r}")
     from base64 import b64encode
 
     from onenote_com_mcp.service.svg import rasterize_svg
@@ -717,9 +728,92 @@ def insert_svg_image(
     data_b64 = b64encode(rasterize_svg(svg)).decode("ascii")
 
     def mutate(tree: etree._Element) -> None:
-        outline = _resolve_outline(tree, target_object_id)
         oe = etree.Element(qn("OE"))
         oe.append(make_image(data_b64, "image/png", width, height))
-        _outline_children(outline).append(oe)
+        if mode == "append":
+            _outline_children(_resolve_outline(tree, target_object_id)).append(oe)
+        elif mode == "insert_before":
+            _require_oe(tree, target_object_id, mode).addprevious(oe)
+        else:  # insert_after
+            _require_oe(tree, target_object_id, mode).addnext(oe)
 
     apply_page_edit(backend, page_id, mutate, force=force)
+
+
+def _under_title(el: etree._Element) -> bool:
+    """True if ``el`` sits inside the page's one:Title (a whole-page restyle leaves the title)."""
+    parent = el.getparent()
+    while parent is not None:
+        if local_name(parent.tag) == "Title":
+            return True
+        parent = parent.getparent()
+    return False
+
+
+def apply_text_style(
+    backend: OneNoteBackend,
+    page_id: str,
+    *,
+    font_family: str | None = None,
+    size: float | None = None,
+    color: str | None = None,
+    scope_object_id: str = "",
+    force: bool = False,
+) -> dict[str, Any]:
+    """Patch font-family / size / color across EVERY text run in scope, in ONE read-mutate-write.
+
+    Scope defaults to the whole page (all outlines + tables; the page title is left alone); pass an
+    outline / table / paragraph (one:OE) objectID to restyle only that subtree. Only the CSS keys
+    you ask for are merged into each run's span — and the span wins the QuickStyleDef ← OE-style ←
+    span cascade — so bold, italic, underline, the colors/sizes you did NOT change, highlight,
+    hyperlinks, images and tables all survive untouched; paragraphs outside the scope are pruned
+    from the payload and ride byte-identical. Whole-page scope ALSO rewrites the page's
+    QuickStyleDef baseline (font/fontSize/fontColor) so the change is self-consistent for empty
+    paragraphs and future typing; a SUB-scope must not touch the page-global QuickStyleDef.
+
+    Returns ``{scope, runs_changed, text_blocks_changed, quick_styles_updated}`` — narrate the
+    effect ("changed the whole page to 微軟正黑體"), not these numbers/objectIDs.
+    """
+    overlay: dict[str, str] = {}
+    if font_family:
+        overlay["font-family"] = font_family
+    if size is not None:
+        overlay["font-size"] = f"{float(size)}pt"
+    if color:
+        overlay["color"] = color
+    if not overlay:
+        raise ValueError("apply_text_style needs at least one of font_family, size, color")
+
+    summary: dict[str, Any] = {
+        "runs_changed": 0,
+        "text_blocks_changed": 0,
+        "quick_styles_updated": 0,
+    }
+
+    def mutate(tree: etree._Element) -> None:
+        scope = _find_content_object(tree, scope_object_id) if scope_object_id else tree
+        whole_page = scope is tree
+        for t in scope.iter(qn("T")):
+            if whole_page and _under_title(t):
+                continue
+            runs = parse_spans(t.text)
+            if not runs:
+                continue
+            for run in runs:
+                run.span_style = {**run.span_style, **overlay}
+            t.text = etree.CDATA(build_spans(runs))
+            summary["runs_changed"] += len(runs)
+            summary["text_blocks_changed"] += 1
+        if whole_page:
+            for qd in tree.findall(qn("QuickStyleDef")):
+                if font_family:
+                    qd.set("font", font_family)
+                if size is not None:
+                    qd.set("fontSize", f"{float(size)}")
+                if color:
+                    qd.set("fontColor", color)
+                summary["quick_styles_updated"] += 1
+
+    apply_page_edit(backend, page_id, mutate, force=force)
+    summary["scope"] = scope_object_id or "page"
+    return summary

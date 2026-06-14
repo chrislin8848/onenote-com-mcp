@@ -122,7 +122,10 @@ def build_style_attr(style: dict[str, str]) -> str:
     parts = []
     for key, value in style.items():
         if key in _MULTIWORD_QUOTE_KEYS and " " in value:
-            value = f"'{value}'"
+            # DOUBLE quotes — build_spans wraps the whole style in SINGLE quotes
+            # (style='...'), so a single-quoted value here would collide and truncate the
+            # attribute. OneNote itself alternates: style='font-family:"Microsoft JhengHei"'.
+            value = f'"{value}"'
         parts.append(f"{key}:{value}")
     return ";".join(parts)
 
@@ -146,15 +149,26 @@ def build_spans(runs: list) -> str:
     out: list[str] = []
     for run in runs:
         link: str | None = None
+        lang: str | None = None
         if isinstance(run, str):
             text, style = run, {}
         elif isinstance(run, Run):
-            text, style, link = run.text, run.span_style or run.style, run.link
+            text, style, link, lang = run.text, run.span_style or run.style, run.link, run.lang
         else:
-            text, style, link = run["text"], run.get("style") or {}, run.get("link")
+            text = run["text"]
+            style = run.get("style") or {}
+            link = run.get("link")
+            lang = run.get("lang")
         inner = _escape_text(text)
-        if style:
-            inner = f"<span style='{build_style_attr(style)}'>{inner}</span>"
+        if style or lang:
+            # lang rides on the span (VM ground truth); a run with lang but no style still gets a
+            # span to carry it — otherwise the spell-check language is lost on every rebuild.
+            attrs = []
+            if style:
+                attrs.append(f"style='{build_style_attr(style)}'")
+            if lang:
+                attrs.append(f'lang="{lang}"')
+            inner = f"<span {' '.join(attrs)}>{inner}</span>"
         if link:
             inner = f'<a href="{_escape_attr(link)}">{inner}</a>'
         out.append(inner)

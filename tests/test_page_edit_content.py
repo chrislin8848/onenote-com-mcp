@@ -671,6 +671,47 @@ def test_insert_svg_image_rejects_embedded_raster_before_any_write(be, mixed):
     assert not [c for c in be.calls if c.method == "update_page_content"], "rejected before write"
 
 
+_SVG_DOT = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">'
+    '<rect width="20" height="20" fill="#3366cc"/></svg>'
+)
+
+
+def test_insert_svg_image_positions_relative_to_a_paragraph(be, mixed):
+    page_id = mixed.get("ID")
+    outline = mixed.findall(qn("Outline"))[-1]
+    target_id = _oes(outline)[1].get("objectID")
+
+    page_edit.insert_svg_image(
+        be, page_id, _SVG_DOT, mode="insert_after", target_object_id=target_id
+    )
+    _, sent = _sent_payload(be)
+    oes = _oes(sent.findall(qn("Outline"))[-1])
+    idx = next(i for i, oe in enumerate(oes) if oe.get("objectID") == target_id)
+    assert oes[idx + 1].find(qn("Image")) is not None, (
+        "image landed right AFTER the target paragraph"
+    )
+
+    be2 = FixtureBackend(be.fixtures_dir)
+    page_edit.insert_svg_image(
+        be2, page_id, _SVG_DOT, mode="insert_before", target_object_id=target_id
+    )
+    _, sent2 = _sent_payload(be2)
+    oes2 = _oes(sent2.findall(qn("Outline"))[-1])
+    idx2 = next(i for i, oe in enumerate(oes2) if oe.get("objectID") == target_id)
+    assert oes2[idx2 - 1].find(qn("Image")) is not None, "image landed right BEFORE the target"
+
+
+def test_insert_svg_image_mode_validation(be, mixed):
+    page_id = mixed.get("ID")
+    with pytest.raises(ValueError, match="mode must be one of"):
+        page_edit.insert_svg_image(be, page_id, _SVG_DOT, mode="replace")
+    # insert_before/after need a paragraph anchor
+    with pytest.raises(ValueError, match="target_object_id"):
+        page_edit.insert_svg_image(be, page_id, _SVG_DOT, mode="insert_after")
+    assert not [c for c in be.calls if c.method == "update_page_content"]
+
+
 def test_editing_outline_with_existing_image_inlines_its_binary(be, image_page, fixtures_dir):
     """The touched outline contains an untouched image: its pixels must be inlined (CallbackID
     is read-side only) so the merge cannot strip them."""
@@ -759,4 +800,103 @@ def test_input_contract_errors(be, mixed):
         page_edit.add_table(be, page_id, [])
     with pytest.raises(ValueError, match="non-empty"):
         page_edit.edit_page_content(be, page_id, [])
+    assert not [c for c in be.calls if c.method == "update_page_content"]
+
+
+# --- apply_text_style (batch font / size / color patch) -------------------------------------
+
+
+def _all_runs(page):
+    """Every Run on a parsed page — recursing nested OEs and into table cells."""
+    out = []
+
+    def walk(paras):
+        for p in paras:
+            out.extend(p.runs)
+            if p.table:
+                for row in p.table.rows:
+                    for cell in row:
+                        walk(cell.paragraphs)
+            walk(p.children)
+
+    walk(page.paragraphs)
+    return out
+
+
+def test_apply_text_style_whole_page_sets_every_run_and_quickstyledef(be, mixed):
+    from onenote_com_mcp.xmllayer.parse import _parse_quick_styles, parse_page
+
+    page_id = mixed.get("ID")
+    summary = page_edit.apply_text_style(be, page_id, font_family="微軟正黑體")
+    kwargs, sent = _sent_payload(be)
+
+    # EVERY visible run is now 微軟正黑體 (span wins the cascade) — the real guarantee
+    sent_page = parse_page(kwargs["changes_xml"])
+    fonts = {r.style.get("font-family") for r in _all_runs(sent_page)}
+    assert fonts == {"微軟正黑體"}, fonts
+    # whole-page also rewrote the QuickStyleDef baseline (was Calibri)
+    qs = _parse_quick_styles(sent)
+    assert qs and all(d.font == "微軟正黑體" for d in qs.values())
+    assert summary["quick_styles_updated"] == len(qs)
+    assert summary["runs_changed"] >= 1 and summary["scope"] == "page"
+    # the page title is left alone → unchanged → pruned from the payload
+    assert sent.find(qn("Title")) is None
+
+
+def test_apply_text_style_preserves_bold_color_highlight_and_link(be):
+    # the 混合樣式頁 carries bold / a custom color / dual-highlight / (table page) hyperlinks
+    page_id = _page_root(be.fixtures_dir, "混合樣式頁").get("ID")
+    page_edit.apply_text_style(be, page_id, font_family="微軟正黑體")
+    xml = _sent_payload(be)[0]["changes_xml"]
+    assert "font-weight:bold" in xml  # bold survived
+    assert "color:#FA0000" in xml  # the custom text colour survived
+    assert "background:yellow" in xml and "mso-highlight:yellow" in xml  # dual highlight survived
+    assert "font-family:微軟正黑體" in xml  # the new font is in
+
+
+def test_apply_text_style_sub_scope_is_byte_isolated_and_skips_quickstyledef(be, mixed):
+    from onenote_com_mcp.xmllayer.parse import _parse_quick_styles
+
+    page_id = mixed.get("ID")
+    outline = mixed.findall(qn("Outline"))[-1]
+    target_id = _oes(outline)[0].get("objectID")
+    before_by_id = {oe.get("objectID"): etree.tostring(oe, with_tail=False) for oe in _oes(outline)}
+
+    summary = page_edit.apply_text_style(
+        be, page_id, font_family="標楷體", scope_object_id=target_id
+    )
+    _, sent = _sent_payload(be)
+
+    for oe in _oes(sent.findall(qn("Outline"))[-1]):
+        oid = oe.get("objectID")
+        if oid == target_id:
+            assert "標楷體" in etree.tostring(oe, with_tail=False, encoding="unicode")
+        else:  # every sibling paragraph is byte-identical
+            assert etree.tostring(oe, with_tail=False) == before_by_id[oid]
+    # a sub-scope must NOT touch the page-global QuickStyleDef
+    assert all(d.font == "Calibri" for d in _parse_quick_styles(sent).values())
+    assert summary["quick_styles_updated"] == 0
+
+
+def test_apply_text_style_size_and_color_only_keep_existing_font(be, mixed):
+    from onenote_com_mcp.xmllayer.parse import parse_page
+
+    page_id = mixed.get("ID")
+    page_edit.apply_text_style(be, page_id, size=18, color="#0000FF")
+    kwargs, _ = _sent_payload(be)
+    assert "font-size:18.0pt" in kwargs["changes_xml"]
+    sent_page = parse_page(kwargs["changes_xml"])
+    runs = _all_runs(sent_page)
+    assert all(r.style.get("font-size") == "18.0pt" for r in runs)
+    assert all(r.style.get("color") == "#0000FF" for r in runs)
+    # font-family was NOT requested → the page's original mix of fonts is preserved
+    assert {r.style.get("font-family") for r in runs} != {None}
+
+
+def test_apply_text_style_requires_a_property_and_validates_scope(be, mixed):
+    page_id = mixed.get("ID")
+    with pytest.raises(ValueError, match="at least one"):
+        page_edit.apply_text_style(be, page_id)
+    with pytest.raises(NodeNotFoundError):
+        page_edit.apply_text_style(be, page_id, font_family="X", scope_object_id="{NOPE}{1}{B0}")
     assert not [c for c in be.calls if c.method == "update_page_content"]

@@ -78,8 +78,18 @@ Windows font-family such as "Microsoft JhengHei", not the generic "sans-serif". 
 insert_svg_image succeeds, trust the result — do NOT routinely read the image back with \
 get_page_images to "verify" it (pulling the whole rasterized PNG back as base64 is slow); read it \
 back only if the user reports a rendering problem. Get the SVG layout right in one pass: leave \
-margins and keep labels from overlapping nodes or markers. Copying a page or \
-section still carries its existing images and attachments along — fully supported.
+margins and keep labels from overlapping nodes or markers. The picture can be POSITIONED, like \
+text: insert_svg_image takes mode insert_before / insert_after with a paragraph objectID so it \
+lands MID-page, not only at the end (default mode append). Copying a page or section still carries \
+its existing images and attachments along — fully supported.
+
+Restyling text in bulk: to change the FONT / SIZE / COLOR of many paragraphs at once — "make this \
+whole page 微軟正黑體", "every heading 16pt", "the body blue" — use apply_text_style, NOT a string \
+of update_page_content("replace") calls. It patches font/size/color across every run in scope \
+(default the whole page; or one outline/table/paragraph objectID) in ONE pass and preserves \
+everything else (bold, the colors/sizes you did not touch, highlight, links, images, tables). \
+update_page_content("replace") is for rewriting ONE paragraph's text; apply_text_style changes \
+style only, never the words.
 
 Editing a page = edit it IN PLACE (update_page_content, modify_table, delete_inline_content, \
 insert_svg_image); this is the normal, expected, safe-enough path for ordinary changes. Do NOT \
@@ -456,15 +466,22 @@ def insert_svg_image(
     svg: str,
     width: float | None = None,
     height: float | None = None,
+    mode: Literal["append", "insert_before", "insert_after"] = "append",
     target_object_id: str = "",
     force: bool = False,
 ) -> str:
     """Insert a vector graphic into a page from SVG markup — the server renders the SVG to an
-    image and appends it to an outline (target_object_id = outline objectID, default the page's
-    last outline). This is the ONLY way to add a picture, and it takes SVG markup you generate
-    directly — NOT a raster image, NOT a photo, NOT base64. Use it for diagrams, maps, charts,
-    simple banners — anything expressible as vectors. It is NOT for a PHOTO or any existing
+    image and places it on the page. This is the ONLY way to add a picture, and it takes SVG markup
+    you generate directly — NOT a raster image, NOT a photo, NOT base64. Use it for diagrams, maps,
+    charts, simple banners — anything expressible as vectors. It is NOT for a PHOTO or any existing
     raster/PNG/JPG image: those must be added BY HAND in the OneNote app (tell the user).
+
+    Placement (like update_page_content):
+      "append"        — (default) at the END of an outline; target_object_id optionally names an
+                        outline objectID (default = the page's last outline).
+      "insert_before" — right before target_object_id (a PARAGRAPH objectID from get_page), so the
+                        picture lands MID-page instead of at the end.
+      "insert_after"  — same, right after the target paragraph.
 
     svg: a complete <svg>…</svg> document. For Chinese/CJK text, set an explicit Windows
     font-family such as "Microsoft JhengHei" (微軟正黑體) — NOT the generic "sans-serif", which
@@ -478,10 +495,48 @@ def insert_svg_image(
         svg,
         width=width,
         height=height,
+        mode=mode,
         target_object_id=target_object_id,
         force=force,
     )
     return f"image inserted into {page_id}"
+
+
+@logged_tool()
+def apply_text_style(
+    page_id: str,
+    font_family: str = "",
+    size: float | None = None,
+    color: str = "",
+    scope_object_id: str = "",
+    force: bool = False,
+) -> str:
+    """Batch-change the FONT, SIZE, and/or COLOR of existing text across a page (or one part of it)
+    in a single pass, leaving everything else intact — bold/italic/underline, the colors & sizes
+    you did NOT change, highlight, hyperlinks, images and tables all survive. This is a STYLE-ONLY
+    patch over MANY runs at once; it does NOT change the text, structure, or which paragraphs exist.
+    Use it for "make the whole page 微軟正黑體", "every heading 16pt", or "the body blue".
+
+    Contrast: update_page_content("replace") rewrites ONE paragraph's text+style (and must
+    re-supply its runs); modify_table(set_rows) overwrites whole CELLS. apply_text_style touches no
+    content — only font/size/color — so prefer it for restyling that should preserve the words.
+
+    font_family: e.g. "微軟正黑體" / "Microsoft JhengHei". size: points (e.g. 12). color: a hex
+    string like "#FA0000". At least one of the three is required.
+    scope_object_id: omit = the WHOLE page (every outline + table; the page title is left alone);
+    or pass an outline / table / paragraph objectID from get_page to restyle only that subtree.
+    Whole-page also updates the page's style baseline so future typing matches. Concurrency-guarded;
+    force=True only after explicit user confirmation."""
+    summary = page_edit.apply_text_style(
+        get_backend(),
+        page_id,
+        font_family=font_family or None,
+        size=size,
+        color=color or None,
+        scope_object_id=scope_object_id,
+        force=force,
+    )
+    return _json(summary)
 
 
 # --- Copy (Phase 5: raw-XML faithful transfer) ------------------------------
