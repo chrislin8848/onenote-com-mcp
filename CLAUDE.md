@@ -91,6 +91,40 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 
 ## Status (2026-06-14)
 
+**v1.0.9 — picture insert is now SVG-ONLY: `insert_svg_image` replaces raster `insert_image`
+(28-tool catalog, Tier-1 293 green; freeze-gate VM-validated, full Tier-2 + installer PENDING).**
+Driven by a real-Claude-Desktop pain: inserting an image "hung". Root cause (Chris + Claude
+confirmed): the bottleneck is the MODEL emitting the image's base64 into the tool call (~39k chars
+for a generated route map) — the OneNote MCP server never even received the request. base64-through-
+the-model is structurally slow and unavoidable for raster bytes, so raster insert was DROPPED.
+- **`insert_image` (raster, base64 param) REMOVED.** No `insert_image`/`insert_file` tool.
+- **`insert_svg_image` (NEW tool, #16 slot)**: the model generates **SVG markup** (text, compact —
+  no base64 token flood) and the server rasterizes it to PNG via **`resvg_py`** (new runtime dep;
+  in-process PyO3 binding to the resvg Rust lib, tiny cross-platform wheel). `service/svg.py`
+  `rasterize_svg()` (resvg with `sans_serif_family`/`font_family` pinned to **"Microsoft JhengHei"**
+  so CJK renders cleanly even when the SVG says generic `sans-serif`; REJECTS an embedded raster
+  `data:image/…` URI — vector-only, no smuggling a photo back through base64). Then the EXISTING
+  seam: `page_edit.insert_svg_image` = rasterize → `make_image` (kept) → OE → `apply_page_edit`
+  (the one write core). Photos/existing raster images = insert BY HAND in OneNote (instructed).
+- **Copy path UNAFFECTED**: `transfer_page` / `inline_image_binaries` / `make_image` untouched —
+  copying a page/section still carries existing images & attachments faithfully.
+- **§4 + instructions**: `_SERVER_INSTRUCTIONS` "Adding pictures" para = SVG-only + use explicit
+  CJK font + photos by hand; `update_page_content` border points adds-a-picture → `insert_svg_image`;
+  facade description spells out SVG-only / CJK font / data-URI rejection. Catalog stays 28 (raster
+  insert out, svg insert in).
+- **Freeze gate VM-VALIDATED (2026-06-14)**: a throwaway spike (`packaging/spike_svg/`,
+  `scripts/remote_spike_svg.sh`) PyInstaller-froze `resvg_py` and the frozen Windows exe rendered a
+  Traditional-Chinese SVG to a real-glyph PNG (exit 0). Finding: generic `sans-serif` mapped to a
+  handwriting font on Windows → fixed by pinning the default family (above). `onenote-mcp.spec` now
+  `collect_all("resvg_py")`.
+- Tier-1: `tests/test_service_svg.py` (rasterize valid SVG; reject empty; reject raster data-URI;
+  CJK text not mis-rejected), `test_page_edit_content.py` (+SVG→OE-wrapped-PNG, +raster-reject-
+  before-write), `test_write_core.py` (svg facade routes through apply_page_edit), smoke catalog
+  swap. Tier-2 `test_windows_write.py` (+SVG round-trip, +raster-reject) — **runs on VM but NOT yet
+  executed**. **PENDING: full freeze (onenote-mcp.spec) + Tier-2 live run + CJK eyeball with an
+  explicit font + installer rebuild as OneNoteMCP-Setup_1.0.9.exe.** Version 1.0.9 (pyproject +
+  __init__ + .iss + uv.lock).
+
 **v1.0.8 — copy tools report by NAME + harder no-raw-ID instruction (28-tool catalog, Tier-1 286
 green).** Driven by real-Claude-Desktop UX friction: the model kept dumping raw page-ID lists to
 the user (e.g. narrating "I'll scan these 10 pages:" + 10 opaque IDs), because `copy_pages` /

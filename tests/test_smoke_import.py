@@ -57,7 +57,7 @@ def test_full_tool_catalog_registered():
         "create_page",
         "update_page_content",
         "create_table",
-        "insert_image",
+        "insert_svg_image",
         "copy_page",
         "copy_section",
         "restructure_section",

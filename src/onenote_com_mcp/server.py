@@ -4,7 +4,7 @@ Every tool is a thin facade over ``onenote_com_mcp.service`` (the shared write c
 core, the hierarchy core); the orchestration lives there, not here. Descriptions carry the §4
 contract the LLM reads: contrastive borders on confusable pairs (get_page vs get_page_info vs
 get_page_images vs get_page_files_info vs get_page_files; update_page_content vs create_table vs
-insert_image;
+modify_table;
 restructure_section vs reposition_page vs reorder_sections vs move_page vs rename_node;
 delete_node vs delete_page_content vs delete_inline_content; copy vs move), DESTRUCTIVE +
 propose-then-confirm contracts in text, and
@@ -67,6 +67,15 @@ implementation steps — tool names, parameter shapes (e.g. set_rows arrays, 0-i
 objectIDs, or other internal mechanics are noise to them. Say what you are doing in human terms \
 ("updating the dates on D1–D6", "removing the printout images from these two pages") and report \
 the outcome by name; keep the plumbing inside the tool calls, not in your prose.
+
+Adding pictures: the ONLY supported way to add a picture is insert_svg_image — you generate SVG \
+markup (a vector graphic: diagram, map, chart, simple banner) and the server renders it to an \
+image. There is no raster-image or file insert: a PHOTO or an existing PNG/JPG cannot be \
+inserted — tell the user to add those BY HAND in the OneNote app (drag-and-drop, or \
+Insert ▸ Picture/File). Never try to insert a picture by emitting base64 or by smuggling a raster \
+<image data:…> inside the SVG (it is rejected and slow). For CJK text in the SVG, use an explicit \
+Windows font-family such as "Microsoft JhengHei", not the generic "sans-serif". Copying a page or \
+section still carries its existing images and attachments along — fully supported.
 
 Destructive and structural operations (delete_node, delete_page_content, delete_inline_content, \
 modify_table's delete_rows/delete_columns, force overwrites, restructure_section, \
@@ -303,8 +312,9 @@ def update_page_content(
     verbatim. Use this to add, insert, or rewrite text and styled paragraphs (size/font/color/
     highlight/hyperlink), and to edit a table CELL's text. NOT for: creating a table (use
     create_table); changing a table's row/column COUNT, i.e. adding/deleting rows or columns
-    (use modify_table); adding an image (use insert_image); removing a whole outline/image/
-    attachment (use delete_page_content).
+    (use modify_table); removing a whole outline/image/attachment (use delete_page_content).
+    (To add a vector picture use insert_svg_image; a PHOTO or existing raster image must be added
+    by hand in OneNote.)
 
     mode (per value):
       "append"        — add paragraphs at the end of an outline; target_object_id optionally
@@ -419,26 +429,31 @@ def modify_table(
 
 
 @logged_tool()
-def insert_image(
+def insert_svg_image(
     page_id: str,
-    image_base64: str,
-    media_type: str,
+    svg: str,
     width: float | None = None,
     height: float | None = None,
     target_object_id: str = "",
     force: bool = False,
 ) -> str:
-    """Insert an IMAGE (base64 + media type, e.g. "image/png") into a page, appended to an
-    outline (target_object_id = outline objectID, default the page's last outline). This adds
-    a picture as page content — it is NOT for attaching a document file (there is no
-    insert_file tool this version) and NOT for adding text (use update_page_content).
-    width/height are points; omit to let OneNote size it. Concurrency-guarded; force=True
+    """Insert a vector graphic into a page from SVG markup — the server renders the SVG to an
+    image and appends it to an outline (target_object_id = outline objectID, default the page's
+    last outline). This is the ONLY way to add a picture, and it takes SVG markup you generate
+    directly — NOT a raster image, NOT a photo, NOT base64. Use it for diagrams, maps, charts,
+    simple banners — anything expressible as vectors. It is NOT for a PHOTO or any existing
+    raster/PNG/JPG image: those must be added BY HAND in the OneNote app (tell the user).
+
+    svg: a complete <svg>…</svg> document. For Chinese/CJK text, set an explicit Windows
+    font-family such as "Microsoft JhengHei" (微軟正黑體) — NOT the generic "sans-serif", which
+    renders with the wrong font. Do NOT embed a raster image inside the SVG (an <image> with a
+    data: URI is rejected — that just smuggles a photo back in and is slow). width/height (points)
+    override the rendered size; omit to use the SVG's own size. Concurrency-guarded; force=True
     only after explicit user confirmation."""
-    page_edit.insert_image(
+    page_edit.insert_svg_image(
         get_backend(),
         page_id,
-        image_base64,
-        media_type,
+        svg,
         width=width,
         height=height,
         target_object_id=target_object_id,

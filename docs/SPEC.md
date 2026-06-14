@@ -156,7 +156,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 | `update_page_content` | 改頁面內容:append / insert / replace(含改表格儲存格文字、樣式大小/字型/顏色/底色、超連結 `<a href>`) | `GetPageContent` → 改 XML → `UpdatePageContent`(純 append 可免讀全頁) |
 | `create_table` | 新增**新**表格(僅建立) | 組 `one:Table` XML → `UpdatePageContent` |
 | `modify_table` | 改**既有**表格:形狀(`insert_rows`/`add_columns`、`delete_rows`/`delete_columns`(DESTRUCTIVE);列欄對稱;空 cell 補最小段落)**或** `set_rows`(二維陣列就地覆蓋既有列內容,固定維度、保留每格 objectID;只覆蓋既有列,加列用 `insert_rows`;cell 給 `None` 則該格不動,`[None,"",…]` = 保留第一欄、清空其餘) | `GetPageContent` → 改 `one:Table`(Columns 重編 index、每列增/刪/改 Cell)→ `UpdatePageContent` |
-| `insert_image` | 插入圖片到頁面 | 組 `one:Image` + base64 `one:Data` → `UpdatePageContent` |
+| `insert_svg_image` | 從 **SVG markup** 插入向量圖(伺服器端光柵化成 PNG)| `resvg_py` 渲染 SVG→PNG → 組 `one:Image` + base64 `one:Data` → `UpdatePageContent`(僅吃向量;內嵌 raster data: URI 拒絕;照片手動插)|
 | `delete_node` | 刪頁/節/節群組/筆記本(層級) | `DeleteHierarchy(objectId)` |
 | `delete_page_content` | 刪**頁層**內容物件(整個大綱/頁層圖片/頁層附件) | `DeletePageContent(pageId, objectId)` |
 | `delete_inline_content` | 刪**大綱內**物件(表格/段落/行內圖片/行內附件);保留同大綱其他段落 | 走編輯 seam:`GetPageContent` → 移除元素並修剪空容器 → `UpdatePageContent`(**非** `DeletePageContent`——COM 對行內 OE 一律拒絕 `0x8004200E`) |
@@ -184,7 +184,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 
 1. **對比式/反向標註** — 針對本專案會互相混淆的工具組,在描述裡互相點名界線:
    - **刪除三角:** `delete_node`(刪整個頁/節/節群組/筆記本節點) vs `delete_page_content`(刪**頁層**物件:整個大綱/頁層圖/頁層附件,頁面保留) vs `delete_inline_content`(刪**大綱內**物件:表格/段落/行內圖/行內附件)。關鍵界線:**整個表格、段落永遠在大綱內,故刪它們一律用 `delete_inline_content`,絕不用 `delete_page_content`**;三者描述互相點名(both-way,guard-tested)。
-   - `update_page_content`(加/改文字、樣式、超連結、**單一**儲存格文字) vs `create_table`(建**新**表格) vs `modify_table`(改既有表格:`insert_rows`/`add_columns`/`delete_*` 形狀,或 `set_rows` 一次覆蓋整列/整表內容) vs `insert_image`(插圖)——`update_page_content` 描述須註明「若加的是表格、改的是行列數、或插圖,改用對應工具」;`create_table` 只建新表、`modify_table` 改既有表(形狀或整列內容),兩者互相點名;表格內容替換的分工 = `update_page_content "replace"`(一格)vs `modify_table set_rows`(整列/整表)。
+   - `update_page_content`(加/改文字、樣式、超連結、**單一**儲存格文字) vs `create_table`(建**新**表格) vs `modify_table`(改既有表格:`insert_rows`/`add_columns`/`delete_*` 形狀,或 `set_rows` 一次覆蓋整列/整表內容) vs `insert_svg_image`(從 SVG 插**向量**圖;照片/點陣須手動)——`update_page_content` 描述須註明「若加的是表格、改的是行列數、或插圖,改用對應工具」;`create_table` 只建新表、`modify_table` 改既有表(形狀或整列內容),兩者互相點名;表格內容替換的分工 = `update_page_content "replace"`(一格)vs `modify_table set_rows`(整列/整表)。
    - `reposition_page`(**同節內**把**一頁**移到某頁之後,只給 ID) vs `restructure_section`(**同節內**重排**多頁** + `pageLevel`,須完整清單) vs `reorder_sections`(**一本內**節順序) vs `move_page`(把頁搬到**別節**) vs `rename_node`(只改名)。關鍵:移**單一**頁用 `reposition_page`(不必交 46 筆清單,避免模型去寫外部暫存檔);`copy_page` / `create_page` **預設**都把新頁放在「自然錨點」正下方——`copy_page` 在**來源頁**之下、`create_page` 在**目前所在頁**(get_current_context)之下,所以「複製這頁」「在這裡建頁」都不必指定位置,`after_page_id` 才是覆蓋;要移**既有**頁才用 `reposition_page`。
    - **複製粒度四選一:** `copy_page`(**單頁**) vs `copy_pages`(**多頁**明確清單) vs `copy_page_subtree`(**一頁 + 其子頁**,自動算出子頁) vs `copy_section`(**整節**)。關鍵界線:複製**多頁到某位置**時**絕不**重複呼叫 `copy_page`——`copy_page` 預設把每份副本貼在**各自來源頁**之下,會把整組副本打散(real-Claude-Desktop 實測:「把 ●ITIN 及其子頁複製到 ●Local 下方」因此亂放);`copy_pages` / `copy_page_subtree` 把副本排成**一個連續區塊**、一次定位到 `after_page_id` 之後。
    - `get_page`(文字 + 結構化表格) vs `get_page_images`(取圖片二進位供視覺辨識) vs `get_page_files_info`(附件/嵌入物件**中繼資料**,任何型別) vs `get_page_files`(附件**內容**抽取,僅文字類/圖片/PDF)——info 是 files 的前置;非支援型別(docx/xlsx 等)只能取 info,不能取內容。
@@ -222,7 +222,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 ### 圖片/表格處理細節
 
 - **讀圖片** → `get_page_images` 抽出 binary,以 **MCP image content (base64)** 回傳,讓 Claude 用視覺辨識;一併回報該圖在頁面中的相對位置(若可得)。
-- **插入圖片** → `insert_image` 接收 base64 影像 + media type(可選位置 x/y 與大小),組 `<one:Image>` 含 `<one:Data>` base64 → `UpdatePageContent` 寫入(COM 文件明載 `UpdatePageContent` 可加入 images)。
+- **插入圖片** → `insert_svg_image` 接收 **SVG markup**(由模型直接產生的向量圖:路線圖/圖表/橫幅),伺服器端用 `resvg_py` 光柵化成 PNG,再組 `<one:Image>` 含 `<one:Data>` base64 → `UpdatePageContent`。**僅支援向量**:raster 插入(base64 點陣/照片)在 v1.0.9 移除——base64 經模型 token stream 太慢;內嵌 raster data: URI 會被拒絕,CJK 文字須用明確字族(微軟正黑體);照片請使用者手動插入。`make_image` + `apply_page_edit` seam 不變。
 - **讀表格** → 解析 `one:Table` 成結構化 rows(list of list of cell text),不要攤平成單一字串。
 - **新增/改表格** → 組 `one:Table` XML(列、欄、儲存格),經 `UpdatePageContent` 寫入。
 - **刪內容物件** → 依物件在頁面的層級分兩條路徑(VM 實證:`DeletePageContent` 接受頁層 `one:Outline`/`one:Image`/`one:InsertedFile`,但對**行內** OE 一律以 `0x8004200E` 拒絕):

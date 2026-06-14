@@ -33,7 +33,7 @@
 | A5 | 刪掉這個節群組 | `delete_node` |  |  |  |  |
 | A6 | 清掉這頁的這段大綱文字 | `delete_page_content`(或拒絕→改 update) |  |  |  |  |
 
-### B. 寫內容:`update_page_content` vs `create_table` vs `insert_image`
+### B. 寫內容:`update_page_content` vs `create_table` vs `insert_svg_image`
 
 | # | 使用者說法 | 期望工具 | 實際選 | 參數 | 穩(3次) | 判定 |
 |---|---|---|---|---|---|---|
@@ -41,7 +41,8 @@
 | B2 | 把這段文字改成紅色 | `update_page_content`(replace) |  |  |  |  |
 | B3 | 幫我在這頁加一個 3 欄的表格 | `create_table` |  |  |  |  |
 | B4 | 在這個表格再加一列 | `update_page_content` 或 `create_table`(append rows) |  |  |  |  |
-| B5 | 把這張照片插進這一頁 | `insert_image` |  |  |  |  |
+| B5 | 把這張照片插進這一頁 | 拒絕(照片是 raster)→ 告知手動插入 |  |  |  |  |
+| B5b | 幫我畫一張這趟行程的路線圖插進來 | `insert_svg_image`(產生 SVG) |  |  |  |  |
 | B6 | 在這段話前面插一行小標 | `update_page_content`(insert_before) |  |  |  |  |
 
 ### C. 整理結構:`restructure_section` vs `reorder_sections` vs `move_page` vs `rename_node`

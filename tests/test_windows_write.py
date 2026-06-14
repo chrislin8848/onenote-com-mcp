@@ -39,10 +39,6 @@ pytestmark = pytest.mark.windows
 TEST_NOTEBOOK = "MCP Test"
 TEST_SECTION = "Phase 0 測試用"
 TEMP_PREFIX = "P4暫存"
-PNG_1PX = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
-    "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-)
 
 
 def _find(nodes, name):
@@ -435,17 +431,39 @@ def test_hyperlink_write_and_readback(backend, temp_section):
     assert linked2["text"] == "官方網站" and linked2["link"] == url
 
 
-# --- 6. images ---------------------------------------------------------------------------
+# --- 6. SVG image insert (rasterized server-side) ----------------------------------------
 
 
-def test_insert_image_roundtrip(backend, temp_section):
-    page_id = create.create_page(backend, temp_section, "圖片插入頁")
-    page_edit.insert_image(backend, page_id, PNG_1PX, "image/png", width=24.0, height=24.0)
+def test_insert_svg_image_roundtrip(backend, temp_section):
+    """insert_svg_image rasterizes SVG markup to a PNG (resvg, frozen-validated) and inlines it.
+    The page must come back with exactly one image whose bytes are a real PNG. The SVG carries
+    Traditional-Chinese text in 微軟正黑體 (CJK font fidelity is eyeballed on the VM, not asserted
+    here — Tier-2 stays content-light per the PII policy)."""
+    page_id = create.create_page(backend, temp_section, "SVG插入頁")
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80">'
+        '<rect width="240" height="80" fill="#eef"/>'
+        '<text x="12" y="48" font-family="Microsoft JhengHei" font-size="28" fill="#36c">'
+        "河內一日遊</text></svg>"
+    )
+    page_edit.insert_svg_image(backend, page_id, svg, width=120.0, height=40.0)
     images = read.get_page_images(backend, page_id)
     assert len(images) == 1
     raw = base64.b64decode(images[0]["data_base64"])
-    assert raw.startswith(b"\x89PNG"), "inserted image must come back as a PNG"
-    assert raw == base64.b64decode(PNG_1PX), "byte-identical round-trip (loosen if re-encoded)"
+    assert raw.startswith(b"\x89PNG"), "the SVG must round-trip as a rasterized PNG"
+
+
+def test_insert_svg_image_rejects_embedded_raster(backend, temp_section):
+    """The vector-only contract holds against live COM too: an SVG smuggling a raster data: URI is
+    rejected BEFORE any write, so no stray image lands on the page."""
+    page_id = create.create_page(backend, temp_section, "SVG拒絕頁")
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        '<image href="data:image/png;base64,iVBORw0KGgo="/></svg>'
+    )
+    with pytest.raises(ValueError, match="vector-only"):
+        page_edit.insert_svg_image(backend, page_id, svg)
+    assert read.get_page_images(backend, page_id) == [], "nothing inserted on rejection"
 
 
 # --- 7. hierarchy mutators ---------------------------------------------------------------

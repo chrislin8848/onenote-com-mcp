@@ -12,7 +12,7 @@
 
 import os
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 # SPECPATH is injected by PyInstaller = this spec's directory. Resolve our entry + runtime hook
 # against it so the build works regardless of the CWD pyinstaller is invoked from.
@@ -46,11 +46,17 @@ hiddenimports += collect_submodules("mcp")
 hiddenimports += collect_submodules("pydantic")
 hiddenimports += collect_submodules("pydantic_core")
 
+# resvg_py — the SVG rasterizer behind insert_svg_image (a PyO3 extension bundling the resvg
+# native lib). collect_all pulls its binary + data so the frozen exe can import it (freeze gate
+# validated on the VM 2026-06-14).
+_resvg_datas, _resvg_binaries, _resvg_hidden = collect_all("resvg_py")
+hiddenimports += _resvg_hidden
+
 a = Analysis(
     [_ENTRY],
     pathex=[],
-    binaries=[],
-    datas=[],
+    binaries=_resvg_binaries,
+    datas=_resvg_datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[_RTHOOK],

@@ -1,6 +1,6 @@
 """The single page-content write path (SPEC §4 convergence point).
 
-EVERY content write — update_page_content / create_table / insert_image — funnels through
+EVERY content write — update_page_content / create_table — funnels through
 ``apply_page_edit``, so there is exactly ONE ``UpdatePageContent`` call site and ONE place the
 concurrency guard is applied. The facades below own only content shaping: their ``mutate``
 callbacks do surgical in-place edits on the live GetPageContent tree (SPEC §5 — never rebuild
@@ -697,24 +697,29 @@ def delete_inline_content(
     apply_page_edit(backend, page_id, mutate, force=force)
 
 
-def insert_image(
+def insert_svg_image(
     backend: OneNoteBackend,
     page_id: str,
-    image_base64: str,
-    media_type: str,
+    svg: str,
     *,
     width: float | None = None,
     height: float | None = None,
     target_object_id: str = "",
     force: bool = False,
 ) -> None:
-    """Append a new image (inline one:Data) to an outline, wrapped in its own one:OE —
-    the OE is what carries the deletable objectID (a one:Image has none)."""
+    """Rasterize SVG markup to a PNG and append it (inline one:Data) to an outline, wrapped in its
+    own one:OE — the OE carries the deletable objectID (a one:Image has none). Vector-only: an SVG
+    that embeds a raster image is rejected before any write (service.svg.rasterize_svg)."""
+    from base64 import b64encode
+
+    from onenote_com_mcp.service.svg import rasterize_svg
+
+    data_b64 = b64encode(rasterize_svg(svg)).decode("ascii")
 
     def mutate(tree: etree._Element) -> None:
         outline = _resolve_outline(tree, target_object_id)
         oe = etree.Element(qn("OE"))
-        oe.append(make_image(image_base64, media_type, width, height))
+        oe.append(make_image(data_b64, "image/png", width, height))
         _outline_children(outline).append(oe)
 
     apply_page_edit(backend, page_id, mutate, force=force)

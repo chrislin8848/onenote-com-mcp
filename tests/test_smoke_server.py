@@ -30,7 +30,7 @@ EXPECTED_TOOLS = {
     "update_page_content",
     "create_table",
     "modify_table",
-    "insert_image",
+    "insert_svg_image",
     "copy_page",
     "copy_pages",
     "copy_page_subtree",
@@ -60,6 +60,12 @@ def tools():
 def test_catalog_is_the_28_expected_tools(tools):
     assert set(tools) == EXPECTED_TOOLS
     assert len(tools) == 28
+    # RASTER image insertion was deliberately removed (base64-through-the-model is too slow):
+    # the only picture-insert path is insert_svg_image (vector SVG, rendered server-side). There
+    # is no raster insert_image / insert_file tool.
+    assert "insert_image" not in tools
+    assert "insert_file" not in tools
+    assert "insert_svg_image" in tools
 
 
 def test_every_tool_has_a_real_description(tools):
@@ -115,6 +121,10 @@ def test_server_instructions_present():
     # the cross-tool rules SPEC §4 asked for
     assert "objectID" in mcp.instructions
     assert "copy_section" in mcp.instructions
+    # picture insertion is SVG-only — the instructions must name insert_svg_image and tell the
+    # user to add photos/raster images by hand
+    assert "insert_svg_image" in mcp.instructions
+    assert "by hand" in mcp.instructions.lower()
 
 
 def test_selftest_reports_failure_cleanly(monkeypatch, capsys):

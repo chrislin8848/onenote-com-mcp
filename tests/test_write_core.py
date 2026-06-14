@@ -59,9 +59,14 @@ def test_parse_onenote_datetime_handles_z_suffix():
     [
         lambda be: page_edit.edit_page_content(be, _PAGE_ID, "hi"),
         lambda be: page_edit.add_table(be, _PAGE_ID, [["a", "b"]]),
-        lambda be: page_edit.insert_image(be, _PAGE_ID, "BASE64", "image/png"),
+        lambda be: page_edit.insert_svg_image(
+            be,
+            _PAGE_ID,
+            '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">'
+            '<rect width="8" height="8" fill="#09c"/></svg>',
+        ),
     ],
-    ids=["update_page_content", "create_table", "insert_image"],
+    ids=["update_page_content", "create_table", "insert_svg_image"],
 )
 def test_all_write_facades_delegate_to_single_core(tmp_path, monkeypatch, invoke):
     be = _backend_with_page(tmp_path)

@@ -643,15 +643,32 @@ def test_delete_inline_content_rejects_page_level_object(be, mixed):
 # --- images ---------------------------------------------------------------------------
 
 
-def test_insert_image_appends_oe_wrapped_image_with_inline_data(be, mixed):
-    page_edit.insert_image(be, mixed.get("ID"), "QUJD", "image/png", width=100.0, height=50.0)
+def test_insert_svg_image_appends_oe_wrapped_rasterized_png(be, mixed):
+    import base64
+
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">'
+        '<rect width="20" height="20" fill="#3366cc"/></svg>'
+    )
+    page_edit.insert_svg_image(be, mixed.get("ID"), svg, width=100.0, height=50.0)
     _, sent = _sent_payload(be)
     last_oe = _oes(sent.findall(qn("Outline"))[-1])[-1]
     image = last_oe.find(qn("Image"))
     assert image is not None, "the image rides in its own one:OE (the deletable objectID)"
-    assert image.find(qn("Data")).text == "QUJD"
+    raw = base64.b64decode(image.find(qn("Data")).text)
+    assert raw.startswith(b"\x89PNG"), "the SVG was rasterized to a PNG and inlined as one:Data"
     assert image.find(qn("CallbackID")) is None
     assert image.find(qn("Size")).get("width") == "100.0"
+
+
+def test_insert_svg_image_rejects_embedded_raster_before_any_write(be, mixed):
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        '<image href="data:image/png;base64,iVBORw0KGgo="/></svg>'
+    )
+    with pytest.raises(ValueError, match="vector-only"):
+        page_edit.insert_svg_image(be, mixed.get("ID"), svg)
+    assert not [c for c in be.calls if c.method == "update_page_content"], "rejected before write"
 
 
 def test_editing_outline_with_existing_image_inlines_its_binary(be, image_page, fixtures_dir):

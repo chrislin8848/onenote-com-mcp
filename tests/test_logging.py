@@ -90,19 +90,21 @@ def test_debug_logs_call_and_result_redacted(monkeypatch, log_file):
     monkeypatch.setenv("ONENOTE_MCP_LOG_LEVEL", "DEBUG")
     logger = configure_logging()
 
+    # a stand-in tool with a large string argument — the point is length-based redaction of
+    # big payloads (base64, long blobs); not tied to any specific tool in the catalog.
     @log_tool_call
-    def insert_image(page_id: str, image_base64: str) -> str:
-        return "image inserted into " + page_id
+    def bulk_write(page_id: str, blob: str) -> str:
+        return "wrote into " + page_id
 
-    insert_image(page_id="{P}{1}{B0}", image_base64="A" * 5000)
+    bulk_write(page_id="{P}{1}{B0}", blob="A" * 5000)
     _flush(logger)
     text = log_file.read_text()
 
-    assert "call insert_image(" in text
+    assert "call bulk_write(" in text
     assert "page_id='{P}{1}{B0}'" in text
-    assert "A" * 200 not in text, "base64 must never be written in full"
+    assert "A" * 200 not in text, "large payloads must never be written in full"
     assert "<str len=5000>" in text  # redacted by length
-    assert "insert_image -> 'image inserted into {P}{1}{B0}'" in text
+    assert "bulk_write -> 'wrote into {P}{1}{B0}'" in text
 
 
 def test_errors_recorded_even_with_detailed_logging_off(monkeypatch, log_file):
