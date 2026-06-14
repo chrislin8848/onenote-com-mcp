@@ -900,3 +900,71 @@ def test_apply_text_style_requires_a_property_and_validates_scope(be, mixed):
     with pytest.raises(NodeNotFoundError):
         page_edit.apply_text_style(be, page_id, font_family="X", scope_object_id="{NOPE}{1}{B0}")
     assert not [c for c in be.calls if c.method == "update_page_content"]
+
+
+def test_apply_text_style_bold_italic_whole_page(be, mixed):
+    from onenote_com_mcp.xmllayer.parse import _parse_quick_styles, parse_page
+
+    page_id = mixed.get("ID")
+    page_edit.apply_text_style(be, page_id, bold=True, italic=True)
+    kwargs, sent = _sent_payload(be)
+    runs = _all_runs(parse_page(kwargs["changes_xml"]))
+    assert runs and all(r.style.get("font-weight") == "bold" for r in runs)
+    assert all(r.style.get("font-style") == "italic" for r in runs)
+    # whole-page also flips the QuickStyleDef baseline bold/italic
+    qs = _parse_quick_styles(sent)
+    assert qs and all(d.bold and d.italic for d in qs.values())
+
+
+def test_apply_text_style_bold_false_turns_emphasis_off(be, mixed):
+    from onenote_com_mcp.xmllayer.parse import parse_page
+
+    page_id = mixed.get("ID")  # the page has a bold run (粗粗粗)
+    page_edit.apply_text_style(be, page_id, bold=False)
+    runs = _all_runs(parse_page(_sent_payload(be)[0]["changes_xml"]))
+    assert all(r.style.get("font-weight") in (None, "normal") for r in runs)
+    formerly_bold = [r for r in runs if "粗" in r.text]
+    assert formerly_bold and all(r.style.get("font-weight") == "normal" for r in formerly_bold)
+
+
+def test_apply_text_style_underline_merges_with_existing_strikethrough(be, mixed):
+    # the page has a line-through run (刪刪刪); adding underline must keep BOTH decorations
+    page_id = mixed.get("ID")
+    page_edit.apply_text_style(be, page_id, underline=True)
+    xml = _sent_payload(be)[0]["changes_xml"]
+    assert "text-decoration:line-through underline" in xml  # both, merged (sorted), not clobbered
+
+
+def test_apply_text_style_strikethrough_only_does_not_touch_font(be, mixed):
+    from onenote_com_mcp.xmllayer.parse import parse_page
+
+    page_id = mixed.get("ID")
+    page_edit.apply_text_style(be, page_id, strikethrough=True)
+    runs = _all_runs(parse_page(_sent_payload(be)[0]["changes_xml"]))
+    assert runs and all("line-through" in (r.style.get("text-decoration") or "") for r in runs)
+    # font-family was not requested → the original mix is preserved
+    assert {r.style.get("font-family") for r in runs} != {None}
+
+
+def test_apply_text_style_highlight_sets_dual_background(be, mixed):
+    from onenote_com_mcp.xmllayer.parse import _parse_quick_styles, parse_page
+
+    page_id = mixed.get("ID")
+    page_edit.apply_text_style(be, page_id, highlight="yellow")
+    kwargs, sent = _sent_payload(be)
+    xml = kwargs["changes_xml"]
+    assert "background:yellow" in xml and "mso-highlight:yellow" in xml  # OneNote's dual highlight
+    runs = _all_runs(parse_page(xml))
+    assert runs and all(r.style.get("background") == "yellow" for r in runs)
+    # highlight is span-only — the QuickStyleDef baseline is NOT touched (OneNote rejects a
+    # highlightColor set to a CSS color name; VM-confirmed). font baseline still rewrites, though.
+    assert all(d.highlight_color is None for d in _parse_quick_styles(sent).values())
+
+
+def test_apply_text_style_highlight_none_clears_existing(be, mixed):
+    from onenote_com_mcp.xmllayer.parse import parse_page
+
+    page_id = mixed.get("ID")  # the page has a highlighted run (螢光標示文字, background:yellow)
+    page_edit.apply_text_style(be, page_id, highlight="none")
+    runs = _all_runs(parse_page(_sent_payload(be)[0]["changes_xml"]))
+    assert runs and all(not r.style.get("background") for r in runs), "all highlights removed"

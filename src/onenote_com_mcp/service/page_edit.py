@@ -750,6 +750,27 @@ def _under_title(el: etree._Element) -> bool:
     return False
 
 
+def _apply_text_decoration(
+    span: dict[str, str], underline: bool | None, strike: bool | None
+) -> None:
+    """Merge underline / strikethrough into a span's ``text-decoration`` IN PLACE.
+
+    Underline and strikethrough share the one ``text-decoration`` property, so a flat overlay would
+    clobber the other one — merge per run instead: keep the tokens already present, add/remove only
+    the one(s) asked for. True = turn on, False = turn off, None = leave. Empty result → "none"
+    (explicit, so it also overrides any inherited decoration)."""
+    tokens = {tok for tok in (span.get("text-decoration", "") or "").split() if tok != "none"}
+    if underline is True:
+        tokens.add("underline")
+    elif underline is False:
+        tokens.discard("underline")
+    if strike is True:
+        tokens.add("line-through")
+    elif strike is False:
+        tokens.discard("line-through")
+    span["text-decoration"] = " ".join(sorted(tokens)) if tokens else "none"
+
+
 def apply_text_style(
     backend: OneNoteBackend,
     page_id: str,
@@ -757,22 +778,31 @@ def apply_text_style(
     font_family: str | None = None,
     size: float | None = None,
     color: str | None = None,
+    highlight: str | None = None,
+    bold: bool | None = None,
+    italic: bool | None = None,
+    underline: bool | None = None,
+    strikethrough: bool | None = None,
     scope_object_id: str = "",
     force: bool = False,
 ) -> dict[str, Any]:
-    """Patch font-family / size / color across EVERY text run in scope, in ONE read-mutate-write.
+    """Patch font / size / color / highlight / bold / italic / underline / strikethrough across
+    EVERY text run in scope, in ONE read-mutate-write.
 
     Scope defaults to the whole page (all outlines + tables; the page title is left alone); pass an
-    outline / table / paragraph (one:OE) objectID to restyle only that subtree. Only the CSS keys
+    outline / table / paragraph (one:OE) objectID to restyle only that subtree. Only the attributes
     you ask for are merged into each run's span — and the span wins the QuickStyleDef ← OE-style ←
-    span cascade — so bold, italic, underline, the colors/sizes you did NOT change, highlight,
-    hyperlinks, images and tables all survive untouched; paragraphs outside the scope are pruned
-    from the payload and ride byte-identical. Whole-page scope ALSO rewrites the page's
-    QuickStyleDef baseline (font/fontSize/fontColor) so the change is self-consistent for empty
-    paragraphs and future typing; a SUB-scope must not touch the page-global QuickStyleDef.
+    span cascade — so the things you did NOT change (other emphasis, the colors/sizes you left
+    alone, hyperlinks, images, tables) all survive; paragraphs outside the scope are pruned from the
+    payload and ride byte-identical. ``color`` and ``highlight`` are colors (a name like "yellow"
+    or hex "#FFFF00"); highlight writes OneNote's dual background+mso-highlight, and
+    ``highlight="none"`` removes it. bold/italic/underline/strikethrough are tri-state: True=on,
+    False=off, None=leave. Whole-page scope ALSO rewrites the page's QuickStyleDef baseline (font/
+    fontSize/fontColor/bold/italic; highlight is span-only) so the change is self-consistent for
+    empty paragraphs and future typing; a SUB-scope must not touch the page-global QuickStyleDef.
 
     Returns ``{scope, runs_changed, text_blocks_changed, quick_styles_updated}`` — narrate the
-    effect ("changed the whole page to 微軟正黑體"), not these numbers/objectIDs.
+    effect ("made the whole page bold + italic"), not these numbers/objectIDs.
     """
     overlay: dict[str, str] = {}
     if font_family:
@@ -781,8 +811,21 @@ def apply_text_style(
         overlay["font-size"] = f"{float(size)}pt"
     if color:
         overlay["color"] = color
-    if not overlay:
-        raise ValueError("apply_text_style needs at least one of font_family, size, color")
+    if bold is not None:
+        overlay["font-weight"] = "bold" if bold else "normal"
+    if italic is not None:
+        overlay["font-style"] = "italic" if italic else "normal"
+    # highlight is a color; "none" CLEARS it (removed per run + baseline). build_style_attr turns a
+    # background into the dual background+mso-highlight OneNote needs.
+    highlight_clear = bool(highlight) and highlight.strip().lower() == "none"
+    if highlight and not highlight_clear:
+        overlay["background"] = highlight
+    decorate = underline is not None or strikethrough is not None
+    if not overlay and not decorate and not highlight_clear:
+        raise ValueError(
+            "apply_text_style needs at least one of font_family, size, color, highlight, bold, "
+            "italic, underline, strikethrough"
+        )
 
     summary: dict[str, Any] = {
         "runs_changed": 0,
@@ -801,6 +844,11 @@ def apply_text_style(
                 continue
             for run in runs:
                 run.span_style = {**run.span_style, **overlay}
+                if decorate:
+                    _apply_text_decoration(run.span_style, underline, strikethrough)
+                if highlight_clear:
+                    run.span_style.pop("background", None)
+                    run.span_style.pop("mso-highlight", None)
             t.text = etree.CDATA(build_spans(runs))
             summary["runs_changed"] += len(runs)
             summary["text_blocks_changed"] += 1
@@ -812,6 +860,14 @@ def apply_text_style(
                     qd.set("fontSize", f"{float(size)}")
                 if color:
                     qd.set("fontColor", color)
+                # NOTE: highlight is span-only — NOT written to the QuickStyleDef baseline. OneNote
+                # rejects a highlightColor attribute set to a CSS color NAME ("yellow") with
+                # hrInvalidXML (VM-confirmed 2026-06-14); the span background already makes it
+                # visible everywhere, so the baseline is left alone (like underline/strikethrough).
+                if bold is not None:
+                    qd.set("bold", "true" if bold else "false")
+                if italic is not None:
+                    qd.set("italic", "true" if italic else "false")
                 summary["quick_styles_updated"] += 1
 
     apply_page_edit(backend, page_id, mutate, force=force)

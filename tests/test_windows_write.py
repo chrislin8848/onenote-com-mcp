@@ -623,6 +623,25 @@ def test_apply_text_style_size_only_keeps_font(backend, temp_section):
     assert styles and all(s.get("font-size") == "18.0pt" for s in styles)
 
 
+def test_apply_text_style_bold_italic_underline_applied(backend, temp_section):
+    """The emphasis toggles (v1.1.x): bold + italic + underline take effect live."""
+    page_id = create.create_page(backend, temp_section, "強調測試", "甲乙丙")
+    page_edit.apply_text_style(backend, page_id, bold=True, italic=True, underline=True)
+    styles = [r["style"] for p in _paragraphs(backend, page_id) for r in p["runs"]]
+    assert styles
+    assert all(s.get("font-weight") == "bold" for s in styles), "bold applied live"
+    assert all(s.get("font-style") == "italic" for s in styles), "italic applied live"
+    assert all("underline" in (s.get("text-decoration") or "") for s in styles), "underline applied"
+
+
+def test_apply_text_style_highlight_applied(backend, temp_section):
+    """Highlight (screen-marker background) takes effect live as OneNote's dual attribute."""
+    page_id = create.create_page(backend, temp_section, "螢光測試", "甲乙丙")
+    page_edit.apply_text_style(backend, page_id, highlight="yellow")
+    styles = [r["style"] for p in _paragraphs(backend, page_id) for r in p["runs"]]
+    assert styles and all(s.get("background") for s in styles), "highlight applied live"
+
+
 def test_apply_text_style_sub_scope_isolates_siblings(backend, temp_section):
     """A paragraph-scoped restyle changes ONLY that paragraph; its siblings keep their font and
     the page-global QuickStyleDef is left alone (so siblings are not swept along)."""

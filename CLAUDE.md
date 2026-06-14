@@ -91,6 +91,25 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 
 ## Status (2026-06-14)
 
+**v1.1.2 — apply_text_style gains EMPHASIS + HIGHLIGHT (29-tool catalog unchanged; Tier-1 310 green;
+Tier-2 VM-VALIDATED 59 passed).** Two real-Claude-Desktop findings: "set these 10 pages bold +
+italic" and "highlight pages 1-5" — apply_text_style only had font/size/color, so Claude punted to
+manual Ctrl+B/I. New params (same span-overlay seam, no new COM):
+- **bold / italic / underline / strikethrough** — tri-state (true=on, false=off, omit=leave). Span
+  attrs font-weight / font-style / text-decoration. underline + strikethrough SHARE text-decoration,
+  so a flat overlay would clobber the other — `_apply_text_decoration()` merges per-run (keep
+  existing tokens, add/remove only the requested one; empty→"none"). Whole-page also flips the
+  QuickStyleDef bold/italic baseline.
+- **highlight** — a color (name "yellow" or hex); writes OneNote's dual background+mso-highlight;
+  `highlight="none"` removes it. **SPAN-ONLY** (NOT written to the QuickStyleDef baseline): VM
+  ground truth 2026-06-14 — a QuickStyleDef `highlightColor` set to a CSS color NAME ("yellow") is
+  rejected with hrInvalidXML (the whole UpdatePageContent fails); the span background already makes
+  highlight visible everywhere, so the baseline is left alone (like underline/strikethrough). (font/
+  size/color/bold/italic baselines still rewrite on whole-page.)
+- §4: apply_text_style description + _SERVER_INSTRUCTIONS "Restyling text in bulk" para list the new
+  attributes. Version 1.1.1→1.1.2. **Installer rebuilt as OneNoteMCP-Setup_1.1.2.exe.** Tier-2
+  `test_windows_write.py` +2 (bold+italic+underline applied; highlight applied) — both PASS live.
+
 **v1.1.1 — search_pages vs list_pages §4 fix (instruction-only, 29-tool catalog unchanged, Tier-1
 304 green).** Driven by a real-Claude-Desktop bug: asked to restyle ●ITIN AND all its subpages,
 Claude used **search_pages** (full-text FindPages) and found only ●ITIN + 2 subpages (the ones whose
