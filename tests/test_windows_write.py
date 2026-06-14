@@ -642,6 +642,94 @@ def test_apply_text_style_highlight_applied(backend, temp_section):
     assert styles and all(s.get("background") for s in styles), "highlight applied live"
 
 
+def test_apply_text_style_highlight_set_then_fully_cleared(backend, temp_section):
+    """REGRESSION (v1.1.4): highlight="none" must clear a highlight-only run too — the bug left
+    most highlights because build_spans resurrected the popped background from run.style."""
+    page_id = create.create_page(backend, temp_section, "螢光清除測試", "甲乙丙")
+    page_edit.apply_text_style(backend, page_id, highlight="yellow")
+    page_edit.apply_text_style(backend, page_id, highlight="none")
+    styles = [r["style"] for p in _paragraphs(backend, page_id) for r in p["runs"]]
+    assert styles and all(not s.get("background") for s in styles), "highlight FULLY cleared"
+
+
+def test_apply_text_style_cell_shading_set_then_clear(backend, temp_section):
+    """v1.1.4: set then clear a table cell's whole-cell background (shadingColor)."""
+    page_id = create.create_page(backend, temp_section, "底色測試")
+    page_edit.add_table(backend, page_id, [["甲", "乙"], ["丙", "丁"]])
+
+    def _cells():
+        return [
+            c
+            for o in read.get_page(backend, page_id)["outlines"]
+            for b in o["blocks"]
+            if b["type"] == "table"
+            for row in b["rows"]
+            for c in row
+        ]
+
+    page_edit.apply_text_style(backend, page_id, cell_shading="yellow")
+    set_cells = _cells()
+    assert set_cells and all(c.get("shading_color") for c in set_cells), "cell shading set live"
+
+    page_edit.apply_text_style(backend, page_id, cell_shading="none")
+    cleared = _cells()
+    assert cleared and all(not c.get("shading_color") for c in cleared), "cell shading cleared live"
+
+
+def test_apply_text_style_columns_restricts_to_one_column(backend, temp_section):
+    """v1.1.4: columns=[0] restyles + shades only the FIRST column of the table; column 1 is left
+    alone (a column has no objectID, so it can only be addressed positionally)."""
+    page_id = create.create_page(backend, temp_section, "整欄測試")
+    page_edit.add_table(backend, page_id, [["A1", "B1"], ["A2", "B2"], ["A3", "B3"]])
+
+    def _table():
+        return next(
+            b
+            for o in read.get_page(backend, page_id)["outlines"]
+            for b in o["blocks"]
+            if b["type"] == "table"
+        )
+
+    def _colors(cell):
+        return [
+            (r["style"].get("color") or "").lower() for p in cell["paragraphs"] for r in p["runs"]
+        ]
+
+    tid = _table()["object_id"]
+    page_edit.apply_text_style(
+        backend, page_id, color="#123456", cell_shading="cyan", columns=[0], scope_object_id=tid
+    )
+    rows = _table()["rows"]
+    col0 = [r[0] for r in rows]
+    col1 = [r[1] for r in rows]
+    assert all(c.get("shading_color") for c in col0), "column 0 shaded"
+    assert all(not c.get("shading_color") for c in col1), "column 1 not shaded"
+    assert any("#123456" in v for c in col0 for v in _colors(c)), "column 0 text recolored"
+    assert all("#123456" not in v for c in col1 for v in _colors(c)), "column 1 text untouched"
+
+
+def test_apply_text_style_row_scope_restyles_only_that_row(backend, temp_section):
+    """v1.1.4: a whole ROW = its one:Row objectID (now exposed via row_object_ids) as scope."""
+    page_id = create.create_page(backend, temp_section, "整列測試")
+    page_edit.add_table(backend, page_id, [["A1", "B1"], ["A2", "B2"], ["A3", "B3"]])
+
+    def _table():
+        return next(
+            b
+            for o in read.get_page(backend, page_id)["outlines"]
+            for b in o["blocks"]
+            if b["type"] == "table"
+        )
+
+    row_id = _table()["row_object_ids"][1]
+    assert row_id, "row objectID exposed via get_page"
+    page_edit.apply_text_style(backend, page_id, cell_shading="lime", scope_object_id=row_id)
+    rows = _table()["rows"]
+    assert all(c.get("shading_color") for c in rows[1]), "the targeted row is shaded"
+    others = rows[0] + rows[2]
+    assert all(not c.get("shading_color") for c in others), "other rows untouched"
+
+
 def test_apply_text_style_sub_scope_isolates_siblings(backend, temp_section):
     """A paragraph-scoped restyle changes ONLY that paragraph; its siblings keep their font and
     the page-global QuickStyleDef is left alone (so siblings are not swept along)."""

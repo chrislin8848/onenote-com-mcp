@@ -96,12 +96,19 @@ Restyling text in bulk: to change FONT / SIZE / COLOR / HIGHLIGHT or toggle BOLD
 UNDERLINE / STRIKETHROUGH across many paragraphs at once — "make this whole page 微軟正黑體", \
 "every heading 16pt", "the body blue", "make these pages bold + italic", "highlight pages 1-5 \
 yellow" — use apply_text_style, NOT a string of update_page_content("replace") calls. It patches \
-styling across every run in scope (default the whole page; or one outline/table/paragraph \
+styling across every run in scope (default the whole page; or one outline/table/paragraph/cell \
 objectID) in ONE pass and preserves everything else (the emphasis/colors/sizes you did not touch, \
 links, images, tables); color/highlight are colors (highlight="none" removes it) and bold/italic/ \
-underline/strikethrough are tri-state (true=on, false=off, omit=leave). update_page_content( \
-"replace") is for rewriting ONE paragraph's text; apply_text_style changes style only, never the \
-words. To restyle a page AND its subpages, enumerate with list_pages, then call it per page.
+underline/strikethrough are tri-state (true=on, false=off, omit=leave). TABLE row/column: a whole \
+ROW = pass that row's id (get_page's table.row_object_ids) as scope_object_id; a whole COLUMN has \
+no id, so pass columns=[j] (0-indexed) with the table as scope — both work for text AND for \
+cell_shading. A yellow background in a TABLE may be the TEXT highlight (behind the words) OR the \
+whole-CELL shading — different \
+attributes: highlight clears the text marker, cell_shading="none" clears the cell background. If \
+"remove the yellow" doesn't fully work, clear BOTH (highlight="none", cell_shading="none"). \
+update_page_content("replace") is for rewriting ONE paragraph's text; apply_text_style changes \
+style only, never the words. To restyle a page AND its subpages, enumerate with list_pages, then \
+call it per page.
 
 Editing a page = edit it IN PLACE (update_page_content, modify_table, delete_inline_content, \
 insert_svg_image); this is the normal, expected, safe-enough path for ordinary changes. Do NOT \
@@ -532,29 +539,38 @@ def apply_text_style(
     italic: bool | None = None,
     underline: bool | None = None,
     strikethrough: bool | None = None,
+    cell_shading: str = "",
+    columns: list[int] | None = None,
     scope_object_id: str = "",
     force: bool = False,
 ) -> str:
     """Batch-change text styling — FONT, SIZE, COLOR, HIGHLIGHT, BOLD, ITALIC, UNDERLINE,
-    STRIKETHROUGH — of existing text across a page (or one part of it) in a single pass, leaving
-    everything else intact: the emphasis/colors/sizes you did NOT change, hyperlinks, images and
-    tables all survive. This is a STYLE-ONLY patch over MANY runs at once; it does NOT change the
-    text, structure, or which paragraphs exist. Use it for "make the whole page 微軟正黑體", "every
-    heading 16pt", "the body blue", "make these pages bold + italic", "highlight pages 1-5 yellow".
+    STRIKETHROUGH — and/or TABLE-CELL background (cell_shading) across a page (or one part of it) in
+    a single pass, leaving everything else intact: the emphasis/colors/sizes you did NOT change,
+    hyperlinks, images and tables all survive. It does NOT change the text, structure, or which
+    paragraphs exist. Use it for "make the whole page 微軟正黑體", "every heading 16pt", "the body
+    blue", "make these pages bold + italic", "highlight pages 1-5 yellow", "clear the yellow
+    backgrounds".
 
     Contrast: update_page_content("replace") rewrites ONE paragraph's text+style (and must
     re-supply its runs); modify_table(set_rows) overwrites whole CELLS. apply_text_style touches no
     content — only styling — so prefer it for restyling that should preserve the words. (To restyle
     a page AND its subpages, enumerate them with list_pages, then call this per page.)
 
-    font_family: e.g. "微軟正黑體" / "Microsoft JhengHei". size: points (e.g. 12). color and
-    highlight are colors — a name like "yellow" or hex "#FFFF00"; highlight is the screen-marker
-    background, and highlight="none" REMOVES it. bold/italic/underline/strikethrough are tri-state:
-    true turns it ON, false turns it OFF, omit to leave it unchanged. At least one styling argument
-    is required. scope_object_id: omit = the WHOLE page (every outline + table; the page title is
-    left alone); or pass an outline / table / paragraph objectID from get_page to restyle only that
-    subtree. Whole-page also updates the page's style baseline so future typing matches.
-    Concurrency-guarded; force=True only after explicit user confirmation."""
+    font_family: e.g. "微軟正黑體" / "Microsoft JhengHei". size: points (e.g. 12). color, highlight,
+    cell_shading are colors — a name like "yellow" or hex "#FFFF00". highlight is the TEXT
+    screen-marker (behind the words); cell_shading is the whole-CELL background of a table cell —
+    these are DIFFERENT things. Either set to "none" to remove it; if a yellow background won't go
+    away and you're unsure which it is, clear BOTH (highlight="none", cell_shading="none").
+    bold/italic/underline/strikethrough are tri-state: true ON, false OFF, omit = leave. At least
+    one styling argument is required. scope_object_id: omit = the WHOLE page (every outline + table;
+    the page title is left alone); or pass an outline / table / paragraph / table-CELL / table-ROW
+    objectID from get_page to restyle only that subtree. TABLE GRANULARITY: a whole ROW = pass that
+    row's id from get_page's table.row_object_ids as scope_object_id; a whole COLUMN has no id, so
+    pass columns=[j,...] (0-indexed) — both the text restyle and cell_shading then apply only to
+    those columns of every row in scope (give a table objectID as scope). A single cell = its cell
+    objectID; the whole table = the table objectID. Whole-page also updates the page's style
+    baseline so future typing matches. Concurrency-guarded; force=True only after user confirms."""
     summary = page_edit.apply_text_style(
         get_backend(),
         page_id,
@@ -566,6 +582,8 @@ def apply_text_style(
         italic=italic,
         underline=underline,
         strikethrough=strikethrough,
+        cell_shading=cell_shading or None,
+        columns=columns or None,
         scope_object_id=scope_object_id,
         force=force,
     )

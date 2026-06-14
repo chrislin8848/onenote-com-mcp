@@ -119,6 +119,9 @@ def test_get_page_table_is_structured_with_object_ids(fixtures_dir):
     assert table["has_header_row"] is True
     assert len(table["columns"]) == 2
     assert len(table["rows"]) == 10
+    # row objectIDs are exposed (parallel to rows) so a whole ROW can be an apply_text_style scope
+    assert len(table["row_object_ids"]) == 10
+    assert all(table["row_object_ids"]), "every row carries its own objectID"
     # rows are structured lists of cells, never one string
     assert table["rows"][0][0]["text"] == "DAY 1"
     assert table["rows"][0][0]["shading_color"] == "#FFFFCC"

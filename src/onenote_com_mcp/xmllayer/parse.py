@@ -176,7 +176,9 @@ def parse_table(el: etree._Element, quick_styles: dict[int, QuickStyleDef]) -> T
     """``one:Table`` element → :class:`Table` with structured rows — never one string."""
     columns = [float(col.get("width")) for col in el.findall(f"{qn('Columns')}/{qn('Column')}")]
     rows: list[list[Cell]] = []
+    row_object_ids: list[str | None] = []
     for row_el in el.findall(qn("Row")):
+        row_object_ids.append(row_el.get("objectID"))
         cells: list[Cell] = []
         for cell_el in row_el.findall(qn("Cell")):
             cells.append(
@@ -198,6 +200,7 @@ def parse_table(el: etree._Element, quick_styles: dict[int, QuickStyleDef]) -> T
         has_header_row=_bool(el.get("hasHeaderRow")),
         columns=columns,
         rows=rows,
+        row_object_ids=row_object_ids,
     )
 
 

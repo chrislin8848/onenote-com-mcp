@@ -1,6 +1,6 @@
 [project]
 name = "onenote-com-mcp"
-version = "1.1.3"
+version = "1.1.4"
 description = "COM-only OneNote MCP server (live OneNote desktop CRUD, no Azure/Graph/token)"
 authors = [{ name = "Chris Lin", email = "chris0211@gmail.com" }]
 readme = "README.md"

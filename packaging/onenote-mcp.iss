@@ -9,7 +9,7 @@
 #define AppName "OneNote MCP Server"
 #define AppPublisher "Chris Lin"
 #define AppAuthor "Chris Lin"
-#define AppVersion "1.1.3"
+#define AppVersion "1.1.4"
 #define ExeName "OneNoteMCP.exe"
 
 [Setup]

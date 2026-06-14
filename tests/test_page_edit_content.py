@@ -968,3 +968,128 @@ def test_apply_text_style_highlight_none_clears_existing(be, mixed):
     page_edit.apply_text_style(be, page_id, highlight="none")
     runs = _all_runs(parse_page(_sent_payload(be)[0]["changes_xml"]))
     assert runs and all(not r.style.get("background") for r in runs), "all highlights removed"
+
+
+def _one_run_page(tmp_path, page_id, cdata):
+    from onenote_com_mcp.backend.fixture import _sanitize
+
+    (tmp_path / f"page_{_sanitize(page_id)}.xml").write_text(
+        '<?xml version="1.0"?><one:Page '
+        'xmlns:one="http://schemas.microsoft.com/office/onenote/2013/onenote" '
+        f'ID="{page_id}" lastModifiedTime="2026-06-10T17:39:30.000Z">'
+        '<one:Outline><one:OEChildren><one:OE objectID="{OE}{1}{B0}"><one:T>'
+        f"<![CDATA[{cdata}]]>"
+        "</one:T></one:OE></one:OEChildren></one:Outline></one:Page>",
+        encoding="utf-8",
+    )
+
+
+def test_apply_text_style_highlight_none_clears_a_highlight_only_run(tmp_path):
+    # REGRESSION: a run whose ONLY span style is the highlight (the table-cell case Chris hit).
+    # Popping background left span_style EMPTY, and build_spans' `span_style or style` fallback
+    # resurrected the highlight from run.style — so "most" highlights survived. run.style is now
+    # kept in sync.
+    from onenote_com_mcp.backend.fixture import FixtureBackend
+
+    page_id = "{P}{1}{B0}"
+    _one_run_page(tmp_path, page_id, "<span style='background:yellow'>整格黃</span>")
+    be = FixtureBackend(tmp_path)
+    page_edit.apply_text_style(be, page_id, highlight="none")
+    xml = _sent_payload(be)[0]["changes_xml"]
+    assert "background" not in xml and "mso-highlight" not in xml, "highlight-only run cleared"
+
+
+def test_apply_text_style_cell_shading_sets_and_clears(be, table_page, tmp_path):
+    from onenote_com_mcp.backend.fixture import FixtureBackend, _sanitize
+
+    # SET: every cell on the real table page gets the shadingColor
+    page_id = table_page.get("ID")
+    summary = page_edit.apply_text_style(be, page_id, cell_shading="yellow")
+    _, sent = _sent_payload(be)
+    cells = sent.findall(f".//{qn('Cell')}")
+    # cell_shading is normalized to hex (OneNote's shadingColor attribute rejects a color NAME)
+    assert cells and all(c.get("shadingColor") == "#FFFF00" for c in cells)
+    assert summary["cells_changed"] == len(cells)
+
+    # CLEAR: a cell that already has shadingColor → the attribute is REMOVED (only clean clear)
+    shaded_id = "{SP}{1}{B0}"
+    (tmp_path / f"page_{_sanitize(shaded_id)}.xml").write_text(
+        '<?xml version="1.0"?><one:Page '
+        'xmlns:one="http://schemas.microsoft.com/office/onenote/2013/onenote" '
+        f'ID="{shaded_id}" lastModifiedTime="2026-06-10T17:39:30.000Z">'
+        "<one:Outline><one:OEChildren>"
+        '<one:OE><one:Table><one:Columns><one:Column index="0" width="100"/></one:Columns>'
+        '<one:Row><one:Cell objectID="{C}{1}{B0}" shadingColor="yellow"><one:OEChildren>'
+        "<one:OE><one:T><![CDATA[x]]></one:T></one:OE></one:OEChildren></one:Cell></one:Row>"
+        "</one:Table></one:OE></one:OEChildren></one:Outline></one:Page>",
+        encoding="utf-8",
+    )
+    be2 = FixtureBackend(tmp_path)
+    page_edit.apply_text_style(be2, shaded_id, cell_shading="none")
+    xml = _sent_payload(be2)[0]["changes_xml"]
+    assert "shadingColor" not in xml, "cell shading attribute removed"
+
+
+def test_apply_text_style_cell_shading_only_does_not_rewrite_text(be, table_page):
+    # a cell-shading-only call must leave the table's text/runs untouched (no T rewrite)
+    page_id = table_page.get("ID")
+    summary = page_edit.apply_text_style(be, page_id, cell_shading="yellow")
+    assert summary["runs_changed"] == 0 and summary["text_blocks_changed"] == 0
+    assert summary["cells_changed"] >= 1
+
+
+def _cell_text(cell: etree._Element) -> str:
+    return "".join(t.text or "" for t in cell.iter(qn("T")))
+
+
+def test_apply_text_style_columns_restricts_text_and_shading_to_that_column(be, table_page):
+    # columns=[0] → only the FIRST cell of every row is touched (BOTH text restyle and shading);
+    # column 1 is left alone. A column has no objectID, so this is the only way to address it.
+    page_id = table_page.get("ID")
+    summary = page_edit.apply_text_style(
+        be, page_id, color="#123456", cell_shading="cyan", columns=[0]
+    )
+    _, sent = _sent_payload(be)
+    rows = sent.find(f".//{qn('Table')}").findall(qn("Row"))
+    assert len(rows) >= 2
+    col0 = [r.findall(qn("Cell"))[0] for r in rows]
+    col1 = [r.findall(qn("Cell"))[1] for r in rows if len(r.findall(qn("Cell"))) > 1]
+    # shading: every column-0 cell set (cyan→hex); no column-1 cell turned cyan
+    assert all(c.get("shadingColor") == "#00FFFF" for c in col0)
+    assert all(c.get("shadingColor") != "#00FFFF" for c in col1)
+    assert summary["cells_changed"] == len(col0)
+    # text restyle reached column 0 but not column 1
+    assert any("#123456" in _cell_text(c) for c in col0)
+    assert all("#123456" not in _cell_text(c) for c in col1)
+
+
+def test_apply_text_style_row_scope_restyles_only_that_row(be, table_page):
+    # a whole ROW = its one:Row objectID as scope (now exposed via get_page's row_object_ids);
+    # the text loop (scope.iter(T)) and shading loop (scope.iter(Cell)) both fall inside that row.
+    page_id = table_page.get("ID")
+    rows = table_page.find(f".//{qn('Table')}").findall(qn("Row"))
+    row_id = rows[1].get("objectID")
+    assert row_id  # fixture rows carry objectIDs
+    page_edit.apply_text_style(
+        be, page_id, color="#123456", cell_shading="lime", scope_object_id=row_id
+    )
+    _, sent = _sent_payload(be)
+    for r in sent.find(f".//{qn('Table')}").findall(qn("Row")):
+        cells = r.findall(qn("Cell"))
+        if r.get("objectID") == row_id:
+            assert all(c.get("shadingColor") == "#00FF00" for c in cells)  # lime→hex
+            assert any("#123456" in _cell_text(c) for c in cells)
+        else:
+            assert all(c.get("shadingColor") != "#00FF00" for c in cells)
+            assert all("#123456" not in _cell_text(c) for c in cells)
+
+
+def test_apply_text_style_columns_rejects_negative(be, table_page):
+    with pytest.raises(ValueError, match="0-indexed"):
+        page_edit.apply_text_style(be, table_page.get("ID"), cell_shading="red", columns=[-1])
+
+
+def test_apply_text_style_cell_shading_rejects_unknown_color_name(be, table_page):
+    # OneNote's shadingColor needs hex; an unknown color name fails fast (before COM)
+    with pytest.raises(ValueError, match="hex"):
+        page_edit.apply_text_style(be, table_page.get("ID"), cell_shading="notacolor")

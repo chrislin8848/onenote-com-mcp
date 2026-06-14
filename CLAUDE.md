@@ -91,6 +91,62 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 
 ## Status (2026-06-14)
 
+**v1.1.4 — apply_text_style: highlight-clear bug fix + `cell_shading` (set/clear) + TABLE ROW +
+COLUMN granularity (29-tool catalog unchanged; Tier-1 317 green; Tier-2 PENDING VM run). One
+release, three threads, all inside the apply_text_style seam.**
+
+THREAD 1 — **highlight="none" cleared only SOME highlights (real Claude-Desktop bug "remove the
+highlight from page 6 — most not removed").** Root cause: a run whose ONLY span style was the
+highlight → popping `background` emptied `span_style` ({}), and build_spans' `run.span_style or
+run.style` fallback RESURRECTED the highlight from the unsynced `run.style`. FIX: after each run's
+span mutations, `run.style = dict(run.span_style)` so the fallback can't bring a cleared attribute
+back. (The 1.1.2 Tier-1 test passed only because its fixture's highlight run also had font-family,
+so span_style stayed non-empty. First guess "it's cell shading" was WRONG — Chris confirmed TEXT
+highlight.)
+
+THREAD 2 — **`cell_shading` (NEW param): set/clear a whole table-CELL background (`one:Cell`
+shadingColor), distinct from the TEXT highlight.** A color sets it on every cell in scope; "none"
+REMOVES the attribute (the only clean clear). **GROUND TRUTH (VM 2026-06-14, Tier-2 caught it):
+shadingColor needs #RRGGBB HEX — a CSS color NAME ("yellow") is rejected and fails the whole
+UpdatePageContent, exactly like QuickStyleDef highlightColor.** (The text `highlight` path is
+UNAFFECTED — it writes a CSS span `background`, which OneNote's style parser DOES accept by name.)
+So cell_shading is name→hex normalized: `_shading_hex()` + `_CSS_COLOR_HEX` (common names) — a #hex
+passes through, a known name maps, an unknown name raises a clear error BEFORE the COM read instead
+of a cryptic hrInvalidXML. NOTE (latent, NOT fixed in 1.1.4): the whole-page `color` param's
+QuickStyleDef `fontColor` baseline is the same class of raw attribute and may also reject a color
+NAME — never exercised live (the whole-page Tier-2 test passes font_family only); revisit if "make
+the page red" ever fails. The span `color` (CSS) accepts names fine.
+
+THREAD 3 — **TABLE ROW + COLUMN granularity.** Driven by Chris's questions: "set/clear shading for
+a single cell / whole row / whole column?" and "restyle TEXT of a whole row / column / table?" —
+the answer must be the SAME mechanism for text and shading. Ground truth (表格頁 fixture):
+`one:Cell` and `one:Row` carry their own objectID; `one:Column` does NOT (columns are positional,
+the j-th cell of each row). So:
+- **Whole ROW** — just pass the row's objectID as `scope_object_id` (the text loop `scope.iter(T)`
+  and shading loop `scope.iter(Cell)` both fall inside that row). The gap was VISIBILITY: parse
+  read `row_el` but DROPPED its objectID, so get_page never exposed it. FIXED: `Table.row_object_ids`
+  (model, parallel to `rows`), `parse._build_table` collects them, `read._table_dict` exposes
+  `row_object_ids`. No mutate change — `_find_content_object` already finds a Row by id.
+- **Whole COLUMN** — NEW `columns: list[int]` param (0-indexed). When given, BOTH the text restyle
+  and `cell_shading` are restricted to the j-th `one:Cell` of every `one:Row` in scope (scope
+  should be a table objectID; page scope hits that column of every table). One param covers text +
+  shading; negative index → ValueError; baseline QuickStyleDef rewrite is suppressed when columns
+  is set (it's inherently a sub-scope op).
+- **Single cell / whole table / whole page** already worked (cell/table objectID / no scope).
+- §4: `apply_text_style` description + `_SERVER_INSTRUCTIONS` "Restyling text in bulk" now spell out
+  ROW=row_object_ids-as-scope vs COLUMN=columns-param (both text AND shading), plus highlight vs
+  cell_shading ("clear BOTH if unsure"). Version 1.1.3→1.1.4 (4 spots).
+- Tier-1 (317): `test_page_edit_content.py` (highlight-only clear regression; cell_shading
+  set/clear/text-untouched; columns restricts text+shading to one column; row-scope restyles only
+  that row; columns rejects negative; cell_shading rejects unknown color name), `test_service_read.py`
+  (+row_object_ids exposed), `test_smoke_server.py` (+row/column borders & instruction asserts).
+  Tier-2 `test_windows_write.py` (highlight set→fully-cleared; cell_shading set→clear;
+  columns-restricts-to-one-column; row-scope-restyles-only-that-row). The FIRST Tier-2 run (60
+  passed, 3 FAILED) CAUGHT the shadingColor-name bug; after the name→hex fix the SECOND run is
+  **VM-VALIDATED (63 passed, 7 skipped, exit 0, 6:53)**. **Installer rebuilt + pulled:
+  OneNoteMCP-Setup_1.1.4.exe (sha256 a6ce64da29ac068ba6487f4889f53334ea99beaec1060255a4e5622103152f75,
+  ~24.6MB). Chris approved PUSH this round — 1.1.3 (62f42df) + 1.1.4 go up together.**
+
 **v1.1.3 — author credit + simplified post-install page (metadata/text only; no code/Tier-2
 change).** Author **Chris Lin** marked in four places: pyproject `authors`, README (`**Author:**`
 under the title), the installer (.iss `AppAuthor` define + `AppCopyright=Author: Chris Lin` → shows

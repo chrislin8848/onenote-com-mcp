@@ -132,6 +132,10 @@ def test_apply_text_style_borders_update_page_content(tools):
     desc = tools["apply_text_style"].description
     assert "update_page_content" in desc
     assert "font" in desc.lower()
+    # 1.1.4: table row/column granularity — a whole ROW is a scope objectID; a whole COLUMN is the
+    # 0-indexed columns param (a column has no objectID), and both cover text AND cell_shading
+    assert "row_object_ids" in desc
+    assert "columns" in desc
 
 
 def test_server_instructions_present():
@@ -152,6 +156,9 @@ def test_server_instructions_present():
     # 1.1.0: the bulk restyle tool is surfaced, and the App Ctrl+A shortcut is deliberately NOT
     # mentioned (users already know it — Chris 2026-06-14)
     assert "apply_text_style" in mcp.instructions
+    # 1.1.4: the instructions tell how to target a whole table ROW vs a whole COLUMN
+    assert "row_object_ids" in mcp.instructions
+    assert "columns=" in mcp.instructions
     assert "ctrl+a" not in mcp.instructions.lower()
     # 1.1.1: enumerate pages/subpages with list_pages, not search_pages (full-text, silently misses)
     assert "list_pages" in mcp.instructions

@@ -121,6 +121,9 @@ def _table_dict(table: Table) -> dict[str, Any]:
         "borders_visible": table.borders_visible,
         "has_header_row": table.has_header_row,
         "columns": table.columns,
+        # parallel to ``rows`` by index — pass one as apply_text_style scope_object_id to restyle a
+        # whole row (a column has no objectID; use apply_text_style's ``columns`` index instead).
+        "row_object_ids": table.row_object_ids,
         "rows": [
             [
                 {

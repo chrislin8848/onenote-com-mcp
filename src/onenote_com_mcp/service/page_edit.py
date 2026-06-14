@@ -21,7 +21,7 @@ construct, and an Image submitted without Data risks losing its pixels.
 from __future__ import annotations
 
 import datetime as _dt
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, Literal
 
 from lxml import etree
@@ -771,6 +771,72 @@ def _apply_text_decoration(
     span["text-decoration"] = " ".join(sorted(tokens)) if tokens else "none"
 
 
+# OneNote's one:Cell ``shadingColor`` is a raw attribute that needs a #RRGGBB hex — a CSS color NAME
+# ("yellow") is rejected with hrInvalidXML (VM ground truth 2026-06-14, same as QuickStyleDef
+# highlightColor). The text ``highlight`` path is unaffected: it writes a CSS span background, which
+# OneNote's style parser DOES accept by name. So only cell_shading is name→hex normalized.
+_CSS_COLOR_HEX = {
+    "black": "#000000",
+    "white": "#FFFFFF",
+    "red": "#FF0000",
+    "lime": "#00FF00",
+    "green": "#008000",
+    "blue": "#0000FF",
+    "yellow": "#FFFF00",
+    "cyan": "#00FFFF",
+    "aqua": "#00FFFF",
+    "magenta": "#FF00FF",
+    "fuchsia": "#FF00FF",
+    "silver": "#C0C0C0",
+    "gray": "#808080",
+    "grey": "#808080",
+    "maroon": "#800000",
+    "olive": "#808000",
+    "teal": "#008080",
+    "navy": "#000080",
+    "purple": "#800080",
+    "orange": "#FFA500",
+    "pink": "#FFC0CB",
+    "gold": "#FFD700",
+    "brown": "#A52A2A",
+    "beige": "#F5F5DC",
+    "ivory": "#FFFFF0",
+    "lavender": "#E6E6FA",
+    "coral": "#FF7F50",
+    "salmon": "#FA8072",
+    "khaki": "#F0E68C",
+    "violet": "#EE82EE",
+    "indigo": "#4B0082",
+    "turquoise": "#40E0D0",
+    "tan": "#D2B48C",
+    "crimson": "#DC143C",
+    "lightgray": "#D3D3D3",
+    "lightgrey": "#D3D3D3",
+    "darkgray": "#A9A9A9",
+    "darkgrey": "#A9A9A9",
+    "lightblue": "#ADD8E6",
+    "lightgreen": "#90EE90",
+    "lightyellow": "#FFFFE0",
+}
+
+
+def _shading_hex(value: str) -> str:
+    """Normalize a cell_shading color to the #RRGGBB hex OneNote's shadingColor attribute requires.
+    A #hex passes through (upper-cased); a common CSS color name maps to its hex; anything else
+    raises a clear error rather than letting OneNote fail the whole write with a cryptic error.
+    """
+    v = value.strip()
+    if v.startswith("#") and len(v) in (4, 7):
+        return v.upper()
+    mapped = _CSS_COLOR_HEX.get(v.lower())
+    if mapped:
+        return mapped
+    raise ValueError(
+        f"cell_shading {value!r} must be a #RRGGBB hex color or a common color name — OneNote "
+        "rejects other CSS color names for table-cell shading"
+    )
+
+
 def apply_text_style(
     backend: OneNoteBackend,
     page_id: str,
@@ -783,26 +849,37 @@ def apply_text_style(
     italic: bool | None = None,
     underline: bool | None = None,
     strikethrough: bool | None = None,
+    cell_shading: str | None = None,
+    columns: list[int] | None = None,
     scope_object_id: str = "",
     force: bool = False,
 ) -> dict[str, Any]:
-    """Patch font / size / color / highlight / bold / italic / underline / strikethrough across
-    EVERY text run in scope, in ONE read-mutate-write.
+    """Patch text styling (font / size / color / highlight / bold / italic / underline /
+    strikethrough) and/or table-cell background (cell_shading) across scope, in ONE
+    read-mutate-write.
 
     Scope defaults to the whole page (all outlines + tables; the page title is left alone); pass an
-    outline / table / paragraph (one:OE) objectID to restyle only that subtree. Only the attributes
-    you ask for are merged into each run's span — and the span wins the QuickStyleDef ← OE-style ←
-    span cascade — so the things you did NOT change (other emphasis, the colors/sizes you left
-    alone, hyperlinks, images, tables) all survive; paragraphs outside the scope are pruned from the
-    payload and ride byte-identical. ``color`` and ``highlight`` are colors (a name like "yellow"
-    or hex "#FFFF00"); highlight writes OneNote's dual background+mso-highlight, and
-    ``highlight="none"`` removes it. bold/italic/underline/strikethrough are tri-state: True=on,
-    False=off, None=leave. Whole-page scope ALSO rewrites the page's QuickStyleDef baseline (font/
-    fontSize/fontColor/bold/italic; highlight is span-only) so the change is self-consistent for
-    empty paragraphs and future typing; a SUB-scope must not touch the page-global QuickStyleDef.
+    outline / table / paragraph (one:OE) / table-cell / table-ROW objectID to restyle only that
+    subtree. A whole ROW is just its one:Row objectID as scope (get_page exposes
+    ``row_object_ids``); a whole COLUMN has no objectID (columns are positional), so pass
+    ``columns`` — a list of 0-indexed column numbers — and BOTH the text restyle and cell_shading
+    are restricted to the j-th cell of every one:Row in scope (scope should be a table objectID;
+    with the page scope it hits that column of every table). Only the attributes you ask for are
+    merged into each run's span — and the span wins the QuickStyleDef ← OE-style ← span cascade —
+    so the things you did NOT change (other emphasis, the colors/sizes you left alone, hyperlinks,
+    images, tables) all survive; paragraphs outside the scope are pruned and ride byte-identical.
+    ``color`` and ``highlight`` are colors (a name like "yellow"
+    or hex "#FFFF00"); highlight is the TEXT screen-marker (dual background+mso-highlight),
+    ``highlight="none"`` removes it. ``cell_shading`` is the TABLE-CELL background (a whole cell,
+    not the text) — a color sets it, "none" clears it; distinct from highlight. To make a yellow
+    background go away when unsure which it is, pass both highlight="none" and cell_shading="none".
+    bold/italic/underline/strikethrough are tri-state: True=on, False=off, None=leave. Whole-page
+    scope ALSO rewrites the page's QuickStyleDef baseline (font/fontSize/fontColor/bold/italic;
+    highlight + cell shading are not baseline) so the change is self-consistent; a SUB-scope must
+    not touch the page-global QuickStyleDef.
 
-    Returns ``{scope, runs_changed, text_blocks_changed, quick_styles_updated}`` — narrate the
-    effect ("made the whole page bold + italic"), not these numbers/objectIDs.
+    Returns ``{scope, runs_changed, text_blocks_changed, cells_changed, quick_styles_updated}`` —
+    narrate the effect, not these numbers/objectIDs.
     """
     overlay: dict[str, str] = {}
     if font_family:
@@ -821,38 +898,82 @@ def apply_text_style(
     if highlight and not highlight_clear:
         overlay["background"] = highlight
     decorate = underline is not None or strikethrough is not None
-    if not overlay and not decorate and not highlight_clear:
+    text_change = bool(overlay) or decorate or highlight_clear
+    cell_clear = bool(cell_shading) and cell_shading.strip().lower() == "none"
+    cell_change = bool(cell_shading)
+    baseline_change = bool(overlay) and (
+        font_family or size is not None or color or bold is not None or italic is not None
+    )
+    if not text_change and not cell_change:
         raise ValueError(
             "apply_text_style needs at least one of font_family, size, color, highlight, bold, "
-            "italic, underline, strikethrough"
+            "italic, underline, strikethrough, cell_shading"
         )
+    if columns and any(c < 0 for c in columns):
+        raise ValueError("apply_text_style columns must be 0-indexed, non-negative integers")
+    # OneNote's shadingColor needs hex (a color name is rejected); normalize up front so an unknown
+    # name fails fast with a clear error, before the COM read.
+    cell_fill = _shading_hex(cell_shading) if (cell_change and not cell_clear) else None
 
     summary: dict[str, Any] = {
         "runs_changed": 0,
         "text_blocks_changed": 0,
+        "cells_changed": 0,
         "quick_styles_updated": 0,
     }
 
     def mutate(tree: etree._Element) -> None:
         scope = _find_content_object(tree, scope_object_id) if scope_object_id else tree
         whole_page = scope is tree
-        for t in scope.iter(qn("T")):
-            if whole_page and _under_title(t):
-                continue
-            runs = parse_spans(t.text)
-            if not runs:
-                continue
-            for run in runs:
-                run.span_style = {**run.span_style, **overlay}
-                if decorate:
-                    _apply_text_decoration(run.span_style, underline, strikethrough)
-                if highlight_clear:
-                    run.span_style.pop("background", None)
-                    run.span_style.pop("mso-highlight", None)
-            t.text = etree.CDATA(build_spans(runs))
-            summary["runs_changed"] += len(runs)
-            summary["text_blocks_changed"] += 1
-        if whole_page:
+        if columns:
+            # column-restricted: the j-th one:Cell of every one:Row in scope (a column has no
+            # objectID, so it can only be addressed positionally). Restricts BOTH text and shading.
+            target_cells: list[etree._Element] = []
+            for row in scope.iter(qn("Row")):
+                cells = row.findall(qn("Cell"))
+                for j in columns:
+                    if 0 <= j < len(cells):
+                        target_cells.append(cells[j])
+            text_nodes: Iterable[etree._Element] = [
+                t for cell in target_cells for t in cell.iter(qn("T"))
+            ]
+            cell_nodes: Iterable[etree._Element] = target_cells
+            skip_title = False
+        else:
+            text_nodes = scope.iter(qn("T"))
+            cell_nodes = scope.iter(qn("Cell"))
+            skip_title = whole_page
+        if text_change:
+            for t in text_nodes:
+                if skip_title and _under_title(t):
+                    continue
+                runs = parse_spans(t.text)
+                if not runs:
+                    continue
+                for run in runs:
+                    run.span_style = {**run.span_style, **overlay}
+                    if decorate:
+                        _apply_text_decoration(run.span_style, underline, strikethrough)
+                    if highlight_clear:
+                        run.span_style.pop("background", None)
+                        run.span_style.pop("mso-highlight", None)
+                    # keep run.style in sync: build_spans falls back to run.style when span_style
+                    # is falsy, which would RESURRECT a just-cleared attribute (a highlight-only run
+                    # whose span_style we emptied) — out of sync = the highlight comes back.
+                    run.style = dict(run.span_style)
+                t.text = etree.CDATA(build_spans(runs))
+                summary["runs_changed"] += len(runs)
+                summary["text_blocks_changed"] += 1
+        if cell_change:
+            # cell shading is a one:Cell attribute (a whole-cell background), NOT a text run — a
+            # color sets it, "none" removes the attribute (the only clean way to clear it).
+            for cell in cell_nodes:
+                if cell_clear:
+                    cell.attrib.pop("shadingColor", None)
+                else:
+                    cell.set("shadingColor", cell_fill)
+                summary["cells_changed"] += 1
+        if whole_page and baseline_change and not columns:
             for qd in tree.findall(qn("QuickStyleDef")):
                 if font_family:
                     qd.set("font", font_family)

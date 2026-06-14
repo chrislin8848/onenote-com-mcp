@@ -119,6 +119,9 @@ class Table:
     has_header_row: bool = False
     columns: list[float] = field(default_factory=list)  # widths, in column order
     rows: list[list[Cell]] = field(default_factory=list)
+    # one:Row objectIDs, parallel to ``rows`` by index (a row has its own objectID; a column does
+    # NOT — columns are positional). Used to scope apply_text_style to a whole row.
+    row_object_ids: list[str | None] = field(default_factory=list)
 
 
 @dataclass
