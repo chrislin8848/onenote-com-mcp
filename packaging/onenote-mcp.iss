@@ -8,13 +8,15 @@
 
 #define AppName "OneNote MCP Server"
 #define AppPublisher "Chris Lin"
-#define AppVersion "1.1.2"
+#define AppAuthor "Chris Lin"
+#define AppVersion "1.1.3"
 #define ExeName "OneNoteMCP.exe"
 
 [Setup]
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
+AppCopyright=Author: {#AppAuthor}
 ; Per-user install — no administrator rights required.
 PrivilegesRequired=lowest
 DefaultDirName={localappdata}\Programs\OneNoteMCP

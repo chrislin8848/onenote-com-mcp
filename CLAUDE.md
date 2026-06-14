@@ -91,6 +91,15 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 
 ## Status (2026-06-14)
 
+**v1.1.3 — author credit + simplified post-install page (metadata/text only; no code/Tier-2
+change).** Author **Chris Lin** marked in four places: pyproject `authors`, README (`**Author:**`
+under the title), the installer (.iss `AppAuthor` define + `AppCopyright=Author: Chris Lin` → shows
+in the setup wizard + Windows "Apps"), and the post-install page footer. The Traditional-Chinese
+post-install page (`packaging/post_install_zh-TW.txt`, UTF-8 BOM, InfoAfterFile) was SIMPLIFIED at
+Chris's request (~24 → ~11 lines: dropped the box-drawing + repeated explanation; kept the
+one-time Claude-Desktop custom-instruction copy block, now tighter, bracketed by a closing divider).
+Version 1.1.2→1.1.3. **Installer rebuilt as OneNoteMCP-Setup_1.1.3.exe.**
+
 **v1.1.2 — apply_text_style gains EMPHASIS + HIGHLIGHT (29-tool catalog unchanged; Tier-1 310 green;
 Tier-2 VM-VALIDATED 59 passed).** Two real-Claude-Desktop findings: "set these 10 pages bold +
 italic" and "highlight pages 1-5" — apply_text_style only had font/size/color, so Claude punted to
