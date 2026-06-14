@@ -125,6 +125,12 @@ def test_server_instructions_present():
     # user to add photos/raster images by hand
     assert "insert_svg_image" in mcp.instructions
     assert "by hand" in mcp.instructions.lower()
+    # 1.0.10: editing is in-place-by-default (don't rebuild a page to change it), confirmation is
+    # proportionate to risk (recycle-bin deletes are reversible), and copy-then-modify is the safe
+    # big-edit pattern.
+    assert "in place" in mcp.instructions.lower()
+    assert "recycle bin" in mcp.instructions.lower()
+    assert "copy-then-modify" in mcp.instructions.lower()
 
 
 def test_selftest_reports_failure_cleanly(monkeypatch, capsys):

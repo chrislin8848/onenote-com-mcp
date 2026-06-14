@@ -91,6 +91,42 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 
 ## Status (2026-06-14)
 
+**v1.0.10 — `_SERVER_INSTRUCTIONS` behavior batch (instruction-only, 28-tool catalog unchanged,
+Tier-1 293 green).** Driven by real-Claude-Desktop testing of 1.0.9 — three nudges folded into the
+server instructions, NO code/tool/Tier-2 logic change (patch bump, NOT a feature; 1.1.0+ is reserved
+for the apply_text_style feature):
+- **(A) Don't read SVG back to verify.** After `insert_svg_image` succeeds, trust the result — do
+  NOT routinely `get_page_images` to "verify" it (that re-introduces the base64-through-the-model
+  cost in the READ direction — the exact slowness 1.0.9 removed on the write side); read back only
+  on a reported rendering problem. Plus: get the SVG layout right in one pass (margins, no
+  overlapping labels).
+- **(B) In-place edit is the DEFAULT for modifying a page.** Don't rebuild a page from scratch
+  (new page + re-emit content + recycle the old) just to change it — a new page gets a new ID
+  (breaks links/subpage structure), loses history, and may force re-inserting images you can't
+  recover. Build a NEW page only for a genuinely new/merged page. For large/risky edits the cheap
+  safe pattern is copy-then-modify (copy_page/copy_section, then edit the COPY — original is the
+  backup). Driven by a real trace where Claude waffled "delete outlines in place" → "build new page
+  + recycle old" for a merge task; the pivot was defensible but the gap was the missing explicit
+  "in-place is the default" line.
+- **(C) PROPORTIONATE confirmation = irreversibility × scope, not blanket propose-then-confirm.**
+  Replaced the flat confirm list. **No pre-confirm** (do + report) for reversible/lossless ops:
+  in-place edits, `rename_node`, `reposition_page`, `reorder_sections`, `restructure_section`, and
+  moving a SINGLE page/section to the recycle bin (report "recoverable"). **Confirm first** for
+  irreversible/large-scope: `permanent=True`, `delete_page_content`/`delete_inline_content` (in-page
+  content NOT recoverable), `modify_table` delete_rows/columns, `force` overwrites, deleting a whole
+  section/section-group or several pages at once, notebook-wide restructures, and `move_page` (new
+  ID + experimental → light confirm). **EXCEPTION:** destructive edits to a fresh COPY (just made
+  via copy_* to modify it) need NO confirm — the original is the backup. Key safety fact: the
+  recycle bin saves whole hierarchy nodes (pages/sections), but in-page object deletes are NOT
+  recoverable.
+- **Rejected:** a "decide-then-act, don't narrate internal re-planning" nudge — the final decision
+  in the waffling trace was correct, so it's cosmetic / a Claude Desktop reasoning-summary display
+  matter, not the server's to fight.
+- Edits: `_SERVER_INSTRUCTIONS` in `server.py` (A appended to "Adding pictures"; B+C replaced the
+  old destructive-ops paragraph). Version bumped 1.0.9→1.0.10 (pyproject + __init__ + .iss +
+  uv.lock). `tests/test_smoke_server.py::test_server_instructions_present` +3 asserts (`in place` /
+  `recycle bin` / `copy-then-modify`). **Installer rebuilt as OneNoteMCP-Setup_1.0.10.exe.**
+
 **v1.0.9 — picture insert is now SVG-ONLY: `insert_svg_image` replaces raster `insert_image`
 (28-tool catalog, Tier-1 293 green; freeze-gate VM-validated, full Tier-2 + installer PENDING).**
 Driven by a real-Claude-Desktop pain: inserting an image "hung". Root cause (Chris + Claude

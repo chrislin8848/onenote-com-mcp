@@ -74,14 +74,36 @@ image. There is no raster-image or file insert: a PHOTO or an existing PNG/JPG c
 inserted — tell the user to add those BY HAND in the OneNote app (drag-and-drop, or \
 Insert ▸ Picture/File). Never try to insert a picture by emitting base64 or by smuggling a raster \
 <image data:…> inside the SVG (it is rejected and slow). For CJK text in the SVG, use an explicit \
-Windows font-family such as "Microsoft JhengHei", not the generic "sans-serif". Copying a page or \
+Windows font-family such as "Microsoft JhengHei", not the generic "sans-serif". After \
+insert_svg_image succeeds, trust the result — do NOT routinely read the image back with \
+get_page_images to "verify" it (pulling the whole rasterized PNG back as base64 is slow); read it \
+back only if the user reports a rendering problem. Get the SVG layout right in one pass: leave \
+margins and keep labels from overlapping nodes or markers. Copying a page or \
 section still carries its existing images and attachments along — fully supported.
 
-Destructive and structural operations (delete_node, delete_page_content, delete_inline_content, \
-modify_table's delete_rows/delete_columns, force overwrites, restructure_section, \
-reorder_sections, reposition_page, move_page, rename_node) are propose-then-confirm: tell the \
-user exactly what will change and get their go-ahead before calling. For risky restructures, \
-suggest a clone backup with copy_section first.
+Editing a page = edit it IN PLACE (update_page_content, modify_table, delete_inline_content, \
+insert_svg_image); this is the normal, expected, safe-enough path for ordinary changes. Do NOT \
+rebuild a page from scratch (create a new page, re-emit the content, recycle the old) just to \
+change it: a new page gets a NEW ID — breaking links and subpage structure — loses the page's \
+history, and may force you to re-insert images you cannot recover. Build a NEW page only when the \
+user genuinely wants a new or merged page (e.g. integrating two pages into one). For large or \
+risky edits the cheap, safe pattern is copy-then-modify: copy_page/copy_section the page, then \
+edit the COPY freely — the original is your backup.
+
+Match how much you confirm to the RISK; do NOT gate everything. Just DO it and report afterwards \
+(no pre-confirm) for reversible or lossless operations: editing in place (update_page_content, \
+modify_table insert_rows/add_columns/set_rows), rename_node, reposition_page, reorder_sections, \
+restructure_section (these only rename, reorder, or re-level — no data is lost), and moving a \
+SINGLE page or section to the recycle bin (do it, then report that it is recoverable). Propose and \
+get explicit go-ahead FIRST for irreversible or large-scope operations: permanent deletes \
+(permanent=True), removing in-page content (delete_page_content, delete_inline_content — the old \
+content is NOT recoverable), modify_table's delete_rows/delete_columns, force overwrites, deleting \
+a whole section/section-group or several pages at once, notebook-wide restructures (suggest a \
+copy_section clone backup for these), and move_page (it gives the page a new ID and is \
+experimental). EXCEPTION: when you have just made a faithful copy \
+(copy_page/copy_pages/copy_page_subtree/copy_section) specifically in order to modify it, \
+destructive edits to THAT copy need NO confirmation — the original is the backup and editing the \
+copy is the whole point; confirm destructive ops only on original/source content.
 
 Positioning a page: copy_page and create_page already place the new page right BELOW its natural \
 anchor by default — copy_page below the SOURCE page, create_page below the page the user is \
