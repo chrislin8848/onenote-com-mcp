@@ -91,6 +91,21 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 
 ## Status (2026-06-14)
 
+**v1.1.1 — search_pages vs list_pages §4 fix (instruction-only, 29-tool catalog unchanged, Tier-1
+304 green).** Driven by a real-Claude-Desktop bug: asked to restyle ●ITIN AND all its subpages,
+Claude used **search_pages** (full-text FindPages) and found only ●ITIN + 2 subpages (the ones whose
+content matched the query), silently missing 官網行程 / D1-0107…D6-0112 — then restyled just 3 of
+~10 pages. Root cause = tool-choice, not COM: search_pages returns only pages that MATCH the query;
+list_pages is the complete ordered page list with pageLevel. Fix (instruction text only, no
+code/logic/COM change):
+- `search_pages` description: now says it returns ONLY matching pages and silently MISSES
+  non-matches — NOT a way to enumerate a section's pages or a page's subpages; use list_pages.
+- `list_pages` description: the COMPLETE page list; a page's SUBPAGES are the consecutive following
+  pages at a DEEPER pageLevel — use it (not search_pages) to act on "a page and all its subpages".
+- `_SERVER_INSTRUCTIONS` gained a "Finding a section's pages and a page's subpages" paragraph.
+- test_smoke_server: search_pages↔list_pages border + instructions asserts. Version 1.1.0→1.1.1.
+  **Installer rebuilt as OneNoteMCP-Setup_1.1.1.exe.** (Instruction-only → no Tier-2 logic change.)
+
 **v1.1.0 — `apply_text_style` (NEW tool #29) + `insert_svg_image` positioning. Tier-1 304 green;
 Tier-2 VM-VALIDATED (57 passed, the 4 new write round-trips PASS live).** Two tool-surface features
 (no new COM, both inside the existing apply_page_edit seam):

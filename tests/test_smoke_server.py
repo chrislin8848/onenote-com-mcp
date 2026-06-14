@@ -110,6 +110,10 @@ def test_contrastive_borders_present(tools):
     assert "copy_pages" in tools["copy_page_subtree"].description
     assert "after_page_id" in tools["copy_pages"].inputSchema["properties"]
     assert "after_page_id" in tools["copy_page_subtree"].inputSchema["properties"]
+    # enumerate-vs-search border: search_pages (full-text, misses non-matches) points at list_pages
+    # for listing a section's pages / a page's subpages, and list_pages names subpages
+    assert "list_pages" in tools["search_pages"].description
+    assert "subpage" in tools["list_pages"].description.lower()
 
 
 def test_update_mode_is_a_per_value_enum(tools):
@@ -149,6 +153,9 @@ def test_server_instructions_present():
     # mentioned (users already know it — Chris 2026-06-14)
     assert "apply_text_style" in mcp.instructions
     assert "ctrl+a" not in mcp.instructions.lower()
+    # 1.1.1: enumerate pages/subpages with list_pages, not search_pages (full-text, silently misses)
+    assert "list_pages" in mcp.instructions
+    assert "search_pages" in mcp.instructions
 
 
 def test_selftest_reports_failure_cleanly(monkeypatch, capsys):

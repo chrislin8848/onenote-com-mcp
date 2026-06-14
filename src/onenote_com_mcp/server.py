@@ -68,6 +68,15 @@ objectIDs, or other internal mechanics are noise to them. Say what you are doing
 ("updating the dates on D1–D6", "removing the printout images from these two pages") and report \
 the outcome by name; keep the plumbing inside the tool calls, not in your prose.
 
+Finding a section's pages and a page's subpages: list_pages returns ALL pages in a section, in \
+order, with each page's level — use it to ENUMERATE. search_pages is FULL-TEXT search: it returns \
+only pages whose title/content matches the query, so it MUST NOT be used to list a section's pages \
+or to gather a page's subpages — it silently misses every page that doesn't match. A page's \
+subpages are the consecutive pages that follow it at a DEEPER level (up to the next same-or- \
+shallower page). To act on "this page and all its subpages" (e.g. restyle every subpage, copy a \
+subtree), call list_pages, take that page plus the deeper-level run beneath it, and operate on \
+EACH — never lean on search_pages to discover them.
+
 Adding pictures: the ONLY supported way to add a picture is insert_svg_image — you generate SVG \
 markup (a vector graphic: diagram, map, chart, simple banner) and the server renders it to an \
 image. There is no raster-image or file insert: a PHOTO or an existing PNG/JPG cannot be \
@@ -174,13 +183,20 @@ def list_sections(notebook_id: str) -> str:
 
 @logged_tool()
 def list_pages(section_id: str) -> str:
-    """List pages in a section, including each page's subpage level (pageLevel)."""
+    """List ALL pages in a section, in order, each with its subpage level (pageLevel). This is the
+    COMPLETE page list — use it (NOT search_pages) to enumerate a section's pages or to find a
+    page's SUBPAGES: a page's subpages are the consecutive pages that follow it at a DEEPER
+    pageLevel, up to the next page at the same or a shallower level. To act on a page together with
+    all its subpages (restyle, copy, …), take that run of pages from here and operate on each."""
     return _json(read.list_pages(get_backend(), section_id))
 
 
 @logged_tool()
 def search_pages(query: str, scope_id: str = "") -> str:
-    """Full-text search for pages. Scope to a notebook/section ID (recommended)."""
+    """Full-text search: returns ONLY pages whose title/content MATCHES query (scope to a
+    notebook/section ID — recommended). It is NOT a way to enumerate a section's pages or to gather
+    a page's subpages — it SILENTLY MISSES every page that does not match the query. To list a
+    section's pages, or to find a page and all its subpages, use list_pages instead."""
     return _json(read.search_pages(get_backend(), query, scope_id))
 
 
