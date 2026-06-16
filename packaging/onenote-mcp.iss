@@ -1,15 +1,16 @@
-; Inno Setup script — OneNoteMCP-Setup.exe (SPEC §8).
+﻿; Inno Setup script — OneNoteMCP-Setup.exe (SPEC §8).
 ; Compiled on the VM with the Inno Setup compiler:  iscc packaging\onenote-mcp.iss
 ; (iscc.exe is NOT pip-installable — install Inno Setup 6 on the build VM first; see README.md.)
 ;
 ; Per-user install (no admin): each employee runs this like a normal app (SPEC §1.3 — no MDM/
-; GPO push). After copying files it runs `OneNoteMCP.exe --configure`, which detects BOTH the
-; regular and Microsoft Store Claude Desktop config locations and registers the server (§8).
+; GPO push). After copying files it runs `OneNoteMCP.exe --configure`, which independently detects
+; every supported MCP client — Claude Desktop (regular + Microsoft Store) and Antigravity
+; (CLI/IDE, one shared `.gemini` config) — and registers the server into each one installed (§8).
 
 #define AppName "OneNote MCP Server"
 #define AppPublisher "Chris Lin"
 #define AppAuthor "Chris Lin"
-#define AppVersion "1.2.0"
+#define AppVersion "1.2.2"
 #define ExeName "OneNoteMCP.exe"
 
 [Setup]
@@ -43,11 +44,19 @@ Source: "{#SourcePath}..\dist\OneNoteMCP\*"; DestDir: "{app}"; Flags: ignorevers
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#ExeName}"
+; "Re-detect and configure" shortcut (SPEC §8): a user who installs a client (Claude Desktop or
+; Antigravity) AFTER this installer just clicks it to register the server with the new client —
+; no reinstall. Launched via cmd /k so the result stays visible (the exe prints + exits at once).
+Name: "{group}\OneNoteMCP — 重新偵測並設定"; Filename: "{cmd}"; \
+    Parameters: "/k ""{app}\{#ExeName}"" --configure"; IconFilename: "{app}\{#ExeName}"
 
 [Run]
-; Register the server in Claude Desktop's config (both regular + Store) right after install.
+; Register the server with every detected MCP client (Claude Desktop regular + Store, Antigravity)
+; right after install. Writes nothing if none is installed (the install still completes; the user
+; re-runs the shortcut above once a client is present).
 Filename: "{app}\{#ExeName}"; Parameters: "--configure"; \
-    StatusMsg: "Registering with Claude Desktop..."; Flags: runhidden waituntilterminated
+    StatusMsg: "Registering with Claude Desktop / Antigravity..."; \
+    Flags: runhidden waituntilterminated
 
 [UninstallRun]
 ; Best-effort: leave Claude config alone on uninstall (the entry points at a now-removed exe;

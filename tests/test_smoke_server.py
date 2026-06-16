@@ -188,6 +188,10 @@ def test_server_instructions_present():
     assert "reorder_columns" in mcp.instructions
     assert "set_column" in mcp.instructions
     assert "get_table" in mcp.instructions
+    # pacing: heavy copy/write calls go in small batches (the server also serializes them via a
+    # process-wide lock), because OneNote's COM is single-threaded
+    assert "single-threaded" in mcp.instructions.lower()
+    assert "batch" in mcp.instructions.lower()
 
 
 def test_selftest_reports_failure_cleanly(monkeypatch, capsys):

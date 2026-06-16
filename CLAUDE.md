@@ -89,7 +89,103 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 - **Tier 2 (VM, checkpoint):** `@pytest.mark.windows`, real COM round-trips. Auto-skipped off
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
-## Status (2026-06-14)
+## Status (2026-06-16)
+
+**v1.2.2 — installer now configures Antigravity as a SECOND MCP client alongside Claude Desktop
+(SPEC §8, re-uploaded as v0616; 30-tool catalog unchanged; Tier-1 +host configure tests green;
+Tier-2 N/A — `--configure` is pure path/JSON logic; VM step = the live installer build + a real
+multi-client detection eyeball). Driven by the v0616 §8 rewrite: the supported consumer clients are
+now Claude Desktop AND Antigravity (CLI/IDE), so `--configure` must register the server into every
+detected client, not just Claude.**
+- **`configure.py` is now multi-client (was Claude-only).** `configure_claude_desktop` →
+  `configure_mcp_clients` (clean rename, pre-push, only call site was `server.py`). New seams:
+  `antigravity_config_paths` (single `%USERPROFILE%\.gemini\config\mcp_config.json` — one file
+  covers BOTH the CLI and the IDE; same `mcpServers` schema as Claude) + `antigravity_installed`
+  (BEST-EFFORT detection, exact point VM-pending per §8: `%LOCALAPPDATA%\Programs\Antigravity`
+  dir, `agy`/`antigravity` on PATH, or a `~/.gemini` dir) + `mcp_client_targets` (aggregates every
+  detected client). Each variant is detected INDEPENDENTLY and ALL installed ones get written
+  (Claude regular + Store + Antigravity = three files) — it is NOT pick-one+fallback.
+- **Detection is now by INSTALL presence, not the config file (§8).** Claude-regular is gated on
+  the install — `%LOCALAPPDATA%\Programs\Claude` dir OR an HKCU Uninstall key — instead of the old
+  "APPDATA is set ⇒ write the regular path" best-guess. **The blind best-guess fallback is GONE:**
+  when NO supported client is detected, `configure_mcp_clients` writes NOTHING (a guessed config
+  path = the server is installed but invisible to a client that isn't there) and returns `[]`;
+  `server.py --configure` prints a clear "未偵測到 Claude Desktop 或 Antigravity, 安裝後重跑" message
+  and exits 0 (no longer exit 1) — **the install itself still completes**. The user picks up a
+  later-installed client by re-running `--configure`.
+- **Installer (`onenote-mcp.iss`):** NEW Start Menu shortcut **"OneNoteMCP — 重新偵測並設定"**
+  (launches `OneNoteMCP.exe --configure` via `cmd /k` so the result stays visible) — the §8
+  "re-detect and configure after installing a new client later" entry point. Post-install `[Run]`
+  StatusMsg + header comment now name both clients. **Deliberately MANUAL re-run (no login auto-task,
+  no blind write to a not-yet-installed client's guessed path)** — §8's zero-guess/zero-resident
+  trade. Antigravity env-var day-one bug (global-MCP `env` unreliable) is a no-op for us: we write
+  no `env` (logging OFF by default; if ever needed, prefer `ONENOTE_MCP_LOG_FILE` default path).
+- Version 1.2.1→1.2.2 (pyproject + __init__ + .iss + uv.lock). `docs/SPEC.md` REPLACED with the
+  v0616 content (the dated `OneNote MCP SPEC_0616.md` upload was folded in + removed — one canonical
+  spec). Tier-1: `tests/test_configure.py` rewritten for the multi-client model (Claude regular
+  install-gated; Store glob; Antigravity via program-dir / `.gemini`; `mcp_client_targets`
+  aggregation; **no-client ⇒ writes nothing**; merge preserves other connectors; idempotent; no log
+  level). **BUILT + VM-VALIDATED 2026-06-16, NOT pushed (stacks on the unpushed 1.2.1 batch —
+  Chris's push call):** freeze + COM `--selftest` GREEN ("connected to OneNote, 3 notebook(s),
+  bound via: vendored", exit 0 — regression clean, no COM-path change this round); installer built +
+  pulled: **OneNoteMCP-Setup_1.2.2.exe (sha256
+  5ecec40d05d3f71554273a4e29dca04591172f630a6056ca5a157ca09f80ad8c, 24,662,122 B ~24.66MB)**;
+  `--configure` no-client path exercised live on the (client-less) VM → prints the message + EXIT=0.
+  **BUILD GROUND TRUTH:** Inno Setup 6 reads the `.iss` in the system ANSI codepage (cp950 on the
+  zh-TW VM) UNLESS the file has a **UTF-8 BOM** — the new CJK Start Menu shortcut name
+  ("OneNoteMCP — 重新偵測並設定") REQUIRED prepending a BOM to `packaging/onenote-mcp.iss` or it
+  would compile to mojibake. (The same console-codepage effect makes the runtime `--configure`
+  print look garbled over SSH, but that is display-only — the stored shortcut string is Unicode.)
+  **Antigravity detection path CONFIRMED on Chris's real machine 2026-06-16:** it installs to
+  ``%LOCALAPPDATA%\Programs\antigravity`` (LOWERCASE) and ships no ``agy`` CLI on PATH. Code +
+  Tier-1 tightened to lead with the confirmed lowercase dir (was "best-effort/VM-pending"). **NO
+  rebuild needed** — the already-built 1.2.2 exe's ``Programs\Antigravity`` check already matches
+  the lowercase folder (Windows FS is case-insensitive), so the comment/ordering change is
+  behaviorally identical; the shipped sha 5ecec40d… stands. REMAINING: Chris's real multi-client
+  acceptance (install 1.2.2 → Claude Desktop + Antigravity both register `onenote`, shortcut name
+  renders, Antigravity loads `~/.gemini/config/mcp_config.json`) + push.**
+
+**v1.2.1 — COM single-thread serialization lock + heavy-call pacing instruction (30-tool catalog
+unchanged; Tier-1 332 green; Tier-2 VM-VALIDATED 65 passed / 7 skip / 0 fail, 6:37). Driven by a
+real colleague-in-production failure relayed by Chris: copy_page "持續超時" even though the source
+section was FULLY SYNCED. Root cause (NOT the OneDrive under-sync class): OneNote's COM is
+single-threaded (STA) and FastMCP runs our sync tools in a worker-thread pool, so a burst of tool
+calls in one assistant turn (the model "每次複製幾頁") really arrives in PARALLEL — and STA does not
+queue concurrent callers, it REJECTS the losers with RPC_E_SERVERCALL_RETRYLATER, which then bounce
+off `_call`'s FINITE ~16s busy-retry budget and FAIL even for small pages. So the fix is to make the
+losers WAIT instead of retry-and-die:**
+- **A — process-wide serialization lock (server.py).** New `_COM_LOCK = threading.Lock()` +
+  `_serialize_com` wrapper, composed INTO `logged_tool` as the INNERMOST layer (logging stays
+  OUTSIDE the lock so a call is logged the moment it arrives, before it queues). Every tool now runs
+  one-at-a-time at the COM boundary: contenders wait in an orderly Python queue (no retry budget
+  burned) and each runs against a free server. Uncontended (the normal case) it is ~free. Safe — tools
+  call the service layer, never another `@logged_tool` function, so no re-entrant self-deadlock.
+  Answers Chris's sharp question ("COM already serializes via STA — does A help?"): YES, because STA
+  serializes by REJECTION+our-finite-retry, and the lock replaces that with an unbounded efficient
+  wait, killing the retry-exhaustion failure mode. A does NOT speed heavy copies and does NOT help when
+  the SERIALIZED total exceeds the client ~60s timeout (that is the deferred option B = batched/
+  resumable copy); the queued-call-vs-client-timeout idempotency wrinkle also remains.
+- **Pacing instruction (放寬版, `_SERVER_INSTRUCTIONS` "Pace heavy calls" para).** Send copy_* and
+  other heavy writes in SMALL BATCHES — a few at a time (e.g. 3-5, deliberately NOT hardcoded, soft
+  reference per Chris) — and wait for each batch before sending more; bursting is not faster (the
+  server serializes) and only risks timeouts; light reads may be issued freely. This is the relaxed
+  replacement for "one at a time" (too strict once the lock guarantees serialization).
+- Tier-1 (332, +3): new `tests/test_server_serialization.py` (max-concurrency==1 across 8 threads;
+  signature/result preserved through `_serialize_com`; lock released on exception) + `test_smoke_
+  server.py` instruction asserts (`single-threaded` / `batch`). NOTE: the lock lives on the MCP tool
+  wrappers but Tier-2 tests call the service/backend layer directly, so Tier-2 this round is a
+  REGRESSION check (nothing broke) + a validated baseline, NOT a direct test of the lock — the live
+  "burst no longer fails" effect is a real-Claude-Desktop concurrency check. Pre-existing
+  `tests/test_windows_concurrency.py` is a DIFFERENT axis (UpdateHierarchy optimistic-concurrency /
+  last-write-wins), unrelated.
+- **VALIDATED end-to-end (2026-06-15):** Tier-2 65 passed / 7 skip / 0 fail (6:37, exit 0); frozen
+  1.2.1 exe COM `--selftest` OK ("connected to OneNote, 3 notebook(s) visible, bound via: vendored");
+  installer rebuilt + pulled: **OneNoteMCP-Setup_1.2.1.exe (sha256
+  ae8742ccb9922a21bc80704d5a64f8a358791d00e1bb636108b08705e0aee2c5, 24,654,029 B ~24.65MB).** Version
+  1.2.0→1.2.1 (pyproject + __init__ + .iss + uv.lock). **Committed?: NOT yet — NOT pushed (Chris's
+  call).** Remaining: push + real-Claude-Desktop acceptance that bursts no longer time out. Deferred:
+  option B (batched/resumable copy) for the SEPARATE "single huge copy_section > timeout" failure;
+  interim for heavy sections = native OneNote 移動或複製.**
 
 **v1.2.0 — table-editing ergonomics: `get_table` (NEW tool #30) + modify_table gains
 `reorder_columns`/`reorder_rows`/`set_column` + `insert_columns` `values`. NAMING: `add_columns`
@@ -824,9 +920,10 @@ packaging (PyInstaller → Inno/NSIS `OneNoteMCP-Setup.exe`). Two new SPEC v0612
   verb/plural mismatch IF the API isn't externally frozen.
 
 ## Grounding
-- `docs/SPEC.md` — the spec itself (v0612-2: + attachments/embedded objects §5 → Phase 5b;
+- `docs/SPEC.md` — the spec itself (v0616: + attachments/embedded objects §5 → Phase 5b;
   create_notebook/copy_notebook removed; tool-description enhancement §4 + diagnostic log §7
-  → Phase 6).
+  → Phase 6; **§8 installer now configures Antigravity as a second MCP client alongside Claude
+  Desktop** — see the v1.2.2 status block).
 - `docs/com-api-reference.md` — COM signatures + enums (from Microsoft Learn).
 - `docs/onenote-xml-schema.md` — `one:` page/hierarchy XML + format-preservation rules.
 - `docs/vm-setup.md` — Phase 0b Windows VM build (autologon, desktop OneNote, COM smoke, Tier-2).

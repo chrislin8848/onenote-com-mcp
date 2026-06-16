@@ -1,4 +1,6 @@
-﻿OneNote MCP Server 已安裝完成，並已在 Claude Desktop 註冊。
+﻿OneNote MCP Server 已安裝完成，並已在偵測到的用戶端（Claude Desktop /
+Antigravity）註冊。請重新啟動對應的用戶端以載入設定。日後才安裝新用戶端，
+從開始功能表點「OneNoteMCP — 重新偵測並設定」即可補上。
 
 建議（只需一次，雲端同步）：到 Claude Desktop → Settings → General →
 「Instructions for Claude」貼上下面這段，讓 Claude 操作 OneNote 時更精簡。

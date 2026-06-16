@@ -1,30 +1,49 @@
-"""``--configure``: register this server in Claude Desktop's config (SPEC §8).
+"""``--configure``: register this server in every detected MCP client's config (SPEC §8).
 
 The installer (and a user re-running the exe with ``--configure``) calls this to add an
-``onenote`` entry to Claude Desktop's ``claude_desktop_config.json``, pointing at THIS
-executable. It handles BOTH Claude Desktop install flavors independently (SPEC §8):
+``onenote`` entry to each supported client's config file, pointing at THIS executable. The schema
+is identical across clients: a single ``mcpServers`` object whose ``onenote`` key carries a stdio
+``command``/``args`` entry. We support THREE independently-detected client variants (SPEC §8):
 
-- **Regular (per-user install):** ``%APPDATA%\\Claude\\claude_desktop_config.json``
-- **Microsoft Store (MSIX):** ``%LOCALAPPDATA%\\Packages\\<Claude package>\\LocalCache\\Roaming
-  \\Claude\\claude_desktop_config.json`` — the package family name is DETECTED by globbing (its
-  exact value varies), never hardcoded.
+- **Claude Desktop, regular (per-user install):** config at ``%APPDATA%\\Claude\\
+  claude_desktop_config.json``; detected by the install itself — the program dir
+  ``%LOCALAPPDATA%\\Programs\\Claude`` or an Uninstall registry key (NOT by the config file, which
+  doesn't exist before first launch).
+- **Claude Desktop, Microsoft Store (MSIX):** config at ``%LOCALAPPDATA%\\Packages\\<Claude
+  package>\\LocalCache\\Roaming\\Claude\\claude_desktop_config.json`` — the package family name is
+  DETECTED by globbing (its exact value varies), never hardcoded; the package dir IS the install.
+- **Antigravity (CLI + IDE share ONE config):** config at ``%USERPROFILE%\\.gemini\\config\\
+  mcp_config.json`` — writing this single file covers both the CLI and the IDE. Detected by the
+  install — CONFIRMED on a real machine 2026-06-16: the program dir
+  ``%LOCALAPPDATA%\\Programs\\antigravity`` (lowercase; no ``agy`` CLI on PATH), with an
+  ``agy``/``antigravity`` CLI on PATH or a ``~/.gemini`` dir as weaker forward-compat fallbacks.
+
+Detection is per-variant and additive — every variant that is installed gets written (install two
+clients, both get configured); it is NOT "pick one + fallback". When NO supported client is
+detected we write NOTHING (a config file at a guessed path = installed-but-the-tool-is-invisible);
+the caller informs the user and the install still completes. A user who installs a client later
+re-runs ``--configure`` (Start Menu shortcut) to pick it up.
 
 It merges (never clobbers) existing config: other ``mcpServers`` and top-level keys are kept.
 It deliberately does NOT write ``ONENOTE_MCP_LOG_LEVEL`` — diagnostic logging stays OFF by
-default (§7); a user adds that to the entry's ``env`` block when debugging.
+default (§7); a user adds that to the entry's ``env`` block when debugging. (Antigravity has a
+known day-one bug where global-MCP ``env`` passing is unreliable; if logging is ever needed there,
+prefer the ``ONENOTE_MCP_LOG_FILE`` default path over an ``env`` var — VM-pending, SPEC §8.)
 
-Pure path/JSON logic — host-testable by pointing APPDATA/LOCALAPPDATA at temp dirs.
+Pure path/JSON logic — host-testable by pointing APPDATA/LOCALAPPDATA/USERPROFILE at temp dirs.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
 SERVER_NAME = "onenote"
-_CONFIG_FILENAME = "claude_desktop_config.json"
+_CLAUDE_CONFIG_FILENAME = "claude_desktop_config.json"
+_ANTIGRAVITY_CONFIG_FILENAME = "mcp_config.json"
 
 # OneNote 15.0 type library + its Application coclass. Win32ComBackend binds this libid.
 _ONENOTE_LIBID = "{0EA692EE-BB50-4E3C-AEF0-356D91732725}"
@@ -133,18 +152,73 @@ def _looks_like_claude(package_name: str) -> bool:
     return "claude" in low or "anthropicclaude" in low or "anthropic.claude" in low
 
 
-def claude_config_paths(environ: dict[str, str] | None = None) -> list[Path]:
-    """Detected Claude Desktop config-file paths (regular + any Store packages), de-duplicated.
+def _claude_regular_installed_via_registry() -> bool:
+    """True if a per-user Claude Desktop uninstall entry exists in HKCU. Guarded; False off
+    Windows or on any error (the filesystem program-dir check is the primary signal)."""
+    try:
+        import winreg  # noqa: PLC0415 — Windows-only; configure.py must import on Linux too
+    except ImportError:
+        return False
+    try:
+        sub = r"Software\Microsoft\Windows\CurrentVersion\Uninstall"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub) as root:
+            i = 0
+            while True:
+                try:
+                    name = winreg.EnumKey(root, i)
+                except OSError:
+                    break
+                i += 1
+                if "claude" in name.lower():
+                    return True
+                try:
+                    with winreg.OpenKey(root, name) as k:
+                        display, _ = winreg.QueryValueEx(k, "DisplayName")
+                        if "claude" in str(display).lower():
+                            return True
+                except OSError:
+                    continue
+    except OSError:
+        return False
+    return False
 
-    A path is included when its Claude config DIRECTORY can exist for us to write into — the
-    regular ``%APPDATA%\\Claude`` whenever APPDATA is set, and each Store package dir found by
-    glob. ``environ`` overrides ``os.environ`` (for tests)."""
+
+def _claude_regular_config_path(env: dict[str, str]) -> Path | None:
+    """Config path for the regular (non-Store) Claude Desktop IF it is installed, else None.
+
+    Detection looks at the INSTALL — the program dir ``%LOCALAPPDATA%\\Programs\\Claude`` or an
+    Uninstall registry key (SPEC §8: not the config file, which is absent before first launch).
+    A macOS app bundle / support dir is a dev-only convenience."""
+    appdata = env.get("APPDATA")
+    if appdata:
+        # Windows context: decide purely on Windows install signals (never fall through to the
+        # macOS convenience, so a not-installed Windows profile yields None).
+        localappdata = env.get("LOCALAPPDATA")
+        installed = (
+            bool(localappdata and (Path(localappdata) / "Programs" / "Claude").is_dir())
+            or _claude_regular_installed_via_registry()
+        )
+        return Path(appdata) / "Claude" / _CLAUDE_CONFIG_FILENAME if installed else None
+
+    # macOS dev convenience (the production target is Windows; APPDATA is unset off Windows)
+    mac = Path.home() / "Library" / "Application Support" / "Claude" / _CLAUDE_CONFIG_FILENAME
+    if Path("/Applications/Claude.app").exists() or mac.parent.is_dir():
+        return mac
+    return None
+
+
+def claude_config_paths(environ: dict[str, str] | None = None) -> list[Path]:
+    """Detected Claude Desktop config-file paths (regular if installed + each Store package).
+
+    Every path corresponds to an INSTALLED Claude variant: the regular path only when the regular
+    install is detected, and one path per ``*Claude*`` package dir found under
+    ``%LOCALAPPDATA%\\Packages``. ``environ`` overrides ``os.environ`` (for tests)."""
     env = os.environ if environ is None else environ
     paths: list[Path] = []
 
-    appdata = env.get("APPDATA")
-    if appdata:
-        paths.append(Path(appdata) / "Claude" / _CONFIG_FILENAME)
+    regular = _claude_regular_config_path(env)
+    if regular:
+        paths.append(regular)
 
     localappdata = env.get("LOCALAPPDATA")
     if localappdata:
@@ -152,20 +226,57 @@ def claude_config_paths(environ: dict[str, str] | None = None) -> list[Path]:
         if packages.is_dir():
             for pkg in sorted(packages.iterdir()):
                 if pkg.is_dir() and _looks_like_claude(pkg.name):
-                    paths.append(pkg / "LocalCache" / "Roaming" / "Claude" / _CONFIG_FILENAME)
-
-    # macOS dev convenience (the production target is Windows)
-    mac = Path.home() / "Library" / "Application Support" / "Claude" / _CONFIG_FILENAME
-    if mac.parent.parent.is_dir() and mac not in paths:
-        paths.append(mac)
+                    paths.append(
+                        pkg / "LocalCache" / "Roaming" / "Claude" / _CLAUDE_CONFIG_FILENAME
+                    )
 
     # de-dupe, preserve order
     seen: set[Path] = set()
     return [p for p in paths if not (p in seen or seen.add(p))]
 
 
+def _antigravity_home(env: dict[str, str]) -> Path:
+    """The user profile dir that holds Antigravity's ``.gemini`` config tree."""
+    userprofile = env.get("USERPROFILE")
+    return Path(userprofile) if userprofile else Path.home()
+
+
+def antigravity_installed(env: dict[str, str]) -> bool:
+    """Antigravity install detection. CONFIRMED on a real install 2026-06-16: it lands in
+    ``%LOCALAPPDATA%\\Programs\\antigravity`` (lowercase) and ships NO ``agy`` CLI on PATH. We check
+    that program dir (both casings — Windows is case-insensitive, but the suite runs on a
+    case-sensitive host), then fall back to an ``agy``/``antigravity`` CLI on PATH or a
+    ``~/.gemini`` dir (weaker signals, kept for forward-compat)."""
+    localappdata = env.get("LOCALAPPDATA")
+    if localappdata:
+        programs = Path(localappdata) / "Programs"
+        if (programs / "antigravity").is_dir() or (programs / "Antigravity").is_dir():
+            return True
+    if shutil.which("agy") or shutil.which("antigravity"):
+        return True
+    return (_antigravity_home(env) / ".gemini").is_dir()
+
+
+def antigravity_config_paths(environ: dict[str, str] | None = None) -> list[Path]:
+    """The Antigravity config path (single ``.gemini/config/mcp_config.json``) IF Antigravity is
+    detected, else empty. One file covers both the CLI and the IDE (SPEC §8)."""
+    env = os.environ if environ is None else environ
+    if not antigravity_installed(env):
+        return []
+    return [_antigravity_home(env) / ".gemini" / "config" / _ANTIGRAVITY_CONFIG_FILENAME]
+
+
+def mcp_client_targets(environ: dict[str, str] | None = None) -> list[Path]:
+    """Config-file paths for EVERY detected supported MCP client (Claude Desktop variants +
+    Antigravity), de-duplicated. Empty when no supported client is installed."""
+    env = os.environ if environ is None else environ
+    targets = claude_config_paths(env) + antigravity_config_paths(env)
+    seen: set[Path] = set()
+    return [p for p in targets if not (p in seen or seen.add(p))]
+
+
 def server_command() -> dict[str, object]:
-    """The ``command``/``args`` Claude Desktop should launch this server with.
+    """The ``command``/``args`` a client should launch this server with (same for every client).
 
     Frozen (PyInstaller exe): the exe itself, no args. Source/dev: the Python interpreter
     running ``-m onenote_com_mcp``."""
@@ -191,22 +302,16 @@ def _load(path: Path) -> dict:
         return {}
 
 
-def configure_claude_desktop(
+def configure_mcp_clients(
     environ: dict[str, str] | None = None, entry: dict | None = None
 ) -> list[Path]:
-    """Write/merge the ``onenote`` server entry into every detected Claude config. Returns the
-    paths written. If none are detected but APPDATA is set, the regular path is created as the
-    best-guess fallback (the installer runs after Claude is installed)."""
+    """Write/merge the ``onenote`` server entry into EVERY detected client config (Claude Desktop
+    variants + Antigravity). Returns the paths written — possibly EMPTY when no supported client is
+    detected (SPEC §8: write nothing rather than a guessed, invisible config; the caller informs
+    the user and the install still completes)."""
     entry = entry if entry is not None else server_command()
-    targets = claude_config_paths(environ)
-    if not targets:
-        env = os.environ if environ is None else environ
-        appdata = env.get("APPDATA")
-        if appdata:
-            targets = [Path(appdata) / "Claude" / _CONFIG_FILENAME]
-
     written: list[Path] = []
-    for path in targets:
+    for path in mcp_client_targets(environ):
         merged = merge_server_entry(_load(path), entry)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8")

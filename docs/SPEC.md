@@ -129,12 +129,12 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 └─────────────────────────────────────────┘
 ```
 
-執行/消費端:MCP server 必須跑在有 OneNote 的 Windows 上,且通常由 Claude client 在本機以子行程啟動,所以 client + server + OneNote 同機。
+執行/消費端:MCP server 必須跑在有 OneNote 的 Windows 上,且通常由 MCP client(Claude Desktop 或 Antigravity)在本機以子行程啟動,所以 client + server + OneNote 同機。
 
 - **開發測試期** — 跑在 §2 的 Windows VM(需要 autologon + 互動 session 執行器,那是測試環境的需求)。
 - **正式部署** — 跑在**每位員工自己的工作 Windows PC**。該 PC 本就有員工登入的互動桌面,所以正式環境**不需要** autologon / 互動 session 執行器那套;每台只看得到該員工自己帳號、自己同步的 OneNote(天然分用戶,無共用憑證)。由各員工執行一個 installer EXE 完成安裝(見 §8),像裝一般 Windows App;不做集中式自動推送(MDM/GPO)。
 
-若 client 用 Claude Desktop(Microsoft Store 版),設定檔在 `...\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`,以 Developer → Edit Config 確認。Claude Code(Linux host)只是開發工具,不是執行環境。
+若 client 用 Claude Desktop(Microsoft Store 版),設定檔在 `...\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`,以 Developer → Edit Config 確認。本專案支援的消費端 client 為 **Claude Desktop 與 Antigravity(CLI/IDE)**;各自設定檔路徑與一鍵 `--configure` 見 §8。Claude Code(Linux host)只是開發工具,不是執行環境。
 
 ---
 
@@ -312,22 +312,24 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 
 1. **凍結 server 成獨立執行檔(PyInstaller)** — 內含 Python runtime 與 pywin32,目標機不必另裝 Python。凍結相容性限制:必須用晚繫結 `Dispatch("OneNote.Application")`(勿用 `gencache.EnsureDispatch`,凍結後抓不到產生的快取模組);build 成 **console** 程式(它是 stdio server),且**除 MCP 協定外不得有任何輸出寫到 stdout**(log 一律走 stderr 或檔案,否則汙染 JSON-RPC;日誌開關與規格見 §7「診斷日誌」)。
 2. **包成 installer(Inno Setup 或 NSIS)** — 產出 `OneNoteMCP-Setup.exe`,裝進 `%LOCALAPPDATA%`、註冊解除安裝(出現在「新增/移除程式」)。安裝後自動完成設定:
-   - **把 `onenote` 項目合併進該使用者的 Claude Desktop 設定檔**——只加自己的 key、保留其他既有 connector,**不可覆蓋整個檔**。建議由凍結後的 exe 提供 `--configure` 子命令處理 JSON 合併,installer 只負責呼叫它。
-   - ⚠️ **兩種 Claude Desktop 都要支援,無法假設同事裝哪一種:**
+   - **把 `onenote` 項目合併進該使用者「所有偵測到的 MCP client」設定檔(Claude Desktop 與 Antigravity)**——只加自己的 key、保留其他既有 connector,**不可覆蓋整個檔**。由凍結後的 exe 提供 `--configure` 子命令處理偵測與 JSON 合併,installer 只負責呼叫它。**一支 exe、一次安裝即對兩種 client 都設定,不必裝兩次。**
+   - ⚠️ **Claude Desktop 兩種變體都要支援,無法假設同事裝哪一種:**
      - **Store(MSIX)版** — 設定檔在 `%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalCache\Roaming\Claude\claude_desktop_config.json`(目前 PFN 是 `Claude_pzs8sxrjxfjjc`,但**用 `Get-AppxPackage *Claude*` 動態取得 PFN 再組路徑,別硬編**)。偵測安裝:該 appx 套件是否存在。
      - **一般下載版** — 設定檔在 `%APPDATA%\Claude\claude_desktop_config.json`;安裝目錄通常在 `%LOCALAPPDATA%\Programs\Claude\`。偵測安裝:該程式目錄或解除安裝登錄機碼是否存在。
-   - `--configure` 邏輯**不是「二選一 + fallback」**,而是:獨立偵測兩種變體各自是否安裝,**對每一個有裝的都寫入**(兩個都裝就兩個都寫,互不干擾);目標資料夾不存在就建立(同事可能還沒首次開過 Claude,設定檔尚未產生);已存在就**合併**自己的 key、保留其他 connector。
+   - ⚠️ **Antigravity(CLI 與 IDE 共用同一設定):** 設定檔在 `%USERPROFILE%\.gemini\config\mcp_config.json`(沿用 `.gemini` 目錄名;CLI 與 IDE 共用,**寫這一個檔即同時涵蓋兩者**)。schema 與 Claude Desktop 形狀一致:單一 `mcpServers` 物件,每個 server 用 `command`/`args`/`env`/`cwd`(stdio)。偵測安裝:Antigravity 本體 / `agy` CLI 是否存在(**確切偵測點待 VM 實證**;Antigravity 很新且頻繁更新,路徑/schema 以實機為準)。⚠️ **已知 day-one bug:全域 MCP 設定的環境變數傳遞不穩**,故 §7 的 `ONENOTE_MCP_LOG_LEVEL` 走 `env` 可能不生效——需實測,必要時改用 `ONENOTE_MCP_LOG_FILE` 預設路徑。另:CLI(TUI)無法以剪貼簿貼圖,但 `get_page_images` 走 server 端回傳不受此限(圖片是否確實餵入模型仍須真實 client 實測,屬 §4 驗收範疇)。
+   - `--configure` 邏輯**不是「二選一 + fallback」**,而是:獨立偵測**每一種**支援的 client 變體(Claude Desktop Store 版、Claude Desktop 一般版、Antigravity)各自是否安裝,**對每一個有裝的都寫入**(裝幾個就寫幾個,互不干擾);目標資料夾不存在就建立(同事可能還沒首次開過該 client,設定檔尚未產生);已存在就**合併**自己的 key、保留其他 connector。
    - 偵測「是否安裝」要看**安裝本身**(appx 套件 / 程式目錄 / 登錄),別只看設定檔在不在(首次開啟前不會有)。
-   - **兩種都沒偵測到** → 不要默默寫一個沒用的檔;明確提示「未偵測到 Claude Desktop,請先安裝再重跑」,並保留可單獨重跑 `--configure` 的入口(裝完 Claude 後能再執行一次補設定)。寫到沒裝的路徑 = 裝了但 Claude 看不到工具。
+   - **完全沒偵測到任何支援的 client** → 不要默默寫一個沒用的檔;明確提示「未偵測到 Claude Desktop 或 Antigravity,請先安裝後重跑設定」。**安裝本身仍正常完成**(server exe 照裝);只是這次沒有可寫入的對象。
+   - **client 不需在安裝前就裝好;日後新增 client 用「手動重跑」補設定。** `--configure` 只設定「執行當下偵測到」的 client,所以同事日後才裝 Claude 或 Antigravity 也沒關係。為此 installer 須放一個**好按的開始功能表捷徑**(例:「OneNoteMCP — 重新偵測並設定」),點下去就是跑 `<exe> --configure`——裝完新 client 點一次即補上。**刻意採此手動模式**:不盲寫未安裝 client 的設定檔(會落在猜測/未來可能變動的路徑、靜默失效,尤其 Store 版 PFN 與 Antigravity 新路徑),也不註冊登入時自動重跑的背景工作(避免常駐footprint);以「一鍵重跑」換取零猜測、零常駐。
    - 這段必須以**安裝使用者本人(per-user)**身分執行,才會落在正確的使用者 profile。
-   - 提示使用者**重啟 Claude Desktop** 以載入設定。
-- 前置檢查:OneNote 桌面版與 Claude Desktop 已安裝(缺則提示)。員工本人已登入互動桌面,所以正式環境**不需要** autologon / 互動 session 執行器(那些只在測試 VM 用)。
+   - 提示使用者**重啟對應的 client(Claude Desktop / Antigravity)** 以載入設定。
+- 前置檢查:OneNote 桌面版,以及至少一個支援的 client(Claude Desktop 或 Antigravity)已安裝(缺則提示)。員工本人已登入互動桌面,所以正式環境**不需要** autologon / 互動 session 執行器(那些只在測試 VM 用)。
 - 注意:未簽章的 installer 會觸發 SmartScreen「不明發行者」警告,公司 AV/政策也可能擋;內部散布前評估是否需程式碼簽章或請 IT 加白名單。
 - 「不做自動部署」= 不寫 MDM/GPO/SCCM 集中推送;同事仍是手動執行這個 installer。
 
 **開發測試環境(VM)交付物:** `remote_test.sh`、互動 session 執行器、`dump_fixtures.py`——細節見 §2.4。
 
-**打包交付物(在 VM 內建置):** PyInstaller spec、Inno Setup/NSIS 腳本、exe 的 `--configure` 子命令(JSON 合併 + Store/一般版路徑偵測)。
+**打包交付物(在 VM 內建置):** PyInstaller spec、Inno Setup/NSIS 腳本、exe 的 `--configure` 子命令(JSON 合併 + 多 client 偵測:Claude Desktop Store/一般版 + Antigravity)、開始功能表「重新偵測並設定」捷徑(呼叫 `--configure`,供日後新增 client 時一鍵補設定)。
 
 ---
 
@@ -343,5 +345,5 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
    - **Phase 3** — `Win32ComBackend` 實作 + `dump_fixtures.py`;經 `remote_test` 迴圈在 VM 跑讀取整合測試(不再手動搬機器)。
    - **Phase 4** — 寫入類(create_section、create_page〔可設 `pageLevel`〕、update_page_content〔含 append/insert/replace〕、create_table、insert_image)+ **層級結構類(restructure_section、reorder_sections、rename_node;`move_page` 跨節搬移先在 VM 實證可靠才轉正)** + 並發保護 + **手術式就地修改(保真)** + Windows round-trip 整合測試 + **格式保真回歸測試**。
    - **Phase 5** — 複製/克隆:raw-XML 克隆核心(inline 圖片 binary、帶 `QuickStyleDef`、**附件 `pathCache`→`pathSource` 重匯**、重設 object ID、設 `pageLevel`)+ `copy_page`/`copy_section`;整合測試驗節層級「B≡A」忠實度(**含附件/嵌入物件保留**;嵌入試算表克隆行為在此實證)。「複製後改寫」沿用既有 `get_page` + `update_page_content`,不另開工具。
-   - **Phase 6** — 刪除(`delete_node` 層級 + `delete_page_content` 內容物件:圖片/表格/大綱)、錯誤/重試強化、**診斷日誌(§7,環境變數 `ONENOTE_MCP_LOG_LEVEL` 開關、參數截斷、不碰 stdout)**、**工具描述強化(§4,跨全套對比式描述 + 行為契約 + server `instructions` + 真實 Desktop 選擇驗收)**、煙霧測試;**打包:PyInstaller 凍結 → Inno Setup/NSIS installer(含自動寫入 Claude Desktop 設定的 `--configure`,獨立偵測並處理 Store + 一般版兩種設定檔路徑),在 VM 內建置產出 `OneNoteMCP-Setup.exe`**。
+   - **Phase 6** — 刪除(`delete_node` 層級 + `delete_page_content` 內容物件:圖片/表格/大綱)、錯誤/重試強化、**診斷日誌(§7,環境變數 `ONENOTE_MCP_LOG_LEVEL` 開關、參數截斷、不碰 stdout)**、**工具描述強化(§4,跨全套對比式描述 + 行為契約 + server `instructions` + 真實 Desktop 選擇驗收)**、煙霧測試;**打包:PyInstaller 凍結 → Inno Setup/NSIS installer(含自動寫入設定的 `--configure`,獨立偵測並處理 Claude Desktop〔Store + 一般版〕與 Antigravity〔CLI/IDE 共用〕共三種設定檔路徑、合併不覆蓋),在 VM 內建置產出 `OneNoteMCP-Setup.exe`**。
 3. 每個 Phase 標明:在 Linux 可完成/驗證的部分 vs. 必須在 Windows 驗證的部分。

@@ -1,7 +1,8 @@
 # packaging — freeze + installer (Phase 6 Stage 5, SPEC §8)
 
 Produces `OneNoteMCP-Setup.exe`: a per-user Windows installer that drops the frozen MCP server
-and registers it with Claude Desktop. **Everything here is built on the Windows VM** —
+and registers it with every detected MCP client — Claude Desktop (regular + Store) and Antigravity
+(CLI/IDE, one shared `.gemini` config) (SPEC §8). **Everything here is built on the Windows VM** —
 PyInstaller does not cross-compile, so it cannot run on the Linux dev host.
 
 ## Files
@@ -51,6 +52,10 @@ Steps: `uv sync --group packaging` → `pyinstaller packaging/onenote-mcp.spec` 
 After building, confirm on the VM:
 1. `dist/OneNoteMCP/OneNoteMCP.exe` starts, binds OneNote via COM, and answers a read tool
    (the freeze's gen_py regeneration is the risk — watch for `BackendUnavailableError`).
-2. Run the installer; check the `onenote` entry lands in `claude_desktop_config.json` (regular
-   and/or Store path) and that Claude Desktop launches the server.
-3. stdout carries only JSON-RPC (no stray prints) — else the client can't parse the stream.
+2. Run the installer; check the `onenote` entry lands in EVERY detected client config —
+   `claude_desktop_config.json` (regular and/or Store path) and Antigravity's
+   `%USERPROFILE%\.gemini\config\mcp_config.json` — and that the client(s) launch the server.
+   With no client installed, `--configure` should write nothing and say so (install still ok).
+3. The Start Menu "OneNoteMCP — 重新偵測並設定" shortcut re-runs `--configure` (for a client
+   installed after setup).
+4. stdout carries only JSON-RPC (no stray prints) — else the client can't parse the stream.

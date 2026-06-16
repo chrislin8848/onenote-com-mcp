@@ -23,8 +23,10 @@ stdio transport: nothing but MCP protocol may go to stdout. Logs go to stderr (S
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import sys
+import threading
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP, Image
@@ -158,6 +160,12 @@ its subpages below page X") use copy_page_subtree(page_id, after_page_id=X); for
 of pages use copy_pages(page_ids, after_page_id=X). Both place the copies as ONE contiguous block, \
 in order, in a single placement step.
 
+Pace heavy calls: OneNote's COM is single-threaded — it runs ONE operation at a time. Send copy_* \
+and other heavy writes (a large update_page_content, insert_svg_image) in SMALL BATCHES — a few at \
+a time (e.g. 3-5) — and wait for each batch to return before sending more; do NOT fire a long \
+burst of them in a single turn. Bursting is not faster (the server serializes the calls) and only \
+risks timeouts; light reads you may issue freely.
+
 Benchmark workflow for "copy these pages and change the dates" (faithful copy, then edit the \
 copy): (1) the user manually creates a synced notebook B in the OneNote UI (COM cannot create \
 notebooks); (2) copy_section clones each source section into B — a perfect, mechanical copy; \
@@ -168,15 +176,39 @@ formatting. Verify B≡A before editing, then verify the dates."""
 mcp = FastMCP("onenote", instructions=_SERVER_INSTRUCTIONS)
 
 
-def logged_tool(*args, **kwargs):
-    """``@mcp.tool`` + the §7 per-call diagnostic log, in one decorator.
+# OneNote's COM server is single-threaded (STA): it runs ONE call at a time. Concurrent calls do
+# NOT parallelize — the loser is rejected with RPC_E_SERVERCALL_RETRYLATER and bounces off the
+# backend's finite busy-retry budget (~16s; see win32com_backend._call), so a burst of tool calls
+# (e.g. several copy_page in one assistant turn) can exhaust that budget and FAIL even for small
+# pages. FastMCP runs our sync tools in a worker-thread pool, so such a burst really does arrive in
+# parallel. This process-wide lock serializes every tool at the COM boundary: contenders wait in an
+# orderly queue (cheap, no retry budget burned) and each then runs against a free server instead of
+# fighting for it. Uncontended — the normal case — acquiring it is ~free. Safe because tools call
+# the service layer, never another @logged_tool function, so it can't re-enter and self-deadlock.
+_COM_LOCK = threading.Lock()
 
-    Composes so FastMCP sees the log-wrapped function (its signature/annotations are preserved
-    by functools.wraps, so the generated tool schema is unchanged) and every tool call is
-    logged at the seam, not in 22 hand-written facades."""
+
+def _serialize_com(func):
+    """Run the tool body under the process-wide COM lock (see _COM_LOCK)."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _COM_LOCK:
+            return func(*args, **kwargs)
+
+    return wrapper
+
+
+def logged_tool(*args, **kwargs):
+    """``@mcp.tool`` + the §7 per-call diagnostic log + COM serialization, in one decorator.
+
+    Composes so FastMCP sees the wrapped function (signature/annotations preserved by
+    functools.wraps, so the generated tool schema is unchanged): logging is OUTSIDE the lock (a
+    call is recorded the moment it arrives, before it queues) and serialization is INNERMOST,
+    around the actual COM work. Tools are facades over ``onenote_com_mcp.service``."""
 
     def decorate(func):
-        return mcp.tool(*args, **kwargs)(log_tool_call(func))
+        return mcp.tool(*args, **kwargs)(log_tool_call(_serialize_com(func)))
 
     return decorate
 
@@ -937,7 +969,8 @@ def main() -> None:
     parser.add_argument(
         "--configure",
         action="store_true",
-        help="register this server in Claude Desktop's config (both regular + Store) and exit",
+        help="register this server in every detected MCP client config "
+        "(Claude Desktop regular + Store, Antigravity) and exit",
     )
     parser.add_argument(
         "--selftest",
@@ -947,20 +980,27 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.configure:
-        from onenote_com_mcp.configure import configure_claude_desktop, repair_onenote_typelib
+        from onenote_com_mcp.configure import configure_mcp_clients, repair_onenote_typelib
 
         # Auto-repair a broken OneNote typelib registration (per-user HKCU shim, no admin) so a
         # cold OneNote launch doesn't fail with TYPE_E_LIBNOTREGISTERED. No-op when healthy.
         for note in repair_onenote_typelib():
             print(note)
 
-        written = configure_claude_desktop()
+        written = configure_mcp_clients()
         for path in written:
             print(f"configured: {path}")
         if not written:
-            print("no Claude Desktop config location found", file=sys.stderr)
-            raise SystemExit(1)
-        print("Restart Claude Desktop to load the OneNote server.")
+            # No supported client installed — write NOTHING (a guessed config path = the tool is
+            # installed but invisible). Not an error: the install itself still completes; the user
+            # installs a client then re-runs --configure (SPEC §8).
+            print(
+                "No supported MCP client detected (Claude Desktop or Antigravity). "
+                "Install one, then re-run configuration via the Start Menu shortcut "
+                '"OneNoteMCP — 重新偵測並設定" (or run this exe with --configure).'
+            )
+            return
+        print("Restart the client(s) (Claude Desktop / Antigravity) to load the OneNote server.")
         return
 
     if args.selftest:

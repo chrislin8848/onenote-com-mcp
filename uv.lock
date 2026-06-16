@@ -428,7 +428,7 @@ wheels = [
 
 [[package]]
 name = "onenote-com-mcp"
-version = "1.2.0"
+version = "1.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "lxml" },
