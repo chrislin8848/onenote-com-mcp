@@ -1,6 +1,6 @@
 # onenote-com-mcp
 
-**Author:** Chris Lin
+**Author:** Chris Lin · **License:** [MIT](LICENSE)
 
 A **COM-only** Model Context Protocol server that gives Claude full CRUD over the live
 **OneNote desktop** app on Windows — reading and writing notebooks, sections, pages, rich
