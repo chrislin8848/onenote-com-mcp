@@ -12,3 +12,25 @@ D1～D6 的日期」），完成後用頁面名稱回報；除非我要求，不
 ────────────────────────────
 
 作者：Chris Lin
+
+============================================================
+
+OneNote MCP Server has been installed and registered with the
+detected client(s) (Claude Desktop / Antigravity). Please restart
+the relevant client to load the configuration. If you install a new
+client later, run "OneNoteMCP — 重新偵測並設定" (Re-detect and
+configure) from the Start Menu to register it.
+
+Recommended (one-time, syncs to the cloud): in Claude Desktop →
+Settings → General → "Instructions for Claude", paste the block
+below so Claude works more concisely with OneNote.
+
+──────── copy the whole block below ────────
+Keep answers concise when performing OneNote operations. Do not list
+implementation details (tool names, parameters, internal object_id /
+page_id); say what you are doing in one plain sentence (e.g. "updating
+the dates for D1-D6"), and report back by page name when done. Do not
+show internal IDs unless I ask.
+────────────────────────────
+
+Author: Chris Lin
