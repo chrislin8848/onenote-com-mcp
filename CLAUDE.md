@@ -89,7 +89,35 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 - **Tier 2 (VM, checkpoint):** `@pytest.mark.windows`, real COM round-trips. Auto-skipped off
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
-## Status (2026-06-16)
+## Status (2026-06-18)
+
+**v1.2.3 — repo made PUBLIC + git-history PII scrub + rebrand + MIT LICENSE + bilingual installer
+page + README rewrite. ⚠️ HISTORY WAS REWRITTEN: every pre-2026-06-18 commit SHA referenced in this
+file is now STALE — the whole history was rebuilt with `git filter-repo` and force-pushed (old HEAD
+`a922828` → new HEAD `14a726b`).**
+- **PII scrub (whole history, all commits).** Third-party data in `tests/fixtures/` page dumps was
+  globally replaced (filter-repo `--replace-text`, so fixtures+tests+docs moved in lockstep and
+  Tier-1 stayed green at 339): colleague names → Author A–E / Z1–Z5, `ayumi@hillmont.tw` +
+  O365id/AD/Live hashes/cid → neutral, real note titles → 測試頁面1–7, itinerary body + Maps URLs →
+  neutral examples, Tier-2 realdata section names 木曾駒岳/清邁茶杯 → 測試章節1/2 (so
+  `tests/test_windows_realdata.py` now points at placeholder sections — repoint locally to re-run
+  that @windows test; host CI skips it). Each fixture is single-blob so HEAD strings == all-history
+  strings; the 5 `binary_*.b64` are 57-byte magic-header stubs (not real photos). See
+  [[project-public-release-scrub]].
+- **Rebrand:** author name kept "Chris Lin"; `chris@hillmont.tw` → `chris0211@gmail.com`; installer
+  AppPublisher `Hillmont` → `Chris Lin`. No `hillmont` remains anywhere in history.
+- **MIT LICENSE** added (Chris Lin 2026; pyproject `license` Proprietary→MIT; README badge).
+- **Bilingual installer post-install page** (`post_install_zh-TW.txt` now zh-TW + English; BOM+CRLF
+  kept). **README** rewritten for public (stale phase table → ~30-tool feature overview, install,
+  dev, license).
+- **Version 1.2.2→1.2.3** (pyproject + __init__ + .iss + uv.lock — only the onenote-com-mcp entry;
+  python-dotenv coincidentally 1.2.2 at uv.lock untouched). Installer rebuilt + pulled:
+  **OneNoteMCP-Setup_1.2.3.exe (sha256 47d81b00847fb602ba28aec9e7dc84624696b67f82b6d5345622a8679527ff8d,
+  24,665,518 B ~24.66MB)** (tar→VM→`build.bat`, exit 0; COM-only/code path UNCHANGED so no Tier-2
+  regression expected; frozen-exe `--selftest` run separately).
+- **GitHub:** repo is **PUBLIC** (`github.com/chrislin8848/onenote-com-mcp`), description + 11 topics
+  set, **Issues DISABLED**. PRs/forking CANNOT be disabled on a personal-account repo (only org-owned)
+  — an external PR is just a suggestion, never modifies the repo without a merge.
 
 **v1.2.2 — installer now configures Antigravity as a SECOND MCP client alongside Claude Desktop
 (SPEC §8, re-uploaded as v0616; 30-tool catalog unchanged; Tier-1 +host configure tests green;
@@ -141,9 +169,12 @@ detected client, not just Claude.**
   Tier-1 tightened to lead with the confirmed lowercase dir (was "best-effort/VM-pending"). **NO
   rebuild needed** — the already-built 1.2.2 exe's ``Programs\Antigravity`` check already matches
   the lowercase folder (Windows FS is case-insensitive), so the comment/ordering change is
-  behaviorally identical; the shipped sha 5ecec40d… stands. REMAINING: Chris's real multi-client
-  acceptance (install 1.2.2 → Claude Desktop + Antigravity both register `onenote`, shortcut name
-  renders, Antigravity loads `~/.gemini/config/mcp_config.json`) + push.**
+  behaviorally identical; the shipped sha 5ecec40d… stands. **PUSHED 2026-06-16 as commit a922828
+  on origin/main** (one commit — folded in the never-pushed v1.2.1 serialization lock, since the
+  working tree intermixed them; pre-push hook ran ruff + 339 Tier-1 green). [SHA a922828 is
+  PRE-REWRITE — stale after the 2026-06-18 history rewrite; see the v1.2.3 block above.] REMAINING: Chris's real
+  multi-client acceptance (install 1.2.2 → Claude Desktop + Antigravity both register `onenote`,
+  shortcut name renders, Antigravity loads `~/.gemini/config/mcp_config.json`).**
 
 **v1.2.1 — COM single-thread serialization lock + heavy-call pacing instruction (30-tool catalog
 unchanged; Tier-1 332 green; Tier-2 VM-VALIDATED 65 passed / 7 skip / 0 fail, 6:37). Driven by a
