@@ -89,6 +89,23 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 - **Tier 2 (VM, checkpoint):** `@pytest.mark.windows`, real COM round-trips. Auto-skipped off
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
+## Status (2026-06-24, later)
+
+**v1.3.1 — instruction-only: get_page_info `preview` is a truncated LABEL, not content
+(catalog 35 unchanged; Tier-1 369 green).** Real-Claude-Desktop finding relayed by Chris: a model
+judged a paragraph "clean" from get_page_info's ~40-char `preview` and MISSED corruption (錯字)
+hiding past the cutoff. Root cause = tool MISUSE, not a bug: `preview` is a short identifying label
+(already marks truncation with a trailing "…"), never the content. Widening it would defeat
+get_page_info's reason to exist (lightweight inventory for big pages). Fix = one warning sentence in
+the `get_page_info` description + a line in `_SERVER_INSTRUCTIONS`: preview is a TRUNCATED label, NOT
+content — to proofread / verify text correctness use `get_object` (one object), `get_page` (whole
+page), or `find_objects` (matches FULL paragraph text). No COM/code/structure change. Tier-1 smoke
+asserts added (description names preview+get_object; instructions name preview). **v1.3.0 §4
+acceptance COMPLETE: Claude Desktop + Antigravity both validated live (Antigravity confirmed
+insert_image_from_path).** Version 1.3.0→1.3.1 (pyproject + __init__ + .iss + uv.lock). **Installer
+rebuilt + pulled: OneNoteMCP-Setup_1.3.1.exe (sha256
+cbfd74cdc028aac937c7ae4f9e13d7803fa29b55a48c2fab60cac8bd0ec0142f, 24,675,815 B ~24.68MB).**
+
 ## Status (2026-06-24)
 
 **v1.3.0 — five precise-editing tools + raster-from-path, all from Claude's real-usage efficiency

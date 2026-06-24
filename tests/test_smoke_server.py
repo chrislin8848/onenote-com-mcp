@@ -96,6 +96,9 @@ def test_contrastive_borders_present(tools):
     # get_page (full content) vs get_page_info (lightweight object inventory) name each other
     assert "get_page_info" in tools["get_page"].description
     assert "get_page" in tools["get_page_info"].description
+    # get_page_info warns its preview is a truncated label, not content to proofread from
+    assert "preview" in tools["get_page_info"].description.lower()
+    assert "get_object" in tools["get_page_info"].description
     # get_table (single-table compact read) borders get_page both ways
     assert "get_table" in tools["get_page"].description
     assert "get_page" in tools["get_table"].description
@@ -214,6 +217,8 @@ def test_server_instructions_present():
     assert "batch_update" in mcp.instructions
     assert "return_ids" in mcp.instructions
     assert "insert_image_from_path" in mcp.instructions
+    # 1.3.1: get_page_info's preview is a truncated label, not content to proofread from
+    assert "preview" in mcp.instructions.lower()
 
 
 def test_selftest_reports_failure_cleanly(monkeypatch, capsys):

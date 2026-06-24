@@ -52,7 +52,10 @@ or get_page_files_info (attachment metadata); to find the object that CONTAINS a
 get_page_info — it lists images nested in table cells AND page-level printout renders, which \
 get_page's nested tree can bury; do NOT eyeball get_page to hunt for images, and when sweeping \
 several pages check EACH page's inventory rather than assuming later pages match earlier ones. \
-Picking the right tool but omitting the objectID it needs is as wrong as picking the wrong tool.
+Picking the right tool but omitting the objectID it needs is as wrong as picking the wrong tool. \
+get_page_info's `preview` is a TRUNCATED label (trailing "…" = more follows), NOT content — never \
+proofread or judge a paragraph as clean from it; read the full text with get_object / get_page, or \
+search with find_objects, to verify text correctness.
 
 objectIDs and node IDs (page/section/notebook/section-group IDs) are INTERNAL plumbing — \
 use them to chain calls, but do NOT surface them to the user. They are long, opaque, and \
@@ -317,7 +320,11 @@ def get_page_info(page_id: str) -> str:
     tool — you do NOT need to re-read with get_page to "verify" or translate the id (it is already
     the right target). Do NOT eyeball get_page's nested JSON to hunt for images; read this flat
     list, and across several pages call it per page rather than assuming pages with no images near
-    the top have none lower down."""
+    the top have none lower down. The `preview` is a TRUNCATED identifying label (a trailing "…"
+    means more text follows) — NOT the content. NEVER judge whether a paragraph is correct/clean or
+    proofread for typos from `preview`: corruption can hide past the cutoff. To check text
+    correctness read the full text with get_object (one object), get_page (whole page), or locate a
+    known string with find_objects (it matches the FULL paragraph text)."""
     return _json(read.get_page_info(get_backend(), page_id))
 
 
