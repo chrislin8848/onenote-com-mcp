@@ -89,6 +89,57 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 - **Tier 2 (VM, checkpoint):** `@pytest.mark.windows`, real COM round-trips. Auto-skipped off
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
+## Status (2026-06-24)
+
+**v1.3.0 — five precise-editing tools + raster-from-path, all from Claude's real-usage efficiency
+feedback (catalog 30→35; Tier-1 369 green; Tier-2 VM-VALIDATED 71 passed / 8 skip / 0 fail).** Chris
+relayed a 10-item feedback report from Claude operating the server live; agreed scope = **Group B**
+(instruction-only discoverability nudges) + **Group A** (4 precise-editing tools) + **#8** (raster
+insert from a local file path). All land INSIDE the existing `apply_page_edit` seam — no new COM, no
+red-line risk. Design decisions Chris-confirmed via AskUserQuestion: find_and_replace PURE per-run;
+all 4 A-tools standalone (not folded into batch); return_ids OPT-IN.**
+- **#2 (CJK homoglyph corruption 瘋→瘧) is GENERATION-side, NOT the server** — audited the write path,
+  it's byte-faithful (no normalize/translate/substitute, CDATA preserved). Server levers only: a
+  `\uXXXX`-escape instruction nudge + read-back echo. NOT a server bug.
+- **Group A (catalog 30→35):** `get_object` + `find_objects` (read.py — full-text match, not the
+  40-char preview); `find_and_replace` (PURE per-run; a match spanning runs → `found_across_runs` so
+  the model falls back to get_object+replace; covers title+body+cells); `batch_update` (composes N
+  mutators → ONE apply_page_edit/UpdatePageContent = ATOMIC; single-call-site invariant kept, guard
+  test extended; `_BATCH_OPS`); `return_ids` opt-in on update_page_content + batch_update +
+  apply_page_edit (post-write re-read + objectID diff + new stamp; `_NoWrite` sentinel skips a no-op
+  write). KNOWN-OPEN (minor): return_ids live new-id surfacing is green but TOLERANT of the #5a
+  refresh-lazy caveat (lastModifiedTime is refresh-lazy after programmatic writes) — not strictly
+  proven; docstring flags it. Optional strict probe before relying on it.
+- **#8 `insert_image_from_path`** (revived after first being cut): new `service/image.py`
+  `load_local_image` (PNG/JPEG/GIF magic-byte sniff + 20MB cap, rejects non-raster), reuses
+  make_image → apply_page_edit, mirrors insert_svg_image's append/insert_before/insert_after modes.
+  **Why revived:** Antigravity (the 2nd MCP client the installer configures) is an agentic IDE that
+  CAN write files / run code, so it can put a raster on disk (matplotlib chart, downloaded img)
+  WITHOUT the bytes passing through the model — sidestepping the base64-through-model bottleneck that
+  killed the old raster insert in v1.0.9. Claude Desktop (chat-only) can't generate the file, so for
+  it #8 only serves pre-existing on-disk images. Copy path untouched.
+- **Group B (`_SERVER_INSTRUCTIONS` nudges):** apply_text_style for bulk restyle / a page's default
+  font, set_rows `None`=keep, append via `target_object_id`, `\uXXXX` escape for tricky CJK, a
+  "Targeted text edits" paragraph. **Fixed 3 stale "the ONLY way to add a picture is SVG / rasters by
+  hand" spots** (server instructions + update_page_content + insert_svg_image descriptions) that now
+  contradicted #8 — picture guidance is now "two ways: insert_svg_image for vector, insert_image_from_
+  path for a raster file on disk". SPEC §4 synced (5 tool rows + read/edit borders + §5 picture note).
+- **Tier-2 VM-VALIDATED 2026-06-24 (71 passed / 8 skip / 0 fail / 0 error):** `test_windows_write.py`
+  +5 (find_and_replace keeps run-style + no-match doesn't bump the stamp; batch_update atomic
+  multi-edit; return_ids; insert_image_from_path raster) + `test_windows_read.py` +2 (get_object,
+  find_objects) — all round-trip live; no regression. **VM gotchas hit + solved:** (1) a cold-booted
+  OneNote isn't ready — ONENOTE.EXE flapped seconds after boot, every OpenHierarchy got
+  RPC_S_SERVER_UNAVAILABLE (0x800706ba) → relaunch it in the INTERACTIVE session
+  (`C:\Users\dev\launch_onenote.bat` via `schtasks /it /tn onenote-launch`; a plain-SSH launch is
+  session 0 = useless), wait ~2min for notebooks+OneDrive sync, THEN run. (2) pytest `tmp_path` =
+  PermissionError WinError 5 under the scheduled-task user → the insert test writes its source PNG to
+  the repo `test-results\` dir, not tmp_path.
+- **Version 1.2.3→1.3.0** (pyproject + __init__ + .iss + uv.lock). **Installer rebuilt + pulled:
+  OneNoteMCP-Setup_1.3.0.exe (sha256 16e19c564f92865ddd3512c31cd741aa7bc1a8061d86729190690724bc1fa07a,
+  24,680,942 B ~24.68MB)**; frozen `--selftest` GREEN ("connected to OneNote, 3 notebook(s), bound
+  via: vendored", exit 0). `dist/installer/` pruned to 1.2.0+ (older artifacts removed). REMAINING:
+  Chris's real Claude-Desktop / Antigravity §4 acceptance of the 5 new tools.
+
 ## Status (2026-06-18)
 
 **v1.2.3 — repo made PUBLIC + git-history PII scrub + rebrand + MIT LICENSE + bilingual installer

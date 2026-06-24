@@ -165,3 +165,44 @@ def test_get_current_context_property_marshalling(backend):
     for slot in ("notebook", "section", "page"):
         if ctx[slot] is not None:
             assert "id" in ctx[slot] and "name" in ctx[slot]
+
+
+# --- 1.3.0 targeted reads: get_object (one object) + find_objects (locate by text) ----
+
+
+def test_get_object_reads_one_paragraph_live(backend, pages_by_name):
+    pid = pages_by_name.get("混合樣式頁")
+    if pid is None:
+        pytest.skip("混合樣式頁 not present")
+    para = next(
+        b
+        for o in read.get_page(backend, pid)["outlines"]
+        for b in o["blocks"]
+        if b["type"] == "paragraph"
+    )
+    out = read.get_object(backend, pid, para["object_id"])
+    assert out["page_id"] == pid
+    obj = out["object"]
+    assert obj["type"] == "paragraph"
+    assert obj["object_id"] == para["object_id"]
+    # the single-object read returns the SAME full text + per-run style get_page gives
+    assert obj["text"] == para["text"]
+    assert obj["runs"] == para["runs"]
+
+
+def test_find_objects_locates_paragraph_by_text_live(backend, pages_by_name):
+    pid = pages_by_name.get("混合樣式頁")
+    if pid is None:
+        pytest.skip("混合樣式頁 not present")
+    paras = [
+        b
+        for o in read.get_page(backend, pid)["outlines"]
+        for b in o["blocks"]
+        if b["type"] == "paragraph" and (b.get("text") or "").strip()
+    ]
+    if not paras:
+        pytest.skip("no text paragraphs on 混合樣式頁")
+    target = paras[0]
+    needle = (target["text"] or "")[:6]  # a real leading slice — full-text match, not a preview
+    out = read.find_objects(backend, pid, needle)
+    assert any(m["object_id"] == target["object_id"] for m in out["matches"])

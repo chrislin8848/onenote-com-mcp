@@ -148,6 +148,8 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 | `search_pages` | 跨/範圍文字搜尋 | `FindPages` |
 | `get_page` | 取單頁內容(**保真富文字** + 結構化表格) | `GetPageContent(pageId)` |
 | `get_table` | 取**單一表格**結構化內容(欄/列/每格文字+樣式+底色 + row/cell objectID),不含整頁其餘——大表頁(長 Guest List 等)的精簡讀法,避免 `get_page` 巨大 payload 被客戶端轉存成檔案 | `GetPageContent` → 依 objectID 找該 `one:Table`(含巢狀)投影 |
+| `get_object` | 取**單一物件**(段落完整文字+runs+樣式,或表格/圖片/附件)by objectID,不含整頁其餘——比 `get_page` 精簡(不含整頁重複 runs 與全頁樣式表),找得到頁面任何位置(行內/巢狀於 cell/頁層) | `GetPageContent` → 依 objectID 定位並投影該物件 |
+| `find_objects` | 取頁面上**文字含某子字串**的物件 objectID(**頁內**定位,對應 `search_pages` 的「找整頁」)——比對**完整文字**(非 `get_page_info` 的 40 字截斷預覽),用來精準定位要改的段(如錯字所在) | `GetPageContent` → 走訪段落比對全文 |
 | `get_page_images` | 取頁面圖片(二進位) | `GetPageContent` → `GetBinaryPageContent(callbackId)` |
 | `get_page_files_info` | 列頁面**附件/嵌入物件**(如 Excel 試算表)中繼資料:名稱/大小/型別/objectID,**不解析內容** | `GetPageContent` 解析 `one:InsertedFile` + 讀 `pathCache` 檔案屬性 |
 | `get_page_files` | 取**附件內容**供 Claude 分析(**僅限**:文字類解碼/圖片/PDF 抽文字;其餘型別回中繼資料並明示不支援) | 讀 `pathCache` 本機快取檔(**非** `GetBinaryPageContent`)+ server 端型別感知抽取 |
@@ -155,9 +157,12 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 | `create_section` | 在指定本(或節群組)建立節 | `OpenHierarchy(name+".one", parentId, out id, cftSection)`(parent 可為 notebook 或節群組) |
 | `create_page` | 在指定節建新頁(可設 `pageLevel` 子頁);**預設把新頁放在目前所在頁(get_current_context)正下方**,`after_page_id` 可指定別頁,無視窗/目前頁不在該節則落節尾 | `CreateNewPage` (+ `UpdateHierarchy` 設 pageLevel) + `UpdatePageContent` + 預設接 `reposition_page`(錨點=目前頁;讀視窗在建頁前;錨點不在該節→吞掉退回節尾) |
 | `update_page_content` | 改頁面內容:append / insert / replace(含改表格儲存格文字、樣式大小/字型/顏色/底色、超連結 `<a href>`) | `GetPageContent` → 改 XML → `UpdatePageContent`(純 append 可免讀全頁) |
+| `find_and_replace` | **就地**替換文字 `find`→`replace`(全頁或單一物件範圍),逐 run 保留各自樣式——改錯字/小幅改字最省做法,不必重供整段;回傳替換次數與變動 objectID。跨 run(不同樣式)的命中不替換,改回報於 `found_across_runs`(用 `get_object` + `update_page_content "replace"` 收尾) | `GetPageContent` → 逐 `one:T` 內逐 span 替換 → `UpdatePageContent`(無命中則跳過寫入) |
+| `batch_update` | 對一頁套用**多筆**內容編輯於**單一原子寫入**(全成或全不寫;一次 round-trip 取代連發 update_page_content):ops = `replace`/`append`/`insert_before`/`insert_after`/`find_replace`;各 op 針對讀取時已存在的 objectID;`return_ids` 可回傳新建 objectID 與新 last_modified_time | 多個 mutator 套同一棵樹 → **一次** `UpdatePageContent`(單一寫核心,不另開呼叫點) |
 | `create_table` | 新增**新**表格(僅建立) | 組 `one:Table` XML → `UpdatePageContent` |
 | `modify_table` | 改**既有**表格:**形狀**(`insert_rows`/`insert_columns`(`insert_columns` 可帶 `values` 一次填新欄內容)、`delete_rows`/`delete_columns`(DESTRUCTIVE);列欄對稱;空 cell 補最小段落)、**順序**(`reorder_columns`/`reorder_rows`,傳**完整目標排列** order、cell 隨欄/列移動且保留 objectID,不重打字)、或**內容**(`set_rows` 覆蓋整列/整表;`set_column` 精簡覆蓋**單欄**(一格一值);皆固定維度、保留每格 objectID,cell 給 `None` 不動,`[None,"",…]` = 保留第一欄、清空其餘) | `GetPageContent` → 改 `one:Table`(Columns 重編 index、移動/增/刪/改 Cell)→ `UpdatePageContent` |
 | `insert_svg_image` | 從 **SVG markup** 插入向量圖(伺服器端光柵化成 PNG)| `resvg_py` 渲染 SVG→PNG → 組 `one:Image` + base64 `one:Data` → `UpdatePageContent`(僅吃向量;內嵌 raster data: URI 拒絕;照片手動插)|
+| `insert_image_from_path` | 從**本機檔路徑**插入點陣圖(PNG/JPEG/GIF)——server 端讀檔 bytes,**不經模型**(舊 base64 插入因模型吐 bytes 過慢已移除);適合使用者指定的照片,或能寫檔/跑 code 的 client(如 agentic IDE)在磁碟上產出的圖(程式畫的圖表、下載的圖)。僅 PNG/JPEG/GIF;只存在 context、未落地的圖無法插 | 讀本機檔 → 組 `one:Image` + base64 `one:Data` → `UpdatePageContent`(沿用 `insert_svg_image` 同一 seam) |
 | `delete_node` | 刪頁/節/節群組/筆記本(層級) | `DeleteHierarchy(objectId)` |
 | `delete_page_content` | 刪**頁層**內容物件(整個大綱/頁層圖片/頁層附件) | `DeletePageContent(pageId, objectId)` |
 | `delete_inline_content` | 刪**大綱內**物件(表格/段落/行內圖片/行內附件);保留同大綱其他段落 | 走編輯 seam:`GetPageContent` → 移除元素並修剪空容器 → `UpdatePageContent`(**非** `DeletePageContent`——COM 對行內 OE 一律拒絕 `0x8004200E`) |
@@ -173,7 +178,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 
 **範圍化原則:** 永遠用 notebook/section 範圍的 `GetHierarchy` 與 `FindPages`,**不要**對全部頁面逐頁掃描——這是先前 Graph 全域搜尋撞牆的同一個坑,逐頁打 COM 又慢又容易踩 RPC 忙碌錯誤。
 
-**工具與 COM 方法是多對一(勿重寫):** `update_page_content`(含 append/insert/replace)、`create_table`、`insert_image` 最後全都走同一個 `UpdatePageContent`——它是 OneNote 唯一的「寫內容進頁面」通用原語。實作上必須**共用單一「套用頁面內容變更」核心**(集中處理 `GetPageContent → 改 XML → UpdatePageContent` 的並發保護 `dateExpectedLastModified` 與手術式格式保真),這些 MCP 工具只是它的薄 facade(各自負責把自己的輸入轉成內容 XML)。**不要各自重寫一套 round-trip 邏輯**,否則程式會分歧、難維護。分開命名是為了 LLM 好用,不是要分開實作。
+**工具與 COM 方法是多對一(勿重寫):** `update_page_content`(含 append/insert/replace)、`create_table`、`insert_svg_image`/`insert_image_from_path`、`find_and_replace`、`batch_update` 最後全都走同一個 `UpdatePageContent`——它是 OneNote 唯一的「寫內容進頁面」通用原語。實作上必須**共用單一「套用頁面內容變更」核心**(集中處理 `GetPageContent → 改 XML → UpdatePageContent` 的並發保護 `dateExpectedLastModified` 與手術式格式保真),這些 MCP 工具只是它的薄 facade(各自負責把自己的輸入轉成內容 XML)。**不要各自重寫一套 round-trip 邏輯**,否則程式會分歧、難維護。分開命名是為了 LLM 好用,不是要分開實作。
 
 ### 工具描述強化(獨立交付物,跨全套工具一次做,非逐工具帶過)
 
@@ -185,10 +190,10 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 
 1. **對比式/反向標註** — 針對本專案會互相混淆的工具組,在描述裡互相點名界線:
    - **刪除三角:** `delete_node`(刪整個頁/節/節群組/筆記本節點) vs `delete_page_content`(刪**頁層**物件:整個大綱/頁層圖/頁層附件,頁面保留) vs `delete_inline_content`(刪**大綱內**物件:表格/段落/行內圖/行內附件)。關鍵界線:**整個表格、段落永遠在大綱內,故刪它們一律用 `delete_inline_content`,絕不用 `delete_page_content`**;三者描述互相點名(both-way,guard-tested)。
-   - `update_page_content`(加/改文字、樣式、超連結、**單一**儲存格文字) vs `create_table`(建**新**表格) vs `modify_table`(改既有表格:`insert_rows`/`insert_columns`/`delete_*` 形狀、`reorder_columns`/`reorder_rows` 重排、或 `set_rows`/`set_column` 覆蓋內容) vs `insert_svg_image`(從 SVG 插**向量**圖;照片/點陣須手動)——`update_page_content` 描述須註明「若加的是表格、改的是行列數、或插圖,改用對應工具」;`create_table` 只建新表、`modify_table` 改既有表(形狀/順序/內容),兩者互相點名;表格內容替換的分工 = `update_page_content "replace"`(一格)vs `modify_table set_column`(整欄)vs `modify_table set_rows`(整列/整表);**重排欄/列用 `reorder_columns`/`reorder_rows`,不要用 `set_rows` 清空再重打**;改整欄**樣式/顏色**(非文字)用 `apply_text_style(columns=[j])`。
+   - `update_page_content`(加/改文字、樣式、超連結、**單一**儲存格文字) vs `create_table`(建**新**表格) vs `modify_table`(改既有表格:`insert_rows`/`insert_columns`/`delete_*` 形狀、`reorder_columns`/`reorder_rows` 重排、或 `set_rows`/`set_column` 覆蓋內容) vs `insert_svg_image`(從 SVG 插**向量**圖;照片/點陣須手動)——`update_page_content` 描述須註明「若加的是表格、改的是行列數、或插圖,改用對應工具」;`create_table` 只建新表、`modify_table` 改既有表(形狀/順序/內容),兩者互相點名;表格內容替換的分工 = `update_page_content "replace"`(一格)vs `modify_table set_column`(整欄)vs `modify_table set_rows`(整列/整表);**重排欄/列用 `reorder_columns`/`reorder_rows`,不要用 `set_rows` 清空再重打**;改整欄**樣式/顏色**(非文字)用 `apply_text_style(columns=[j])`。改錯字/小幅改字用 `find_and_replace`(逐 run 替換、保留樣式、不必重供整段;跨 run 命中回報於 `found_across_runs`);一頁有多筆編輯時用 `batch_update`(單一原子寫入,取代連發 `update_page_content`);寫入後可帶 `return_ids` 取回受影響/新建的 objectID,免重讀整頁。
    - `reposition_page`(**同節內**把**一頁**移到某頁之後,只給 ID) vs `restructure_section`(**同節內**重排**多頁** + `pageLevel`,須完整清單) vs `reorder_sections`(**一本內**節順序) vs `move_page`(把頁搬到**別節**) vs `rename_node`(只改名)。關鍵:移**單一**頁用 `reposition_page`(不必交 46 筆清單,避免模型去寫外部暫存檔);`copy_page` / `create_page` **預設**都把新頁放在「自然錨點」正下方——`copy_page` 在**來源頁**之下、`create_page` 在**目前所在頁**(get_current_context)之下,所以「複製這頁」「在這裡建頁」都不必指定位置,`after_page_id` 才是覆蓋;要移**既有**頁才用 `reposition_page`。
    - **複製粒度四選一:** `copy_page`(**單頁**) vs `copy_pages`(**多頁**明確清單) vs `copy_page_subtree`(**一頁 + 其子頁**,自動算出子頁) vs `copy_section`(**整節**)。關鍵界線:複製**多頁到某位置**時**絕不**重複呼叫 `copy_page`——`copy_page` 預設把每份副本貼在**各自來源頁**之下,會把整組副本打散(real-Claude-Desktop 實測:「把 ●ITIN 及其子頁複製到 ●Local 下方」因此亂放);`copy_pages` / `copy_page_subtree` 把副本排成**一個連續區塊**、一次定位到 `after_page_id` 之後。
-   - `get_page`(文字 + 結構化表格;大表頁可改用 `get_table` 只取單表、避免巨大 payload) vs `get_table`(**單一**表格的結構化內容) vs `get_page_images`(取圖片二進位供視覺辨識) vs `get_page_files_info`(附件/嵌入物件**中繼資料**,任何型別) vs `get_page_files`(附件**內容**抽取,僅文字類/圖片/PDF)——info 是 files 的前置;非支援型別(docx/xlsx 等)只能取 info,不能取內容。
+   - `get_page`(文字 + 結構化表格;大表頁可改用 `get_table` 只取單表、避免巨大 payload) vs `get_table`(**單一**表格的結構化內容) vs `get_page_images`(取圖片二進位供視覺辨識) vs `get_page_files_info`(附件/嵌入物件**中繼資料**,任何型別) vs `get_page_files`(附件**內容**抽取,僅文字類/圖片/PDF)——info 是 files 的前置;非支援型別(docx/xlsx 等)只能取 info,不能取內容。讀**單一**物件完整內容(段落文字+樣式/表格/圖片)用 `get_object`(非整頁);要在**頁內**用文字定位該改哪一段用 `find_objects`(比對全文、回 objectID;`search_pages` 只回整頁、不回頁內位置)。
    - 命名小疙瘩:`restructure_section` 與 `reorder_sections` 的動詞/單複數不一致,若描述尚未對外凍結可考慮統一,降低模型猶豫。
 2. **把程式碼強制不了的行為契約寫進描述文字**(那是唯一落地處):
    - 破壞性工具(`delete_node`、`delete_page_content`、`delete_inline_content`、`modify_table` 的 `delete_rows`/`delete_columns`、覆蓋式 `update_page_content`)醒目標 **DESTRUCTIVE**。
@@ -223,7 +228,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 ### 圖片/表格處理細節
 
 - **讀圖片** → `get_page_images` 抽出 binary,以 **MCP image content (base64)** 回傳,讓 Claude 用視覺辨識;一併回報該圖在頁面中的相對位置(若可得)。
-- **插入圖片** → `insert_svg_image` 接收 **SVG markup**(由模型直接產生的向量圖:路線圖/圖表/橫幅),伺服器端用 `resvg_py` 光柵化成 PNG,再組 `<one:Image>` 含 `<one:Data>` base64 → `UpdatePageContent`。**僅支援向量**:raster 插入(base64 點陣/照片)在 v1.0.9 移除——base64 經模型 token stream 太慢;內嵌 raster data: URI 會被拒絕,CJK 文字須用明確字族(微軟正黑體);照片請使用者手動插入。`make_image` + `apply_page_edit` seam 不變。
+- **插入圖片** → `insert_svg_image` 接收 **SVG markup**(由模型直接產生的向量圖:路線圖/圖表/橫幅),伺服器端用 `resvg_py` 光柵化成 PNG,再組 `<one:Image>` 含 `<one:Data>` base64 → `UpdatePageContent`。**僅支援向量**:raster 插入(base64 點陣/照片)在 v1.0.9 移除——base64 經模型 token stream 太慢;內嵌 raster data: URI 會被拒絕,CJK 文字須用明確字族(微軟正黑體);照片請使用者手動插入。**點陣圖若已是本機檔(使用者指定的照片,或能寫檔/跑 code 的 client 在磁碟上產出的圖)改用 `insert_image_from_path`:server 端讀檔,bytes 不經模型;只存在 context、無檔落地者仍須手動。** `make_image` + `apply_page_edit` seam 不變(SVG 與本機檔點陣共用)。
 - **讀表格** → 解析 `one:Table` 成結構化 rows(list of list of cell text),不要攤平成單一字串。
 - **新增/改表格** → 組 `one:Table` XML(列、欄、儲存格),經 `UpdatePageContent` 寫入。
 - **刪內容物件** → 依物件在頁面的層級分兩條路徑(VM 實證:`DeletePageContent` 接受頁層 `one:Outline`/`one:Image`/`one:InsertedFile`,但對**行內** OE 一律以 `0x8004200E` 拒絕):

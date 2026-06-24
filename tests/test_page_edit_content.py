@@ -14,7 +14,7 @@ from lxml import etree
 
 from onenote_com_mcp.backend.fixture import FixtureBackend
 from onenote_com_mcp.errors import NodeNotFoundError
-from onenote_com_mcp.service import page_edit
+from onenote_com_mcp.service import page_edit, read
 from onenote_com_mcp.xmllayer.namespaces import qn
 
 _PARSER = etree.XMLParser(strip_cdata=False)
@@ -1252,3 +1252,180 @@ def test_apply_text_style_cell_shading_rejects_unknown_color_name(be, table_page
     # OneNote's shadingColor needs hex; an unknown color name fails fast (before COM)
     with pytest.raises(ValueError, match="hex"):
         page_edit.apply_text_style(be, table_page.get("ID"), cell_shading="notacolor")
+
+
+# --- find_and_replace (per-run, style-preserving) -----------------------------------
+
+
+def _writes(be: FixtureBackend) -> list:
+    return [c for c in be.calls if c.method == "update_page_content"]
+
+
+def test_find_and_replace_per_run_keeps_style(be, mixed):
+    page_id = mixed.get("ID")
+    result = page_edit.find_and_replace(be, page_id, "螢光", "新光")
+
+    assert result["replacements"] >= 1
+    assert result["objects_changed"]
+    kwargs, sent = _sent_payload(be)
+    xml = kwargs["changes_xml"]
+    assert "新光標示文字" in xml
+    assert "螢光標示文字" not in xml
+    # the replaced run kept its OWN style — find/replace is per run, so the highlight survives
+    changed = next(
+        oe for oe in sent.iter(qn("OE")) if "新光標示文字" in etree.tostring(oe, encoding="unicode")
+    )
+    assert "background:yel" in etree.tostring(changed, encoding="unicode")
+
+
+def test_find_and_replace_scoped_to_one_object(be, mixed):
+    page_id = mixed.get("ID")
+    page = read.get_page(be, page_id)
+    target = next(
+        b["object_id"]
+        for b in page["outlines"][0]["blocks"]
+        if b["type"] == "paragraph" and "螢光標示文字" in (b.get("text") or "")
+    )
+    result = page_edit.find_and_replace(be, page_id, "螢光", "新光", object_id=target)
+    assert result["objects_changed"] == [target]
+    _, sent = _sent_payload(be)
+    assert any(
+        "新光標示文字" in etree.tostring(oe, encoding="unicode") for oe in sent.iter(qn("OE"))
+    )
+
+
+def test_find_and_replace_no_match_skips_the_write(be, mixed):
+    result = page_edit.find_and_replace(be, mixed.get("ID"), "絕不存在的字串XYZ", "X")
+    assert result["replacements"] == 0
+    assert result["found_across_runs"] == []
+    assert not _writes(be), "a no-op find/replace must not bump the page (no UpdatePageContent)"
+
+
+def test_find_and_replace_reports_cross_run_matches(be, mixed):
+    page_id = mixed.get("ID")
+    page = read.get_page(be, page_id)
+    needle = target_id = None
+    for b in page["outlines"][0]["blocks"]:
+        if b["type"] != "paragraph" or len(b.get("runs") or []) < 2:
+            continue
+        runs = b["runs"]
+        for i in range(len(runs) - 1):
+            a, c = runs[i]["text"], runs[i + 1]["text"]
+            if a and c:
+                cand = a[-1] + c[0]
+                if all(cand not in r["text"] for r in runs):  # truly straddles a run boundary
+                    needle, target_id = cand, b["object_id"]
+                    break
+        if needle:
+            break
+    if needle is None:
+        pytest.skip("no multi-run paragraph with a straddle-able boundary in this fixture")
+
+    result = page_edit.find_and_replace(be, page_id, needle, "X")
+    assert result["replacements"] == 0, "per-run replace must NOT touch a cross-run match"
+    assert target_id in result["found_across_runs"]
+    assert not _writes(be)
+
+
+def test_find_and_replace_empty_find_raises(be, mixed):
+    with pytest.raises(ValueError, match="find is empty"):
+        page_edit.find_and_replace(be, mixed.get("ID"), "", "x")
+
+
+# --- batch_update (atomic multi-op, single write) -----------------------------------
+
+
+def test_batch_update_applies_all_ops_in_one_write(be, mixed):
+    page_id = mixed.get("ID")
+    page = read.get_page(be, page_id)
+    target = next(b["object_id"] for b in page["outlines"][0]["blocks"] if b["type"] == "paragraph")
+    ops = [
+        {"op": "append", "content": "批次新增段落"},
+        {"op": "replace", "target_object_id": target, "content": "批次改寫段落"},
+    ]
+    out = page_edit.batch_update(be, page_id, ops)
+    assert out["applied"] == 2
+
+    kwargs, _ = _sent_payload(be)  # asserts EXACTLY ONE UpdatePageContent — the batch is atomic
+    xml = kwargs["changes_xml"]
+    assert "批次新增段落" in xml and "批次改寫段落" in xml
+
+
+def test_batch_update_find_replace_op(be, mixed):
+    out = page_edit.batch_update(
+        be, mixed.get("ID"), [{"op": "find_replace", "find": "螢光", "replace": "新光"}]
+    )
+    assert out["applied"] == 1
+    op = out["operations"][0]
+    assert op["op"] == "find_replace" and op["replacements"] >= 1
+    kwargs, _ = _sent_payload(be)
+    assert "新光標示文字" in kwargs["changes_xml"]
+
+
+def test_batch_update_is_atomic_on_invalid_target(be, mixed):
+    ops = [
+        {"op": "append", "content": "這段不可被寫入"},
+        {"op": "replace", "target_object_id": "{NOPE}{1}{B0}", "content": "x"},  # raises mid-batch
+    ]
+    with pytest.raises(NodeNotFoundError):
+        page_edit.batch_update(be, mixed.get("ID"), ops)
+    assert not _writes(be), "if any op fails, the whole batch must write nothing"
+
+
+def test_batch_update_unknown_op_raises(be, mixed):
+    with pytest.raises(ValueError, match="unknown op"):
+        page_edit.batch_update(be, mixed.get("ID"), [{"op": "frobnicate"}])
+    assert not _writes(be)
+
+
+def test_batch_update_empty_raises(be, mixed):
+    with pytest.raises(ValueError, match="operations is empty"):
+        page_edit.batch_update(be, mixed.get("ID"), [])
+
+
+# --- return_ids (opt-in new-object diff + new stamp) ---------------------------------
+
+
+def test_return_ids_off_returns_none_and_no_reread(be, mixed):
+    result = page_edit.apply_page_edit(be, mixed.get("ID"), lambda t: t.set("name", "x"))
+    assert result is None
+
+
+def test_edit_page_content_return_ids_returns_dict(be, mixed):
+    result = page_edit.edit_page_content(be, mixed.get("ID"), "新段落", return_ids=True)
+    assert result is not None
+    assert "new_object_ids" in result and "last_modified_time" in result
+
+
+def test_return_ids_diffs_objects_that_appeared(tmp_path):
+    from onenote_com_mcp.backend.fixture import _sanitize
+
+    page_id = "{P}{1}{B0}"
+    ns = 'xmlns:one="http://schemas.microsoft.com/office/onenote/2013/onenote"'
+    before = (
+        f'<?xml version="1.0"?><one:Page {ns} ID="{page_id}" '
+        'lastModifiedTime="2026-06-10T17:39:30.000Z">'
+        '<one:Outline objectID="{O}{1}{B0}"><one:OEChildren/></one:Outline></one:Page>'
+    )
+    after = (
+        f'<?xml version="1.0"?><one:Page {ns} ID="{page_id}" '
+        'lastModifiedTime="2026-06-10T18:00:00.000Z">'
+        '<one:Outline objectID="{O}{1}{B0}"><one:OEChildren>'
+        '<one:OE objectID="{NEW}{1}{B0}"><one:T><![CDATA[hi]]></one:T></one:OE>'
+        "</one:OEChildren></one:Outline></one:Page>"
+    )
+    (tmp_path / f"page_{_sanitize(page_id)}.xml").write_text(before, encoding="utf-8")
+
+    class TwoReadBackend(FixtureBackend):
+        def __init__(self, d):
+            super().__init__(d)
+            self._reads = 0
+
+        def get_page_content(self, page_id, page_info=None):
+            self._reads += 1
+            return before if self._reads == 1 else after
+
+    be = TwoReadBackend(tmp_path)
+    result = page_edit.apply_page_edit(be, page_id, lambda t: t.set("name", "x"), return_ids=True)
+    assert result["new_object_ids"] == ["{NEW}{1}{B0}"]
+    assert result["last_modified_time"] == "2026-06-10T18:00:00.000Z"

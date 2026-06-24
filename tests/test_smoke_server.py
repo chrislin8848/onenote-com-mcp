@@ -22,6 +22,8 @@ EXPECTED_TOOLS = {
     "get_page",
     "get_page_info",
     "get_table",
+    "get_object",
+    "find_objects",
     "get_page_images",
     "get_page_files_info",
     "get_page_files",
@@ -29,9 +31,12 @@ EXPECTED_TOOLS = {
     "create_section",
     "create_page",
     "update_page_content",
+    "find_and_replace",
+    "batch_update",
     "create_table",
     "modify_table",
     "insert_svg_image",
+    "insert_image_from_path",
     "apply_text_style",
     "copy_page",
     "copy_pages",
@@ -59,15 +64,16 @@ def tools():
     return {t.name: t for t in asyncio.run(mcp.list_tools())}
 
 
-def test_catalog_is_the_30_expected_tools(tools):
+def test_catalog_is_the_35_expected_tools(tools):
     assert set(tools) == EXPECTED_TOOLS
-    assert len(tools) == 30
-    # RASTER image insertion was deliberately removed (base64-through-the-model is too slow):
-    # the only picture-insert path is insert_svg_image (vector SVG, rendered server-side). There
-    # is no raster insert_image / insert_file tool.
+    assert len(tools) == 35
+    # Picture insertion: vector SVG via insert_svg_image, and raster (PNG/JPEG/GIF) via
+    # insert_image_from_path which reads a LOCAL FILE off disk — so the bytes never go through the
+    # model. The old base64-param insert_image (model emits the bytes) stays REMOVED.
     assert "insert_image" not in tools
     assert "insert_file" not in tools
     assert "insert_svg_image" in tools
+    assert "insert_image_from_path" in tools
 
 
 def test_every_tool_has_a_real_description(tools):
@@ -192,6 +198,22 @@ def test_server_instructions_present():
     # process-wide lock), because OneNote's COM is single-threaded
     assert "single-threaded" in mcp.instructions.lower()
     assert "batch" in mcp.instructions.lower()
+    # Group B (instruction-only discoverability): append targeting (target_object_id), clearing a
+    # table body while keeping a header (set_rows None=keep), create-then-restyle for a default
+    # font, and CJK byte-faithful storage + the \uXXXX-escape tip for uncertain glyphs.
+    assert "target_object_id" in mcp.instructions
+    assert "keeping a header" in mcp.instructions
+    assert "hand-repeat" in mcp.instructions
+    assert "byte-for-byte" in mcp.instructions
+    assert "\\uXXXX" in mcp.instructions
+    # 1.3.0: precise-editing tools surfaced (typo fixes without re-typing, locate-by-text, single
+    # object read, atomic multi-edit, opt-in id echo) + raster insert from a LOCAL FILE path
+    assert "find_and_replace" in mcp.instructions
+    assert "find_objects" in mcp.instructions
+    assert "get_object" in mcp.instructions
+    assert "batch_update" in mcp.instructions
+    assert "return_ids" in mcp.instructions
+    assert "insert_image_from_path" in mcp.instructions
 
 
 def test_selftest_reports_failure_cleanly(monkeypatch, capsys):

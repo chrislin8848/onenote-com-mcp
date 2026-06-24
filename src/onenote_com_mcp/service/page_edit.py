@@ -72,6 +72,18 @@ _PLACEHOLDER_PNG_B64 = (
 )
 
 
+class _NoWrite(Exception):  # noqa: N818 — a control signal, not an error condition
+    """A mutator raises this to say 'nothing changed — skip the UpdatePageContent'.
+
+    Lets an edit that turns out to be a no-op (e.g. find_and_replace whose target string isn't
+    present) avoid a pointless write that would only bump the page's lastModifiedTime."""
+
+
+def _object_ids(tree: etree._Element) -> set[str]:
+    """Every ``objectID`` present in the tree — for the return_ids before/after diff."""
+    return {oid for el in tree.iter() if (oid := el.get("objectID"))}
+
+
 def parse_onenote_datetime(value: str | None) -> _dt.datetime | None:
     """Parse a OneNote ``lastModifiedTime`` (ISO-8601, possibly ``...Z``) → datetime."""
     if not value:
@@ -89,26 +101,47 @@ def apply_page_edit(
     *,
     strategy: PayloadStrategy | None = None,
     force: bool = False,
-) -> None:
+    return_ids: bool = False,
+) -> dict[str, Any] | None:
     """Read the page, mutate its XML tree in place, write it back in ONE guarded call.
 
     This is the only function in the codebase that calls ``backend.update_page_content`` for an
     edit. The concurrency guard (``dateExpectedLastModified``) is taken from the page we just
     read, so a write is refused if the page changed underneath us; ``force`` defaults False.
-    """
+
+    A mutator may raise ``_NoWrite`` to signal it changed nothing — the write is then skipped.
+    When ``return_ids`` is set, the page is re-read after the write and the objectIDs that appeared
+    (e.g. a newly appended paragraph/table/image) are returned with the page's new
+    ``last_modified_time``. It is opt-in because it costs an extra read, and the new stamp can lag
+    (OneNote's GetPageContent is refresh-lazy right after a programmatic write — VM caveat)."""
     strategy = strategy or DEFAULT_PAYLOAD_STRATEGY
     read_info = PageInfo.piBinaryData if strategy == "whole_page" else PageInfo.piBasic
     xml = backend.get_page_content(page_id, read_info)
     tree = etree.fromstring(xml.encode("utf-8"), parser=_PARSER)
     expected = parse_onenote_datetime(tree.get("lastModifiedTime"))
+    ids_before = _object_ids(tree) if return_ids else set()
     before = {child: etree.tostring(child, with_tail=False) for child in tree}
-    mutate(tree)  # in place; untouched paragraphs keep their quickStyleIndex/spans verbatim
+    try:
+        mutate(tree)  # in place; untouched paragraphs keep their quickStyleIndex/spans verbatim
+    except _NoWrite:
+        if return_ids:
+            return {"new_object_ids": [], "last_modified_time": tree.get("lastModifiedTime")}
+        return None
     if strategy == "changed_objects":
         _prune_unchanged_content(tree, before)
     inline_image_binaries(backend, page_id, tree)
     etree.cleanup_namespaces(tree)  # grafted fragments carry redundant xmlns:one declarations
     payload = etree.tostring(tree, xml_declaration=True, encoding="UTF-8").decode("utf-8")
     backend.update_page_content(payload, expected_last_modified=expected, force=force)
+    if not return_ids:
+        return None
+    after = etree.fromstring(
+        backend.get_page_content(page_id, PageInfo.piBasic).encode("utf-8"), parser=_PARSER
+    )
+    return {
+        "new_object_ids": sorted(_object_ids(after) - ids_before),
+        "last_modified_time": after.get("lastModifiedTime"),
+    }
 
 
 def _prune_unchanged_content(tree: etree._Element, before: dict[etree._Element, bytes]) -> None:
@@ -636,9 +669,146 @@ def edit_page_content(
     *,
     target_object_id: str = "",
     force: bool = False,
-) -> None:
+    return_ids: bool = False,
+) -> dict[str, Any] | None:
     """See :func:`content_mutator` for the mode/content contract."""
-    apply_page_edit(backend, page_id, content_mutator(content, mode, target_object_id), force=force)
+    return apply_page_edit(
+        backend,
+        page_id,
+        content_mutator(content, mode, target_object_id),
+        force=force,
+        return_ids=return_ids,
+    )
+
+
+def _find_replace_mutator(
+    find: str, replace: str, object_id: str, stats: dict[str, Any]
+) -> Mutator:
+    """A Mutator that replaces ``find`` with ``replace`` within each text run (per-run, so every
+    run keeps its own style), recording counts into ``stats``. Scope = the whole page, or one
+    object's subtree when ``object_id`` is given. Occurrences that span run boundaries (mixed
+    styles) are NOT replaced — per-run sees nothing — but their OE is recorded in
+    ``stats["found_across_runs"]`` so the caller can fall back to a whole-paragraph rewrite."""
+    if not find:
+        raise ValueError("find is empty")
+
+    def mutate(tree: etree._Element) -> None:
+        scope = _find_content_object(tree, object_id) if object_id else tree
+        for oe in scope.iter(qn("OE")):
+            ts = [c for c in oe if local_name(c.tag) == "T"]
+            if not ts:
+                continue
+            oe_id = oe.get("objectID")
+            oe_hits = 0
+            oe_text_parts: list[str] = []
+            for t in ts:
+                runs = parse_spans(t.text or "")
+                oe_text_parts.append("".join(r.text for r in runs))  # original, before replace
+                t_hits = 0
+                for r in runs:
+                    if find in r.text:
+                        t_hits += r.text.count(find)
+                        r.text = r.text.replace(find, replace)
+                if t_hits:
+                    t.text = etree.CDATA(build_spans(runs))
+                    oe_hits += t_hits
+            if oe_hits:
+                stats["replacements"] += oe_hits
+                if oe_id and oe_id not in stats["objects_changed"]:
+                    stats["objects_changed"].append(oe_id)
+            elif oe_id and find in "".join(oe_text_parts):  # present, but spans runs
+                if oe_id not in stats["found_across_runs"]:
+                    stats["found_across_runs"].append(oe_id)
+
+    return mutate
+
+
+def _new_find_replace_stats() -> dict[str, Any]:
+    return {"replacements": 0, "objects_changed": [], "found_across_runs": []}
+
+
+def find_and_replace(
+    backend: OneNoteBackend,
+    page_id: str,
+    find: str,
+    replace: str,
+    *,
+    object_id: str = "",
+    force: bool = False,
+) -> dict[str, Any]:
+    """Replace text occurrences of ``find`` with ``replace`` IN PLACE, per run (each run keeps its
+    style), in ONE guarded write. Scope is the whole page, or one object's subtree when
+    ``object_id`` is given. Returns ``{replacements, objects_changed, found_across_runs}``. When the
+    only matches span run boundaries (mixed styles), per-run replace makes no change: those OEs are
+    listed in ``found_across_runs`` (read one with get_object, then update_page_content "replace"
+    it) and nothing is written."""
+    stats = _new_find_replace_stats()
+    inner = _find_replace_mutator(find, replace, object_id, stats)
+
+    def mutate(tree: etree._Element) -> None:
+        inner(tree)
+        if stats["replacements"] == 0:
+            raise _NoWrite
+
+    apply_page_edit(backend, page_id, mutate, force=force)
+    return stats
+
+
+_BATCH_OPS = ("replace", "append", "insert_before", "insert_after", "find_replace")
+
+
+def batch_update(
+    backend: OneNoteBackend,
+    page_id: str,
+    operations: list[dict[str, Any]],
+    *,
+    force: bool = False,
+    return_ids: bool = False,
+) -> dict[str, Any]:
+    """Apply several content edits to a page in ONE read-mutate-write — ATOMIC (every operation is
+    applied to the same in-place tree and there is exactly one UpdatePageContent, so the batch
+    either fully succeeds or, if any operation is invalid, nothing is written).
+
+    Each operation is a dict with an ``op`` key:
+      * ``replace`` / ``append`` / ``insert_before`` / ``insert_after`` — like update_page_content:
+        ``content`` (str or paragraph dicts) and ``target_object_id``.
+      * ``find_replace`` — ``find`` / ``replace`` (+ optional ``object_id`` scope), per run.
+    Operations target objectIDs that already exist on the page (an object created by an earlier
+    operation in the same batch has no id until the write completes). Returns a per-operation
+    summary; with ``return_ids`` also the objectIDs that appeared and the new last_modified_time."""
+    if not operations:
+        raise ValueError("operations is empty")
+    mutators: list[Mutator] = []
+    summary: list[dict[str, Any]] = []
+    for i, op in enumerate(operations):
+        kind = op.get("op")
+        if kind in ("replace", "append", "insert_before", "insert_after"):
+            mutators.append(
+                content_mutator(op.get("content", ""), kind, op.get("target_object_id", ""))
+            )
+            summary.append({"op": kind, "target_object_id": op.get("target_object_id") or None})
+        elif kind == "find_replace":
+            st = _new_find_replace_stats()
+            st["op"], st["find"] = "find_replace", op.get("find", "")
+            mutators.append(
+                _find_replace_mutator(
+                    op.get("find", ""), op.get("replace", ""), op.get("object_id", ""), st
+                )
+            )
+            summary.append(st)
+        else:
+            raise ValueError(f"operation {i} has unknown op {kind!r}; expected one of {_BATCH_OPS}")
+
+    def mutate(tree: etree._Element) -> None:
+        for m in mutators:
+            m(tree)
+
+    result = apply_page_edit(backend, page_id, mutate, force=force, return_ids=return_ids)
+    out: dict[str, Any] = {"applied": len(operations), "operations": summary}
+    if return_ids and result is not None:
+        out["new_object_ids"] = result["new_object_ids"]
+        out["last_modified_time"] = result["last_modified_time"]
+    return out
 
 
 def add_table(
@@ -864,6 +1034,44 @@ def insert_svg_image(
     def mutate(tree: etree._Element) -> None:
         oe = etree.Element(qn("OE"))
         oe.append(make_image(data_b64, "image/png", width, height))
+        if mode == "append":
+            _outline_children(_resolve_outline(tree, target_object_id)).append(oe)
+        elif mode == "insert_before":
+            _require_oe(tree, target_object_id, mode).addprevious(oe)
+        else:  # insert_after
+            _require_oe(tree, target_object_id, mode).addnext(oe)
+
+    apply_page_edit(backend, page_id, mutate, force=force)
+
+
+def insert_image_from_path(
+    backend: OneNoteBackend,
+    page_id: str,
+    path: str,
+    *,
+    width: float | None = None,
+    height: float | None = None,
+    mode: str = "append",
+    target_object_id: str = "",
+    force: bool = False,
+) -> None:
+    """Insert a raster image FILE FROM DISK (PNG/JPEG/GIF). The server reads the bytes off ``path``
+    (on the machine running the server), so they never pass through the model — the bottleneck that
+    made the old base64 insert unusable. Vector graphics go through insert_svg_image instead.
+
+    Placement mirrors insert_svg_image / update_page_content: ``append`` (default) at the END of an
+    outline (``target_object_id`` = an outline objectID, or omitted = the page's last outline);
+    ``insert_before`` / ``insert_after`` place it relative to a target PARAGRAPH (one:OE objectID)
+    so the picture can land MID-page."""
+    if mode not in _IMAGE_MODES:
+        raise ValueError(f"mode must be one of {_IMAGE_MODES}, got {mode!r}")
+    from onenote_com_mcp.service.image import load_local_image
+
+    data_b64, media_type = load_local_image(path)
+
+    def mutate(tree: etree._Element) -> None:
+        oe = etree.Element(qn("OE"))
+        oe.append(make_image(data_b64, media_type, width, height))
         if mode == "append":
             _outline_children(_resolve_outline(tree, target_object_id)).append(oe)
         elif mode == "insert_before":

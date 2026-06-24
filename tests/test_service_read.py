@@ -154,6 +154,77 @@ def test_get_table_raises_for_unknown_table_id(fixtures_dir):
         read.get_table(_be(fixtures_dir), TABLE_PAGE_ID, "{NOPE}{1}{B0}")
 
 
+def test_get_object_returns_one_paragraph_full(fixtures_dir):
+    # the targeted single-object read: same full text + runs + style get_page gives for that
+    # paragraph, but without the rest of the page
+    page = read.get_page(_be(fixtures_dir), MIXED_PAGE_ID)
+    para = page["outlines"][0]["blocks"][0]
+
+    out = read.get_object(_be(fixtures_dir), MIXED_PAGE_ID, para["object_id"])
+    assert out["page_id"] == MIXED_PAGE_ID
+    assert out["last_modified_time"]
+    obj = out["object"]
+    assert obj["type"] == "paragraph"
+    assert obj["object_id"] == para["object_id"]
+    assert obj["text"] == para["text"]
+    assert obj["runs"] == para["runs"]  # full per-run style, identical to get_page's projection
+
+
+def test_get_object_returns_a_table(fixtures_dir):
+    page = read.get_page(_be(fixtures_dir), TABLE_PAGE_ID)
+    table_id = next(b["object_id"] for b in page["outlines"][0]["blocks"] if b["type"] == "table")
+
+    obj = read.get_object(_be(fixtures_dir), TABLE_PAGE_ID, table_id)["object"]
+    assert obj["type"] == "table"
+    assert obj["object_id"] == table_id
+    assert len(obj["rows"]) == 10
+
+
+def test_get_object_unknown_id_raises(fixtures_dir):
+    from onenote_com_mcp.errors import NodeNotFoundError
+
+    with pytest.raises(NodeNotFoundError, match="no object"):
+        read.get_object(_be(fixtures_dir), MIXED_PAGE_ID, "{NOPE}{1}{B0}")
+    with pytest.raises(ValueError, match="object_id is empty"):
+        read.get_object(_be(fixtures_dir), MIXED_PAGE_ID, "")
+
+
+def test_find_objects_locates_paragraph_by_text(fixtures_dir):
+    out = read.find_objects(_be(fixtures_dir), MIXED_PAGE_ID, "螢光標示文字")
+    assert out["page_id"] == MIXED_PAGE_ID
+    matches = out["matches"]
+    assert matches and all(m["type"] == "paragraph" for m in matches)
+    assert any("螢光" in m["preview"] for m in matches)
+    # the returned id is a real, editable paragraph objectID (matches get_page's projection)
+    page = read.get_page(_be(fixtures_dir), MIXED_PAGE_ID)
+    para_ids = {b["object_id"] for b in page["outlines"][0]["blocks"] if b["type"] == "paragraph"}
+    assert any(m["object_id"] in para_ids for m in matches)
+
+
+def test_find_objects_matches_full_text_not_truncated_preview(fixtures_dir):
+    # find_objects must search the FULL paragraph text, not the 40-char preview get_page_info shows
+    page = read.get_page(_be(fixtures_dir), MIXED_PAGE_ID)
+    long = next(
+        (
+            b
+            for b in page["outlines"][0]["blocks"]
+            if b["type"] == "paragraph" and len(b["text"]) > 45
+        ),
+        None,
+    )
+    if long is None:
+        pytest.skip("no paragraph longer than the preview cap in this fixture")
+    needle = long["text"][41:46]  # a slice past where get_page_info's preview would have cut off
+    matches = read.find_objects(_be(fixtures_dir), MIXED_PAGE_ID, needle)["matches"]
+    assert any(m["object_id"] == long["object_id"] for m in matches)
+
+
+def test_find_objects_no_match_and_empty_query(fixtures_dir):
+    assert read.find_objects(_be(fixtures_dir), MIXED_PAGE_ID, "絕不存在的字串XYZ")["matches"] == []
+    with pytest.raises(ValueError, match="query is empty"):
+        read.find_objects(_be(fixtures_dir), MIXED_PAGE_ID, "")
+
+
 def test_get_page_image_block_has_callback_and_ocr(fixtures_dir):
     page = read.get_page(_be(fixtures_dir), IMAGE_PAGE_ID)
     images = [b for b in page["outlines"][0]["blocks"] if b["type"] == "image"]

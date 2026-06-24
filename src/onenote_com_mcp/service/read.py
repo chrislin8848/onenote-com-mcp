@@ -231,6 +231,68 @@ def get_table(backend: OneNoteBackend, page_id: str, table_object_id: str) -> di
     }
 
 
+def get_object(backend: OneNoteBackend, page_id: str, object_id: str) -> dict[str, Any]:
+    """Read ONE object's full content — a paragraph's text + runs + style, a table, an image, or
+    an attachment — by its objectID, WITHOUT the rest of the page.
+
+    The targeted companion to get_page: to inspect or fix one paragraph you need only this, not the
+    whole-page payload (which duplicates each run under both ``text`` and ``runs`` and carries the
+    page-wide style table). Get the object_id from get_page_info or find_objects. Finds the object
+    anywhere on the page (inline, nested in a table cell, or page-level). Raises if no object on the
+    page has that id."""
+    if not object_id:
+        raise ValueError("object_id is empty")
+    page = parse_page(backend.get_page_content(page_id, PageInfo.piBasic))
+    obj = _locate_object(page, object_id)
+    if obj is None:
+        raise NodeNotFoundError(
+            f"no object with objectID {object_id!r} on this page — object IDs come from "
+            "get_page / get_page_info / find_objects"
+        )
+    return {"page_id": page.id, "last_modified_time": page.last_modified_time, "object": obj}
+
+
+def _locate_object(page: Any, object_id: str) -> dict[str, Any] | None:
+    """Find an object by id and project it to the same shape get_page uses for that kind."""
+    for table in page.tables:  # incl. tables nested in a cell
+        if table.object_id == object_id:
+            return _table_dict(table)
+    for img in page.images:  # inline AND page-level (printout renders)
+        if _oe_object_id(img) == object_id:
+            return _image_dict(img)
+    for f in page.page_files:  # page-level attachments / printout carriers
+        if f.object_id == object_id:
+            return _pagelevel_file_dict(f)
+    for p in page.paragraphs:  # text paragraphs + inline attachments (recursive: incl. cells)
+        if p.object_id == object_id:
+            return _paragraph_dict(p)
+    return None
+
+
+def find_objects(backend: OneNoteBackend, page_id: str, query: str) -> dict[str, Any]:
+    """Locate the objects on a page whose TEXT contains a substring — return their objectIDs.
+
+    The within-page counterpart to search_pages (which returns whole PAGES, never locations on a
+    page). Use it to find exactly which paragraph(s) to edit — e.g. the one holding a typo — without
+    pulling the whole page or eyeballing get_page_info's truncated previews: it matches the FULL
+    paragraph text, not a 40-char preview. Searches body and table-cell paragraphs and returns each
+    match's object_id (ready for get_object / update_page_content / find_and_replace) plus a short
+    preview. Case-sensitive substring match (so 開鑿 ≠ 開逑)."""
+    if not query:
+        raise ValueError("query is empty")
+    page = parse_page(backend.get_page_content(page_id, PageInfo.piBasic))
+    matches: list[dict[str, Any]] = []
+    for p in page.paragraphs:
+        if p.table is not None or p.image is not None or p.inserted_file is not None:
+            continue  # only text-bearing paragraphs have a body to search
+        text = p.text or ""
+        if query in text:
+            matches.append(
+                {"object_id": p.object_id, "type": "paragraph", "preview": _preview(text)}
+            )
+    return {"page_id": page.id, "name": page.name, "query": query, "matches": matches}
+
+
 def _pagelevel_file_dict(f: InsertedFile) -> dict[str, Any]:
     """A page-level one:InsertedFile (own objectID; printout carrier / direct page attachment)."""
     return {

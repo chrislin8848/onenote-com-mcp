@@ -8,12 +8,26 @@ fixture (the parse/build layer is TDD'd separately against real VM dumps).
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
+from pathlib import Path
 
 import pytest
 
 from onenote_com_mcp.backend.fixture import FixtureBackend, _sanitize
 from onenote_com_mcp.service import page_edit
+
+# a real 1x1 transparent PNG, for the insert_image_from_path routing case
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="
+)
+
+
+def _write_png(dir_: Path) -> str:
+    p = dir_ / "core_pic.png"
+    p.write_bytes(_PNG)
+    return str(p)
+
 
 _PAGE_ID = "{P}{1}{B0}"
 _MINIMAL_PAGE = (
@@ -65,8 +79,18 @@ def test_parse_onenote_datetime_handles_z_suffix():
             '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">'
             '<rect width="8" height="8" fill="#09c"/></svg>',
         ),
+        lambda be: page_edit.insert_image_from_path(be, _PAGE_ID, _write_png(be.fixtures_dir)),
+        lambda be: page_edit.find_and_replace(be, _PAGE_ID, "a", "b"),
+        lambda be: page_edit.batch_update(be, _PAGE_ID, [{"op": "append", "content": "x"}]),
     ],
-    ids=["update_page_content", "create_table", "insert_svg_image"],
+    ids=[
+        "update_page_content",
+        "create_table",
+        "insert_svg_image",
+        "insert_image_from_path",
+        "find_and_replace",
+        "batch_update",
+    ],
 )
 def test_all_write_facades_delegate_to_single_core(tmp_path, monkeypatch, invoke):
     be = _backend_with_page(tmp_path)

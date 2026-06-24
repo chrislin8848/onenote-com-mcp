@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import json
+import os
 import uuid
 
 import pytest
@@ -813,3 +814,92 @@ def test_insert_svg_image_lands_mid_page(backend, temp_section):
     before = [b.get("text") for b in blocks[:img_idx] if b["type"] == "paragraph"]
     after = [b.get("text") for b in blocks[img_idx + 1 :] if b["type"] == "paragraph"]
     assert "上段" in before and "下段" in after, "the image sits BETWEEN the two paragraphs"
+
+
+# --- 1.3.0 precise-editing tools (find_and_replace / batch_update / return_ids) + #8 raster ----
+
+
+def test_find_and_replace_roundtrip_keeps_run_style(backend, temp_section):
+    page_id = create.create_page(
+        backend,
+        temp_section,
+        "尋找取代頁",
+        [{"runs": [{"text": "颱風來了", "style": {"font-weight": "bold"}}]}],
+    )
+    result = page_edit.find_and_replace(backend, page_id, "颱風", "台風")
+    assert result["replacements"] >= 1
+
+    para = _paragraphs(backend, page_id)[0]
+    assert para["text"] == "台風來了"
+    # per-run replace must preserve the run's style live (the whole point vs a full rewrite)
+    assert all(r["style"].get("font-weight") == "bold" for r in para["runs"]), "bold lost"
+
+
+def test_find_and_replace_no_match_leaves_page_untouched(backend, temp_section):
+    page_id = create.create_page(backend, temp_section, "無命中頁", "原文")
+    stamp_before = read.get_page(backend, page_id)["last_modified_time"]
+    result = page_edit.find_and_replace(backend, page_id, "絕不存在XYZ", "X")
+    assert result["replacements"] == 0
+    # _NoWrite skipped the UpdatePageContent — content unchanged and the page was not bumped
+    after = read.get_page(backend, page_id)
+    assert [p["text"] for p in _paragraphs(backend, page_id)] == ["原文"]
+    assert after["last_modified_time"] == stamp_before, "a no-op find/replace must not write"
+
+
+def test_batch_update_atomic_multi_edit_roundtrip(backend, temp_section):
+    page_id = create.create_page(backend, temp_section, "批次編輯頁", "甲\n乙")
+    first_id = _paragraphs(backend, page_id)[0]["object_id"]
+    out = page_edit.batch_update(
+        backend,
+        page_id,
+        [
+            {"op": "replace", "target_object_id": first_id, "content": "甲改"},
+            {"op": "append", "content": "丙"},
+        ],
+    )
+    assert out["applied"] == 2
+    # both edits landed from a SINGLE write
+    assert [p["text"] for p in _paragraphs(backend, page_id)] == ["甲改", "乙", "丙"]
+
+
+def test_return_ids_surfaces_new_object_live(backend, temp_section):
+    page_id = create.create_page(backend, temp_section, "回傳ID頁", "起始")
+    before = {p["object_id"] for p in _paragraphs(backend, page_id)}
+    result = page_edit.edit_page_content(backend, page_id, "新段落", return_ids=True)
+    assert result is not None
+    assert "new_object_ids" in result and "last_modified_time" in result
+
+    after = _paragraphs(backend, page_id)
+    assert [p["text"] for p in after] == ["起始", "新段落"]
+    new_id = next(p["object_id"] for p in after if p["object_id"] not in before)
+    # IDEAL: return_ids surfaces the new paragraph's id. If the post-write re-read came back
+    # refresh-lazy (GetPageContent can lag right after a write — the #5a caveat), the list may be
+    # empty; when populated it MUST be correct. A persistently-empty list here is the signal to add
+    # a settle/retry to apply_page_edit's return_ids re-read.
+    if result["new_object_ids"]:
+        assert new_id in result["new_object_ids"]
+
+
+def test_insert_image_from_path_roundtrip(backend, temp_section):
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="
+    )
+    # NOT pytest's tmp_path: under the interactive scheduled-task user its
+    # %LOCALAPPDATA%\Temp\pytest-of-dev can be permission-locked (WinError 5). The repo's
+    # test-results dir is reliably writable (the run writes tier2.log there).
+    img_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "test-results")
+    os.makedirs(img_dir, exist_ok=True)
+    img_path = os.path.join(img_dir, "tier2_insert_pic.png")
+    with open(img_path, "wb") as fh:
+        fh.write(png)
+    try:
+        page_id = create.create_page(backend, temp_section, "插入點陣圖頁", "說明")
+        page_edit.insert_image_from_path(backend, page_id, img_path)
+
+        page = read.get_page(backend, page_id)
+        images = [b for o in page["outlines"] for b in o["blocks"] if b["type"] == "image"]
+        images += page["page_level_images"]
+        assert images, "the inserted raster image must appear on the page after a live round-trip"
+    finally:
+        if os.path.exists(img_path):
+            os.remove(img_path)

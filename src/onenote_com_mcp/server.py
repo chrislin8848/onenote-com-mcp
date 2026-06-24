@@ -47,7 +47,8 @@ Two-step rule for in-page objects: to edit or delete something INSIDE a page (a 
 table, image, or attachment) you first need its objectID — get it from get_page_info (a cheap, \
 FLAT, EXHAUSTIVE inventory of every object's id + type + which delete tool removes it; the \
 preferred first step), get_page (the full text/style content), get_page_images (image pixels), \
-or get_page_files_info (attachment metadata). To find/delete ALL images on a page, use \
+or get_page_files_info (attachment metadata); to find the object that CONTAINS a given string \
+(e.g. the paragraph with a typo) use find_objects. To find/delete ALL images on a page, use \
 get_page_info — it lists images nested in table cells AND page-level printout renders, which \
 get_page's nested tree can bury; do NOT eyeball get_page to hunt for images, and when sweeping \
 several pages check EACH page's inventory rather than assuming later pages match earlier ones. \
@@ -79,18 +80,22 @@ shallower page). To act on "this page and all its subpages" (e.g. restyle every 
 subtree), call list_pages, take that page plus the deeper-level run beneath it, and operate on \
 EACH — never lean on search_pages to discover them.
 
-Adding pictures: the ONLY supported way to add a picture is insert_svg_image — you generate SVG \
-markup (a vector graphic: diagram, map, chart, simple banner) and the server renders it to an \
-image. There is no raster-image or file insert: a PHOTO or an existing PNG/JPG cannot be \
-inserted — tell the user to add those BY HAND in the OneNote app (drag-and-drop, or \
-Insert ▸ Picture/File). Never try to insert a picture by emitting base64 or by smuggling a raster \
-<image data:…> inside the SVG (it is rejected and slow). For CJK text in the SVG, use an explicit \
+Adding pictures, two ways. For a VECTOR graphic (a diagram, map, chart, simple banner) use \
+insert_svg_image — you generate SVG markup and the server renders it to an image. For a RASTER \
+image that exists as a FILE ON DISK — a photo the user pointed you at, or \
+(in a client that can write files or run code, e.g. an agentic IDE) an image you produced on \
+disk such as a code-rendered chart or a downloaded picture — use insert_image_from_path with \
+the file path; the server reads the bytes off disk, so they never pass through you. If a raster \
+image exists only in your context with NO file on disk you cannot insert it — tell the user to \
+add it BY HAND in the OneNote app (drag-and-drop, or Insert ▸ Picture/File). Never try to insert \
+a picture by emitting base64 or by smuggling a raster <image data:…> inside the SVG (rejected, \
+and slow). For CJK text in the SVG, use an explicit \
 Windows font-family such as "Microsoft JhengHei", not the generic "sans-serif". After \
 insert_svg_image succeeds, trust the result — do NOT routinely read the image back with \
 get_page_images to "verify" it (pulling the whole rasterized PNG back as base64 is slow); read it \
 back only if the user reports a rendering problem. Get the SVG layout right in one pass: leave \
 margins and keep labels from overlapping nodes or markers. The picture can be POSITIONED, like \
-text: insert_svg_image takes mode insert_before / insert_after with a paragraph objectID so it \
+text: both insert tools take mode insert_before / insert_after with a paragraph objectID so it \
 lands MID-page, not only at the end (default mode append). Copying a page or section still carries \
 its existing images and attachments along — fully supported.
 
@@ -110,7 +115,10 @@ attributes: highlight clears the text marker, cell_shading="none" clears the cel
 "remove the yellow" doesn't fully work, clear BOTH (highlight="none", cell_shading="none"). \
 update_page_content("replace") is for rewriting ONE paragraph's text; apply_text_style changes \
 style only, never the words. To restyle a page AND its subpages, enumerate with list_pages, then \
-call it per page.
+call it per page. When CREATING content (create_page or update_page_content), do NOT hand-repeat \
+the same font/size/color block on every paragraph: write the text first, then run apply_text_style \
+once on the WHOLE page to set the font — it rewrites the page's baseline style so every paragraph \
+(and future typing) inherits it.
 
 Editing tables: pick the narrowest operation instead of rebuilding the table. To READ just one \
 table (e.g. a long Guest List) use get_table, not the whole-page get_page. To REARRANGE columns or \
@@ -121,7 +129,31 @@ with set_rows just to reorder. To rewrite ONE column's text use modify_table set
 list, one value per row) rather than a full set_rows grid of mostly-unchanged cells; to add a \
 column WITH content in one step use insert_columns with values; to change a whole column's STYLE \
 or COLOR (not its text) use apply_text_style(columns=[j]); to edit ONE cell's text use \
-update_page_content("replace") on that cell's paragraph objectID.
+update_page_content("replace") on that cell's paragraph objectID. To CLEAR a table's body while \
+keeping a header row or column, do not re-supply the kept text: set_rows treats a None cell as \
+"leave it unchanged" — e.g. [None, "", ""] keeps column 0 and clears the rest.
+
+Appending content: update_page_content mode=append adds to the page's LAST outline by default. If \
+a page has several outlines and you must add to a SPECIFIC one, pass that outline's objectID as \
+target_object_id, or the content may land in an unexpected outline. Append once per addition: if a \
+call seems to time out, do NOT blindly re-append — it may already have succeeded; re-read with \
+get_page_info to check before retrying, or you will paste the same content twice.
+
+Text fidelity: the server stores text byte-for-byte — it does no Unicode normalization and no font \
+substitution, so the characters you send are written exactly. Homoglyph and simplified/traditional \
+slips happen at GENERATION time, not in storage; if you are not fully confident a rare or easily- \
+confused CJK character will come out right, pin the exact codepoint by writing it as its JSON \
+\\uXXXX escape rather than the glyph.
+
+Targeted text edits without re-typing: to fix a typo or change a word, do NOT re-supply the whole \
+paragraph. find_and_replace(find, replace) swaps text in place across the page (or within one \
+object) keeping each run's style — the cheapest fix, and it cannot corrupt text you did not touch. \
+To find WHICH paragraph to edit, find_objects(query) returns the matching objectIDs on a page \
+(search_pages only finds whole PAGES, not locations); get_object(object_id) reads ONE paragraph's \
+full text + style without the whole-page payload. When you have SEVERAL edits to one page, \
+batch_update applies them in ONE atomic write (all-or-nothing) instead of a burst of \
+update_page_content calls. After an edit, pass return_ids=True (on update_page_content or \
+batch_update) to get the affected or newly created objectIDs back instead of re-reading the page.
 
 Editing a page = edit it IN PLACE (update_page_content, modify_table, delete_inline_content, \
 insert_svg_image); this is the normal, expected, safe-enough path for ordinary changes. Do NOT \
@@ -134,7 +166,8 @@ edit the COPY freely — the original is your backup.
 
 Match how much you confirm to the RISK; do NOT gate everything. Just DO it and report afterwards \
 (no pre-confirm) for reversible or lossless operations: editing in place (update_page_content, \
-modify_table insert_rows/insert_columns/set_rows), rename_node, reposition_page, reorder_sections, \
+find_and_replace, batch_update, modify_table insert_rows/insert_columns/set_rows), rename_node, \
+reposition_page, reorder_sections, \
 restructure_section (these only rename, reorder, or re-level — no data is lost), and moving a \
 SINGLE page or section to the recycle bin (do it, then report that it is recoverable). Propose and \
 get explicit go-ahead FIRST for irreversible or large-scope operations: permanent deletes \
@@ -301,6 +334,28 @@ def get_table(page_id: str, table_object_id: str) -> str:
     return _json(read.get_table(get_backend(), page_id, table_object_id))
 
 
+@logged_tool()
+def get_object(page_id: str, object_id: str) -> str:
+    """Read ONE object on a page by its objectID — a paragraph's full text + runs + style, or a
+    table / image / attachment — WITHOUT the rest of the page. The targeted companion to get_page:
+    to inspect or fix a single paragraph (e.g. one find_objects pointed you at), fetch just it
+    instead of the whole-page payload (which repeats every run under both "text" and "runs" and
+    carries the page-wide style table). Get the object_id from get_page_info or find_objects. Finds
+    the object anywhere on the page (inline, nested in a table cell, or page-level)."""
+    return _json(read.get_object(get_backend(), page_id, object_id))
+
+
+@logged_tool()
+def find_objects(page_id: str, query: str) -> str:
+    """Find the objects on a page whose TEXT contains a substring, returning their objectIDs — the
+    within-page counterpart to search_pages (which returns whole PAGES, never a location on a page).
+    Use it to pinpoint which paragraph(s) to edit, e.g. the one holding a typo, without dumping the
+    whole page or reading get_page_info's TRUNCATED previews (it matches the FULL paragraph text).
+    Searches body and table-cell paragraphs; returns each match's object_id (ready for get_object /
+    update_page_content / find_and_replace) and a short preview. Case-sensitive (so 開鑿 ≠ 開逑)."""
+    return _json(read.find_objects(get_backend(), page_id, query))
+
+
 # structured_output=False: the return is image content, not a JSON schema — FastMCP can't
 # build a pydantic output schema for Image, and we don't want one here.
 @logged_tool(structured_output=False)
@@ -423,14 +478,15 @@ def update_page_content(
     mode: Literal["append", "insert_before", "insert_after", "replace"] = "append",
     target_object_id: str = "",
     force: bool = False,
+    return_ids: bool = False,
 ) -> str:
     """Edit a page's TEXT/paragraphs surgically — untouched paragraphs keep their formatting
     verbatim. Use this to add, insert, or rewrite text and styled paragraphs (size/font/color/
     highlight/hyperlink), and to edit a table CELL's text. NOT for: creating a table (use
     create_table); changing a table's row/column COUNT, i.e. adding/deleting rows or columns
     (use modify_table); removing a whole outline/image/attachment (use delete_page_content).
-    (To add a vector picture use insert_svg_image; a PHOTO or existing raster image must be added
-    by hand in OneNote.)
+    (To add a picture: a VECTOR graphic via insert_svg_image, or a raster image that is a FILE on
+    disk via insert_image_from_path.)
 
     mode (per value):
       "append"        — add paragraphs at the end of an outline; target_object_id optionally
@@ -452,11 +508,81 @@ def update_page_content(
     reports each run's existing "link" so a replace round-trips it instead of dropping it).
 
     Concurrency-guarded: fails instead of clobbering if the page changed since it was read.
-    force=True overwrites anyway — DESTRUCTIVE, only after explicit user confirmation."""
-    page_edit.edit_page_content(
-        get_backend(), page_id, content, mode, target_object_id=target_object_id, force=force
+    force=True overwrites anyway — DESTRUCTIVE, only after explicit user confirmation.
+
+    return_ids=True returns (at the cost of one extra read) the objectID(s) this edit affected —
+    for "replace" the paragraph you edited, for append/insert the newly created paragraph(s) — plus
+    the page's new last_modified_time, instead of a bare status; useful when a follow-up edit needs
+    them. (To rewrite the SAME text in many spots, prefer find_and_replace; for several different
+    edits to one page in one atomic write, prefer batch_update.)"""
+    result = page_edit.edit_page_content(
+        get_backend(),
+        page_id,
+        content,
+        mode,
+        target_object_id=target_object_id,
+        force=force,
+        return_ids=return_ids,
     )
-    return f"updated {page_id}"
+    if not return_ids:
+        return f"updated {page_id}"
+    out: dict[str, object] = {"page_id": page_id, "mode": mode}
+    if mode == "replace" and target_object_id:
+        out["affected_object_ids"] = [target_object_id]
+    if result:
+        out["new_object_ids"] = result.get("new_object_ids", [])
+        out["last_modified_time"] = result.get("last_modified_time")
+    return _json(out)
+
+
+@logged_tool()
+def find_and_replace(
+    page_id: str, find: str, replace: str, object_id: str = "", force: bool = False
+) -> str:
+    """Fix or change text occurrences IN PLACE without re-supplying the paragraph — replace every
+    occurrence of `find` with `replace` across the whole page — title, body, and table cells — or
+    within one object when object_id is given, in ONE guarded write; each text run keeps its own
+    style (scope it with object_id when you mean only one paragraph). This is the right tool for a
+    TYPO or a small wording change: it avoids re-emitting a whole paragraph (smaller, and it cannot
+    re-introduce other character errors in text you did not mean to touch). Returns how many
+    occurrences were replaced and which objectIDs changed.
+
+    Limitation: matching is per text run. If the only occurrences straddle a run boundary (the
+    matched text is split across differently-styled spans), they are NOT replaced and their
+    objectIDs come back under "found_across_runs" — read one with get_object and rewrite it with
+    update_page_content "replace". Distinct from update_page_content "replace" (rewrites a whole
+    paragraph's text) and apply_text_style (changes style, never the words). Concurrency-guarded;
+    force=True only after explicit user confirmation."""
+    return _json(
+        page_edit.find_and_replace(
+            get_backend(), page_id, find, replace, object_id=object_id, force=force
+        )
+    )
+
+
+@logged_tool()
+def batch_update(
+    page_id: str, operations: list[dict], force: bool = False, return_ids: bool = False
+) -> str:
+    """Apply SEVERAL text edits to one page in a single ATOMIC write — all the operations succeed
+    together or, if any is invalid, none is written (and it is one round-trip, not many). Use this
+    when you have multiple edits to the same page — several typo fixes, rewriting a few paragraphs,
+    appending in more than one place — instead of a burst of update_page_content calls.
+
+    operations: a list of dicts, each with an "op":
+      "replace" / "append" / "insert_before" / "insert_after" — as in update_page_content:
+        "content" (text or paragraph dicts) and "target_object_id".
+      "find_replace" — "find" / "replace" (+ optional "object_id" to scope it to one object).
+    Each operation targets objectIDs that ALREADY exist on the page (an object created by an earlier
+    operation in the same batch has no id until the write completes — split such work across two
+    calls). Returns a per-operation summary; set return_ids=True to also get the objectIDs created
+    and the new last_modified_time (one extra read). Concurrency-guarded; force=True only after
+    explicit user confirmation."""
+    return _json(
+        page_edit.batch_update(
+            get_backend(), page_id, operations, force=force, return_ids=return_ids
+        )
+    )
 
 
 @logged_tool()
@@ -581,11 +707,13 @@ def insert_svg_image(
     target_object_id: str = "",
     force: bool = False,
 ) -> str:
-    """Insert a vector graphic into a page from SVG markup — the server renders the SVG to an
-    image and places it on the page. This is the ONLY way to add a picture, and it takes SVG markup
-    you generate directly — NOT a raster image, NOT a photo, NOT base64. Use it for diagrams, maps,
-    charts, simple banners — anything expressible as vectors. It is NOT for a PHOTO or any existing
-    raster/PNG/JPG image: those must be added BY HAND in the OneNote app (tell the user).
+    """Insert a VECTOR graphic into a page from SVG markup — the server renders the SVG to an
+    image and places it on the page. It takes SVG markup you generate directly — NOT a raster
+    image, NOT a photo, NOT base64. Use it for diagrams, maps, charts, simple banners — anything
+    expressible as vectors. For a RASTER image (a photo, or a PNG/JPG/GIF that exists as a FILE on
+    the machine running the server) use insert_image_from_path instead; a raster image that exists
+    ONLY in your context with no file on disk must be added BY HAND in the OneNote app (tell the
+    user).
 
     Placement (like update_page_content):
       "append"        — (default) at the END of an outline; target_object_id optionally names an
@@ -611,6 +739,43 @@ def insert_svg_image(
         force=force,
     )
     return f"image inserted into {page_id}"
+
+
+@logged_tool()
+def insert_image_from_path(
+    page_id: str,
+    path: str,
+    width: float | None = None,
+    height: float | None = None,
+    mode: Literal["append", "insert_before", "insert_after"] = "append",
+    target_object_id: str = "",
+    force: bool = False,
+) -> str:
+    """Insert a raster image (PNG/JPEG/GIF) into a page FROM A LOCAL FILE PATH. The server reads the
+    file's bytes off disk, so they never pass through the model — this is how to add a real raster
+    image efficiently (the old base64 insert was removed because emitting the bytes through the
+    model was unusably slow). `path` is a file on the machine running the server: a photo the user
+    pointed you at, or — in a client that can write files / run code (e.g. an agentic IDE) — an
+    image you produced on disk (a chart rendered by code, a downloaded picture). Do NOT use it to
+    smuggle bytes you only hold in context; if there is no file on disk, there is nothing to insert.
+    For a VECTOR graphic (a diagram/chart you can express as markup) use insert_svg_image instead.
+
+    Placement mirrors insert_svg_image: "append" (default) at an outline's end (target_object_id =
+    an outline objectID, else the page's last outline); "insert_before" / "insert_after" relative to
+    a paragraph objectID. width/height (points) override the image's size; omit to use its own. Only
+    PNG/JPEG/GIF files are accepted (anything else is rejected). Concurrency-guarded; force=True
+    only after explicit user confirmation."""
+    page_edit.insert_image_from_path(
+        get_backend(),
+        page_id,
+        path,
+        width=width,
+        height=height,
+        mode=mode,
+        target_object_id=target_object_id,
+        force=force,
+    )
+    return f"image inserted into {page_id} from {path}"
 
 
 @logged_tool()
