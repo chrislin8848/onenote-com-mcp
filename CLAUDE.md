@@ -89,6 +89,72 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 - **Tier 2 (VM, checkpoint):** `@pytest.mark.windows`, real COM round-trips. Auto-skipped off
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
+## Status (2026-10-05)
+
+**v1.4.0 — big-table READ + WRITE performance (catalog 35 unchanged; Tier-1 393 green; Tier-2
+VM-VALIDATED 73 passed / 8 skip / 0 fail, incl. the live displayed-page guard + text_only reads;
+installer OneNoteMCP-Setup_1.4.0.exe sha256
+6ba212c4a9624d33a5bbb8f6258fecc716c7a284cae4bb3baae8cd6148e9d29f, 24,681,852 B; frozen --selftest
+OK "3 notebooks, vendored").** Driven by a colleague's real report on a production schedule (班表) page (1 table, 106×39 = 4,134 cells,
+~8.8K chars of text): get_page ~3.5M chars, get_table ~2.9M (its "compact" description was false),
+and a single-cell find_and_replace timed out at 60s. All findings VM-measured on the REAL page /
+copies of it (`scripts/probe_bigtable.py`, untracked) — see docs/com-api-reference.md
+"UpdatePageContent has NO sub-outline merge; big tables are slow".
+- **READ: `text_only` on get_page / get_table / get_object (descriptions + instructions now say
+  PREFER it by default for any read).** Plain words: paragraph = string, table = 2-D text array,
+  image = OCR text, file = name; no runs/styles/objectIDs. Real page: get_table 2.9M → 21.9K.
+  get_table also gained a WINDOW (start_row / max_rows / columns, total_rows/total_columns) for
+  both shapes, and a `write_cost` note at >= 1,000 cells (+ "page is OPEN" when it is on screen).
+- **get_page_info summarizes BIG tables (>= 200 cells, `_COLLAPSE_TABLE_CELLS`):** the table is
+  ONE entry with `cell_paragraphs_not_listed` + a `cells_note`; its plain-text cell paragraphs are
+  not enumerated (real page 636,558 → 640 chars). Images / attachments / nested tables inside its
+  cells ARE still listed ("find/delete every image" stays exhaustive); `include_cells=True`
+  restores the full list; small tables unchanged. Chris-approved after checking it keeps the
+  original uses (cell-paragraph ids → find_objects / get_table / positional modify_table).
+- **All tool JSON is now COMPACT** (`_json`: no indent) — pretty-printing was most of a big
+  table's size (full get_table 2.9M → 1.4M).
+- **WRITE: GROUND TRUTH — UpdatePageContent REPLACES a whole outline; there is NO merge by
+  objectID inside it.** Live: an outline carrying only p2 deleted p1/p3; one Row deleted every
+  other row; a Row with one Cell was REJECTED. So a "sparse" payload is IMPOSSIBLE (it was built,
+  probed, and REVERTED — never shipped). Editing one cell = re-submitting the whole table; cost is
+  per OBJECT (~10ms/cell), not per byte (stripping author/timestamp attrs: payload −62%, time
+  unchanged).
+- **WRITE: the dominant factor is whether the page is DISPLAYED in OneNote:** same single-cell
+  edit = 134–141s on screen vs 23–26s with another page shown (OneNote redraws every cell). →
+  **displayed-page guard in `apply_page_edit`** (still the ONLY UpdatePageContent call site): a
+  payload with >= `_BIG_WRITE_OES` (1,000) OEs whose page is `CurrentWindow.CurrentPageId` raises
+  `PageDisplayedError` BEFORE writing, unless `allow_displayed=True` (new param on all 9
+  content-write tools + their service facades). Never blocks small writes, other pages, or when
+  the window can't be read. Chris chose this over auto-NavigateTo (would yank the user's view).
+- **Rejected:** rebuild-as-new-page (17.8s vs ~25s hidden in-place — not worth a new page ID, new
+  objectIDs, lost history); async/background writes (not chosen).
+- **Instructions:** "Reading content: DEFAULT to text_only=True" + "Big tables are slow to WRITE"
+  (batch every change into ONE batch_update / set_rows / set_column; a timed-out write most likely
+  COMPLETED — re-read before retrying; ask the user to switch pages before a big write).
+- **Copy path fix (found by Tier-2 drift):** printout bookkeeping (`isPrintOut` etc.) is now
+  stripped from EVERY copied image, not only when an XPSFile carrier exists — after the Office
+  update OneNote had dissolved the fixture PDF's printout link (no Printout child, no XPSFile,
+  render left as an orphan `isPrintOut` image). Tier-2 `test_windows_files` tolerates that drift.
+- **VM maintenance this round:** an Office update (VM off since 2026-06-18) (1) re-added the
+  broken `HKLM\...\TypeLib\{0EA692EE-…}\1.0` PIA-only key → TYPE_E_LIBNOTREGISTERED; fixed with
+  the product's own `repair_onenote_typelib()` (HKCU shim) over SSH; (2) left OneNote on an
+  "accept license agreement" modal → every write failed with **hrAppInModalUI 0x80042030** (reads
+  still work) — Chris accepted it via SPICE. Remember both when the VM comes back after a while.
+- **hrAppInModalUI (0x80042030) → actionable message** in `_call` ("OneNote is showing a dialog
+  box … close it, then retry") — added after the Tier-2 run (error-text only, Tier-1 covered).
+- **serverInfo.version now = our `__version__`** (was the MCP SDK's "1.27.2"): a client kept
+  showing the OLD tool list/descriptions after the upgrade while `text_only` calls already worked
+  — CONFIRMED: Claude Desktop pins tool definitions PER CONVERSATION (an App restart did not
+  help; a NEW chat saw text_only immediately). After any tool-surface change: start a new chat.
+  Verified on the frozen exe over stdio: serverInfo 1.4.0, 35 tools, text_only present.
+- **Installer post-install page: the one-time "paste this into Claude Desktop → Instructions for
+  Claude" block is REMOVED** (both languages) — Chris confirmed Claude no longer narrates tool
+  names / params / IDs (the server `_SERVER_INSTRUCTIONS` "keep narration BRIEF" nudge suffices;
+  that paragraph STAYS). The page now also says: fully quit + restart the client, and start a NEW
+  conversation after an upgrade (per-conversation tool cache). BOM + CRLF kept.
+- Version 1.3.1→1.4.0 (pyproject + __init__ + .iss + uv.lock). REMAINING: commit + push (Chris's
+  call) and real-Claude-Desktop acceptance on the 班表 page.
+
 ## Status (2026-06-24, later)
 
 **v1.3.1 — instruction-only: get_page_info `preview` is a truncated LABEL, not content

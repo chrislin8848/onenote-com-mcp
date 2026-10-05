@@ -73,6 +73,26 @@ def test_clone_restages_caches_and_never_carries_path_cache(be):
     assert result.page_id == _NEW_PAGE_ID
 
 
+def test_clone_strips_printout_marks_from_an_orphan_render(be, tmp_path):
+    # OneNote can dissolve a printout's link on its own (VM 2026-10-05: the PDF lost its Printout
+    # child, the XPSFile vanished, the render image kept isPrintOut). With NO carrier left, the
+    # copy must still deliver the render as a PLAIN image.
+    path = tmp_path / f"page_{_sanitize(PAGE_1_ID)}.xml"
+    root = etree.fromstring(path.read_bytes(), parser=_PARSER)
+    for xps in root.findall(qn("XPSFile")):
+        root.remove(xps)
+    for printout in list(root.iter(qn("Printout"))):
+        printout.getparent().remove(printout)
+    path.write_bytes(etree.tostring(root, xml_declaration=True, encoding="UTF-8"))
+
+    copy.transfer_page(be, PAGE_1_ID, _TARGET_SECTION)
+
+    renders = _sent_payload(be).findall(qn("Image"))
+    assert len(renders) == 1
+    for attr in ("xpsFileIndex", "isPrintOut", "originalPageNumber"):
+        assert renders[0].get(attr) is None
+
+
 def test_clone_flattens_printouts_silently(be):
     result = copy.transfer_page(be, PAGE_1_ID, _TARGET_SECTION)
     sent = _sent_payload(be)

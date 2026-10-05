@@ -139,3 +139,20 @@ def test_call_unwraps_excepinfo_scode():
 
     with pytest.raises(ConcurrencyError):
         be._call("UpdatePageContent", stale_write)
+
+
+def test_call_explains_a_modal_dialog_refusal():
+    # VM 2026-10-05: with a license-agreement prompt open, every write came back as
+    # DISP_E_EXCEPTION carrying hrAppInModalUI — surfaced as an actionable message
+    from onenote_com_mcp.errors import OneNoteComError
+
+    be = _win32_backend()
+
+    def blocked_write():
+        raise Exception(
+            -2147352567, "exception occurred", (0, None, None, None, 0, -2147213264), None
+        )
+
+    with pytest.raises(OneNoteComError, match="dialog box") as info:
+        be._call("UpdatePageContent", blocked_write)
+    assert info.value.hresult == -2147213264

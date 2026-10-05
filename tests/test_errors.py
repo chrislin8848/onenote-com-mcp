@@ -24,3 +24,12 @@ def test_non_retryable():
     assert not is_retryable_hresult(None)
     assert not is_retryable_hresult(0)
     assert not is_retryable_hresult(0x80004005)  # E_FAIL — do not retry
+
+
+def test_modal_ui_hresult_both_forms():
+    from onenote_com_mcp.errors import HR_APP_IN_MODAL_UI, is_modal_ui_hresult
+
+    assert is_modal_ui_hresult(HR_APP_IN_MODAL_UI)
+    assert is_modal_ui_hresult(-2147213264)  # the signed form pywin32 surfaced on the VM
+    assert not is_modal_ui_hresult(None)
+    assert not is_modal_ui_hresult(0x80042010)

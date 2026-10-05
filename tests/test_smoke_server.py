@@ -102,6 +102,32 @@ def test_contrastive_borders_present(tools):
     # get_table (single-table compact read) borders get_page both ways
     assert "get_table" in tools["get_page"].description
     assert "get_page" in tools["get_table"].description
+    # get_table's full model is NOT compact on a big table — text_only is the compact data read
+    assert "text_only" in tools["get_table"].description
+    assert "NOT a compact read" in tools["get_table"].description
+    assert "batch_update" in tools["find_and_replace"].description  # big-table write cost
+    # get_page_info: big tables are summarized; include_cells expands them
+    assert "include_cells" in tools["get_page_info"].inputSchema["properties"]
+    assert "BIG TABLES" in tools["get_page_info"].description
+    # displayed-page guard: every content-write tool exposes the override
+    for name in (
+        "update_page_content",
+        "find_and_replace",
+        "batch_update",
+        "create_table",
+        "modify_table",
+        "delete_inline_content",
+        "insert_svg_image",
+        "insert_image_from_path",
+        "apply_text_style",
+    ):
+        assert "allow_displayed" in tools[name].inputSchema["properties"], name
+    # text_only is the encouraged default read on all three content reads
+    for name in ("get_page", "get_table", "get_object"):
+        assert "text_only" in tools[name].inputSchema["properties"]
+        assert "PREFER" in tools[name].description or "PREFERRED" in tools[name].description
+    params = tools["get_table"].inputSchema["properties"]
+    assert {"text_only", "start_row", "max_rows", "columns"} <= set(params)
     # file discovery (get_page_info) vs file-extraction precheck (get_page_files_info): the
     # precheck points back to the inventory for plain discovery
     assert "get_page_info" in tools["get_page_files_info"].description
@@ -197,6 +223,12 @@ def test_server_instructions_present():
     assert "reorder_columns" in mcp.instructions
     assert "set_column" in mcp.instructions
     assert "get_table" in mcp.instructions
+    assert "text_only=True" in mcp.instructions
+    # big-table writes: batch them, and a timed-out write probably completed (verify, don't retry)
+    assert "Big tables are slow to WRITE" in mcp.instructions
+    assert "DEFAULT to text_only=True" in mcp.instructions
+    assert "OPEN on the user's screen" in mcp.instructions
+    assert "still COMPLETED" in mcp.instructions
     # pacing: heavy copy/write calls go in small batches (the server also serializes them via a
     # process-wide lock), because OneNote's COM is single-threaded
     assert "single-threaded" in mcp.instructions.lower()
@@ -237,3 +269,19 @@ def test_selftest_reports_failure_cleanly(monkeypatch, capsys):
         server.main()
     assert excinfo.value.code == 1
     assert "SELFTEST FAIL" in capsys.readouterr().err
+
+
+def test_server_info_reports_our_version_not_the_sdk_version():
+    # a client shows serverInfo.version — it must identify THIS build (stale-tool-list triage)
+    import asyncio
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from onenote_com_mcp import __version__
+
+    async def handshake():
+        async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+            return (await client.initialize()).serverInfo
+
+    info = asyncio.run(handshake())
+    assert info.name == "onenote" and info.version == __version__

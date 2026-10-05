@@ -15,6 +15,7 @@ verify the service wiring and field projection.
 from __future__ import annotations
 
 import base64
+import json
 
 import pytest
 
@@ -147,6 +148,74 @@ def test_get_table_returns_one_table_compactly(fixtures_dir):
     assert table["rows"][0][0]["text"] == "DAY 1"
 
 
+def _table_id(fixtures_dir):
+    page = read.get_page(_be(fixtures_dir), TABLE_PAGE_ID)
+    return next(b["object_id"] for b in page["outlines"][0]["blocks"] if b["type"] == "table")
+
+
+def test_get_table_text_only_is_a_plain_string_grid(fixtures_dir):
+    # text_only: just each cell's text — no runs / style / objectIDs (the compact data read)
+    tid = _table_id(fixtures_dir)
+    full = read.get_table(_be(fixtures_dir), TABLE_PAGE_ID, tid)["table"]
+    out = read.get_table(_be(fixtures_dir), TABLE_PAGE_ID, tid, text_only=True)
+    table = out["table"]
+    assert table["object_id"] == tid
+    assert table["total_rows"] == 10 and table["total_columns"] == 2
+    assert table["rows"] == [[c["text"] for c in row] for row in full["rows"]]
+    assert all(isinstance(x, str) for row in table["rows"] for x in row)
+    assert "row_object_ids" not in table and "paragraphs" not in json.dumps(table)
+    compact, verbose = (len(json.dumps(t, ensure_ascii=False)) for t in (table, full))
+    assert compact < verbose / 5
+
+
+def test_get_table_window_rows_and_columns(fixtures_dir):
+    tid = _table_id(fixtures_dir)
+    grid = read.get_table(_be(fixtures_dir), TABLE_PAGE_ID, tid, text_only=True)["table"]["rows"]
+    out = read.get_table(
+        _be(fixtures_dir), TABLE_PAGE_ID, tid, text_only=True, start_row=2, max_rows=3, columns=[1]
+    )["table"]
+    assert out["rows"] == [[grid[r][1]] for r in (2, 3, 4)]
+    assert out["start_row"] == 2 and out["returned_rows"] == 3
+    assert out["column_indices"] == [1] and out["total_rows"] == 10
+    # the full model windows the same way, keeping row ids / column widths parallel to the slice
+    full = read.get_table(
+        _be(fixtures_dir), TABLE_PAGE_ID, tid, start_row=9, max_rows=5, columns=[1, 0]
+    )["table"]
+    assert len(full["rows"]) == 1 and len(full["row_object_ids"]) == 1
+    assert [c["text"] for c in full["rows"][0]] == [grid[9][1], grid[9][0]]
+    assert len(full["columns"]) == 2 and full["total_columns"] == 2
+
+
+def test_get_table_flags_write_cost_only_on_a_big_table(fixtures_dir, monkeypatch):
+    tid = _table_id(fixtures_dir)
+    small = read.get_table(_be(fixtures_dir), TABLE_PAGE_ID, tid, text_only=True)["table"]
+    assert "write_cost" not in small  # 10×2 — edits are quick
+    monkeypatch.setattr(read, "_BIG_TABLE_CELLS", 20)
+    big = read.get_table(_be(fixtures_dir), TABLE_PAGE_ID, tid, text_only=True)["table"]
+    assert "batch" in big["write_cost"] and "20 cells" in big["write_cost"]
+    assert "OPEN in OneNote" not in big["write_cost"]  # the fixture's current page is another one
+
+
+def test_get_table_write_cost_says_when_the_page_is_on_screen(fixtures_dir, monkeypatch):
+    from onenote_com_mcp.backend.base import CurrentWindowIds
+
+    be = _be(fixtures_dir)
+    be.get_current_window_ids = lambda: CurrentWindowIds(None, None, None, TABLE_PAGE_ID)
+    monkeypatch.setattr(read, "_BIG_TABLE_CELLS", 20)
+    out = read.get_table(be, TABLE_PAGE_ID, _table_id(fixtures_dir), text_only=True)
+    assert "switch OneNote to another page" in out["table"]["write_cost"]
+
+
+def test_get_table_rejects_bad_window(fixtures_dir):
+    tid = _table_id(fixtures_dir)
+    with pytest.raises(ValueError, match="out of range"):
+        read.get_table(_be(fixtures_dir), TABLE_PAGE_ID, tid, columns=[2])
+    with pytest.raises(ValueError, match="start_row"):
+        read.get_table(_be(fixtures_dir), TABLE_PAGE_ID, tid, start_row=-1)
+    with pytest.raises(ValueError, match="max_rows"):
+        read.get_table(_be(fixtures_dir), TABLE_PAGE_ID, tid, max_rows=0)
+
+
 def test_get_table_raises_for_unknown_table_id(fixtures_dir):
     from onenote_com_mcp.errors import NodeNotFoundError
 
@@ -178,6 +247,66 @@ def test_get_object_returns_a_table(fixtures_dir):
     assert obj["type"] == "table"
     assert obj["object_id"] == table_id
     assert len(obj["rows"]) == 10
+
+
+def _texts(blocks):
+    """Flatten a full get_page outline's blocks to the text_only shape, for comparison."""
+    out = []
+    for b in blocks:
+        if b["type"] == "table":
+            item = {"table": [[c["text"] for c in row] for row in b["rows"]]}
+        elif b["type"] == "image":
+            item = {"image": b["ocr_text"] or ""}
+        elif b["type"] == "file":
+            item = {"file": b["preferred_name"]}
+        elif b.get("children"):
+            item = {"text": b["text"]}
+        else:
+            item = b["text"]
+        if b.get("children"):
+            item["children"] = _texts(b["children"])
+        out.append(item)
+    return out
+
+
+@pytest.mark.parametrize("page_id", ["MIXED_PAGE_ID", "TABLE_PAGE_ID", "IMAGE_PAGE_ID"])
+def test_get_page_text_only_is_the_words_of_the_full_read(fixtures_dir, page_id):
+    pid = globals()[page_id]
+    full = read.get_page(_be(fixtures_dir), pid)
+    text = read.get_page(_be(fixtures_dir), pid, text_only=True)
+    assert text["id"] == pid and text["last_modified_time"] == full["last_modified_time"]
+    assert text["title"] == (full["title"]["text"] if full["title"] else None)
+    assert text["outlines"] == [_texts(o["blocks"]) for o in full["outlines"]]
+    blob = json.dumps(text, ensure_ascii=False)
+    assert "object_id" not in blob and "runs" not in blob and "font" not in blob
+    assert len(blob) < len(json.dumps(full, ensure_ascii=False)) / 3
+
+
+def test_get_page_text_only_shows_tables_and_images_compactly(fixtures_dir):
+    table = read.get_page(_be(fixtures_dir), TABLE_PAGE_ID, text_only=True)
+    grid = next(b["table"] for o in table["outlines"] for b in o if isinstance(b, dict))
+    assert grid[0][0] == "DAY 1" and grid[9][1] == "範例飯店"
+    images = read.get_page(_be(fixtures_dir), IMAGE_PAGE_ID, text_only=True)
+    assert any(isinstance(b, dict) and "image" in b for o in images["outlines"] for b in o)
+
+
+def test_get_page_text_only_lists_page_level_objects(fixtures_dir):
+    out = read.get_page(_be(fixtures_dir), PRINTOUT_PAGE_ID, text_only=True)
+    full = read.get_page(_be(fixtures_dir), PRINTOUT_PAGE_ID)
+    assert len(out["page_level_images"]) == len(full["page_level_images"]) > 0
+    assert out["page_level_files"] == [f["preferred_name"] for f in full["page_level_files"]]
+
+
+def test_get_object_text_only(fixtures_dir):
+    page = read.get_page(_be(fixtures_dir), MIXED_PAGE_ID)
+    para = page["outlines"][0]["blocks"][0]
+    out = read.get_object(_be(fixtures_dir), MIXED_PAGE_ID, para["object_id"], text_only=True)
+    assert out["object"] == para["text"]
+
+    tpage = read.get_page(_be(fixtures_dir), TABLE_PAGE_ID)
+    tbl = next(b for b in tpage["outlines"][0]["blocks"] if b["type"] == "table")
+    obj = read.get_object(_be(fixtures_dir), TABLE_PAGE_ID, tbl["object_id"], text_only=True)
+    assert obj["object"] == {"table": [[c["text"] for c in row] for row in tbl["rows"]]}
 
 
 def test_get_object_unknown_id_raises(fixtures_dir):
@@ -398,3 +527,73 @@ def test_get_page_info_matches_inline_image_page(fixtures_dir):
     assert all(not o["page_level"] for o in images)
     assert all(o["delete_with"] == "delete_inline_content" for o in images)
     assert all(o["object_id"] for o in images)
+
+
+# --- get_page_info: big-table cell paragraphs are summarized, not listed --------------------
+
+
+def _cell_paragraph_ids(fixtures_dir):
+    full = read.get_page(_be(fixtures_dir), TABLE_PAGE_ID)
+    table = next(b for b in full["outlines"][0]["blocks"] if b["type"] == "table")
+    return table["object_id"], {
+        p["object_id"] for row in table["rows"] for c in row for p in c["paragraphs"]
+    }
+
+
+def test_get_page_info_small_table_still_lists_every_cell(fixtures_dir):
+    # 10×2 is under the threshold: unchanged behaviour, every cell paragraph is listed
+    _, cell_ids = _cell_paragraph_ids(fixtures_dir)
+    listed = {
+        o["object_id"] for o in read.get_page_info(_be(fixtures_dir), TABLE_PAGE_ID)["objects"]
+    }
+    assert cell_ids <= listed
+
+
+def test_get_page_info_big_table_summarizes_its_cells(fixtures_dir, monkeypatch):
+    monkeypatch.setattr(read, "_COLLAPSE_TABLE_CELLS", 10)
+    tid, cell_ids = _cell_paragraph_ids(fixtures_dir)
+    objs = read.get_page_info(_be(fixtures_dir), TABLE_PAGE_ID)["objects"]
+    listed = {o["object_id"] for o in objs}
+    assert not (cell_ids & listed), "no cell paragraph is enumerated"
+    entry = next(o for o in objs if o["object_id"] == tid)
+    assert entry["cell_paragraphs_not_listed"] == len(cell_ids)
+    assert "find_objects" in entry["cells_note"] and "include_cells" in entry["cells_note"]
+
+    expanded = read.get_page_info(_be(fixtures_dir), TABLE_PAGE_ID, include_cells=True)["objects"]
+    assert cell_ids <= {o["object_id"] for o in expanded}
+    assert "cell_paragraphs_not_listed" not in next(o for o in expanded if o["object_id"] == tid)
+
+
+def test_get_page_info_big_table_still_lists_images_in_its_cells(tmp_path, monkeypatch):
+    # "find/delete every image" must stay complete: an image inside a collapsed table's cell is
+    # still an inventory entry
+    from onenote_com_mcp.backend.fixture import _sanitize
+
+    monkeypatch.setattr(read, "_COLLAPSE_TABLE_CELLS", 2)
+    pid = "{P}{1}{B0}"
+
+    def cell(oid, inner):
+        return (
+            f'<one:Cell objectID="{{C{oid}}}"><one:OEChildren>{inner}</one:OEChildren></one:Cell>'
+        )
+
+    text = '<one:OE objectID="{{T{0}}}"><one:T><![CDATA[x{0}]]></one:T></one:OE>'
+    img = (
+        '<one:OE objectID="{IMG-OE}"><one:Image>'
+        '<one:CallbackID callbackID="{CB}"/></one:Image></one:OE>'
+    )
+    xml = (
+        '<?xml version="1.0"?><one:Page '
+        'xmlns:one="http://schemas.microsoft.com/office/onenote/2013/onenote" '
+        f'ID="{pid}" lastModifiedTime="2026-10-05T00:00:00.000Z"><one:Outline objectID="{{O}}">'
+        '<one:OEChildren><one:OE objectID="{TOE}"><one:Table objectID="{TBL}"><one:Columns>'
+        '<one:Column index="0" width="50"/><one:Column index="1" width="50"/></one:Columns>'
+        f'<one:Row objectID="{{R1}}">{cell(1, text.format(1))}{cell(2, img)}</one:Row>'
+        f'<one:Row objectID="{{R2}}">{cell(3, text.format(3))}{cell(4, text.format(4))}</one:Row>'
+        "</one:Table></one:OE></one:OEChildren></one:Outline></one:Page>"
+    )
+    (tmp_path / f"page_{_sanitize(pid)}.xml").write_text(xml, encoding="utf-8")
+    objs = read.get_page_info(FixtureBackend(tmp_path), pid)["objects"]
+    assert [o["type"] for o in objs] == ["table", "image"]
+    assert objs[0]["cell_paragraphs_not_listed"] == 3
+    assert objs[1]["object_id"] == "{IMG-OE}"

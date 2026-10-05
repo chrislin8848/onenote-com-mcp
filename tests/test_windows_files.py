@@ -40,10 +40,18 @@ TEMP_PREFIX = "P5B暫存"
 PAGE_1_KINDS = {
     "濁水溪發電之旅.txt": ("inline", "attachment_icon"),
     "丘山行問卷_中英對照.pdf": ("inline", "attachment_icon"),
-    "A4文宣-25.7.8月分享會.pdf": ("inline", "printout"),
+    "A4文宣-25.7.8月分享會.pdf": ("inline", "printout"),  # may drift — see _kinds_match
     "丘山行Word頁籤(中文) .docx": ("page_level", "attachment_icon"),
     "2026 客人問卷_NEW.xlsx": ("page_level", "attachment_icon"),
 }
+
+
+def _kinds_match(actual: dict) -> bool:
+    """PAGE_1_KINDS, tolerating ONE known drift: OneNote can dissolve the PDF printout's link on its
+    own (VM 2026-10-05, after an Office update — Printout child + XPSFile gone, the render left as
+    an orphan image), so that PDF may now read as a plain attachment_icon."""
+    drifted = {**PAGE_1_KINDS, "A4文宣-25.7.8月分享會.pdf": ("inline", "attachment_icon")}
+    return actual in (PAGE_1_KINDS, drifted)
 
 
 def _find(nodes, name):
@@ -111,7 +119,7 @@ def _poll(fn, timeout_s: float = 30.0, interval_s: float = 2.0):
 
 def test_files_info_live_inventory(backend, attachment_pages):
     info = files.get_page_files_info(backend, attachment_pages[PAGE_1])
-    assert {e["preferred_name"]: (e["placement"], e["kind"]) for e in info} == PAGE_1_KINDS
+    assert _kinds_match({e["preferred_name"]: (e["placement"], e["kind"]) for e in info})
     assert all(e["object_id"] for e in info), "every entry must carry a deletable object_id"
     # locally-inserted files: their caches must be on this machine's disk
     unavailable = [e["preferred_name"] for e in info if not e["cache_available"]]

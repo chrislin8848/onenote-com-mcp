@@ -35,6 +35,7 @@ from onenote_com_mcp.errors import (
     OneNoteComError,
     OneNoteError,
     is_concurrency_hresult,
+    is_modal_ui_hresult,
     is_retryable_hresult,
 )
 
@@ -151,6 +152,13 @@ class Win32ComBackend(OneNoteBackend):
                         f"{name} refused: the target changed since it was read "
                         "(dateExpectedLastModified mismatch). Re-read and retry; force only "
                         "with explicit user approval."
+                    ) from exc
+                if is_modal_ui_hresult(hr):
+                    raise OneNoteComError(
+                        f"{name} failed: OneNote is showing a dialog box (e.g. a sign-in, update "
+                        "or license-agreement prompt) and refuses changes until it is closed. Ask "
+                        "the user to switch to the OneNote window, close the dialog, then retry.",
+                        hresult=hr,
                     ) from exc
                 raise OneNoteComError(f"{name} failed", hresult=hr) from exc
         raise OneNoteComError(

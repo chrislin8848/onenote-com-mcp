@@ -165,6 +165,48 @@ any doc sketch above:
   failed). The fix replenishes a cleared cell with a minimal empty paragraph. (`modify_table`
   add/delete column/row edits ride the same `UpdatePageContent` core; no new COM signature.)
 
+## VM-validated: UpdatePageContent has NO sub-outline merge; big tables are slow (2026-10-05)
+
+Probed (`scripts/probe_bigtable.py`) after a real report: a single-cell `find_and_replace` on a
+106×39 table page (4,134 cells) timed out at the client's 60s.
+
+- **An `one:Outline` in the payload REPLACES that outline's whole content — there is no merge
+  by objectID below the outline.** Live: an outline carrying only p2 (of p1/p2/p3) → p1 and p3
+  DELETED; a table carrying only one full `one:Row` → every other row DELETED; a `one:Row`
+  carrying only one of its `one:Cell`s → REJECTED. So the `changed_objects` granularity (whole
+  page-level objects) is the floor: editing ONE cell re-submits the whole outline = the whole
+  table. A "sparse" payload is NOT a valid optimization — it destroys content.
+- **UpdatePageContent cost scales with the table's cell count, not the payload bytes.** Creating
+  a 4,134-cell table (414K-char payload) took 39s in one call (~10ms/cell). Every write that
+  touches such a table's outline pays this again.
+- **Editing an EXISTING big outline is ~2x slower than creating it:** a single-cell
+  find_and_replace on a copy of the real 106×39 page = 41–46s in UpdatePageContent (48–50s
+  end-to-end with the read), while transplanting the whole page onto a blank page took 19s.
+  Close to — and on a slower PC over — Claude Desktop's 60s client timeout. The write is NOT
+  cancelled by a client timeout; it completes in OneNote.
+- **Stripping per-object author/timestamp attributes does NOT help:** payload 3.6M → 1.37M
+  chars, write time unchanged (40.7–45.3s vs 41.4–41.9s). Cost is per object, not per byte.
+  (OneNote kept the untouched cells' author/creationTime when they were omitted.)
+- **Reads are cheap by comparison:** GetPageContent of the real page = 4.0M chars in ~2.5s;
+  `get_table(text_only=True)` = 21.9K chars vs 1.40M (full, compact JSON) / ~2.9M (old,
+  indented).
+- **THE dominant factor: is the page DISPLAYED in OneNote?** Same single-cell edit on the same
+  copy, alternating: page on screen = **141s / 134s**; another page on screen = **23s / 26s**
+  (OneNote redraws every cell of the rewritten box). The earlier 41–54s figures were taken with
+  an unknown window state. The user's 60s timeout was almost certainly "editing the 班表 while
+  looking at it". → `apply_page_edit` refuses a big write (>= 1,000 OEs in the payload) to the
+  page `Windows.CurrentWindow.CurrentPageId` reports, with `PageDisplayedError`, unless
+  `allow_displayed=True`; `get_table`'s `write_cost` note says so up front.
+- **Rebuild-as-new-page is not worth it:** read → edit in memory → transplant onto a blank page
+  → delete the old one = 17.8s total (2.8 + 14.2 + 0.8) with the old page hidden — only ~6s
+  faster than an in-place edit with the page hidden, at the cost of a new page ID, new objectIDs
+  for every cell, lost page history and a full-page re-sync. Rejected.
+- **Mitigation is behavioural, not a payload trick:** batch every change to a big table into ONE
+  write (batch_update / set_rows / set_column), and treat a timed-out write as probably-landed
+  (re-read before retrying). `get_table` emits a `write_cost` note at >= 1,000 cells. A user can
+  also split a huge table into several separate content boxes (outlines) — the outline, not the
+  table, is the rewrite unit.
+
 ## VM-validated COM behaviors (Phase 5 Tier-2, 2026-06-11)
 
 - **`OpenHierarchy(cftNotebook)` cannot create notebooks on this M365 build** — it returns

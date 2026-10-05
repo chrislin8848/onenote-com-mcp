@@ -1,36 +1,18 @@
 ﻿OneNote MCP Server 已安裝完成，並已在偵測到的用戶端（Claude Desktop /
-Antigravity）註冊。請重新啟動對應的用戶端以載入設定。日後才安裝新用戶端，
-從開始功能表點「OneNoteMCP — 重新偵測並設定」即可補上。
-
-建議（只需一次，雲端同步）：到 Claude Desktop → Settings → General →
-「Instructions for Claude」貼上下面這段，讓 Claude 操作 OneNote 時更精簡。
-
-──────── 請複製以下整段 ────────
-執行 OneNote 操作時回答力求簡潔。不要列出實作細節（工具名稱、參數、
-內部 object_id / page_id）；只用白話一句說明正在做什麼（例如「正在更新
-D1～D6 的日期」），完成後用頁面名稱回報；除非我要求，不要顯示內部 ID。
-────────────────────────────
+Antigravity）註冊。請完全結束並重新啟動對應的用戶端以載入設定；升級後請開
+「新對話」，舊對話不會看到新版功能。日後才安裝新用戶端，從開始功能表點
+「OneNoteMCP — 重新偵測並設定」即可補上。
 
 作者：Chris Lin
 
 ============================================================
 
 OneNote MCP Server has been installed and registered with the
-detected client(s) (Claude Desktop / Antigravity). Please restart
-the relevant client to load the configuration. If you install a new
-client later, run "OneNoteMCP — 重新偵測並設定" (Re-detect and
-configure) from the Start Menu to register it.
-
-Recommended (one-time, syncs to the cloud): in Claude Desktop →
-Settings → General → "Instructions for Claude", paste the block
-below so Claude works more concisely with OneNote.
-
-──────── copy the whole block below ────────
-Keep answers concise when performing OneNote operations. Do not list
-implementation details (tool names, parameters, internal object_id /
-page_id); say what you are doing in one plain sentence (e.g. "updating
-the dates for D1-D6"), and report back by page name when done. Do not
-show internal IDs unless I ask.
-────────────────────────────
+detected client(s) (Claude Desktop / Antigravity). Please fully quit
+and restart the relevant client to load the configuration; after an
+upgrade, start a NEW conversation — existing conversations keep the
+old tool list. If you install a new client later, run
+"OneNoteMCP — 重新偵測並設定" (Re-detect and configure) from the
+Start Menu to register it.
 
 Author: Chris Lin

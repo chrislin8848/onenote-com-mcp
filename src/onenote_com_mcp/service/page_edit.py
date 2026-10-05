@@ -28,7 +28,7 @@ from lxml import etree
 
 from onenote_com_mcp.backend.base import OneNoteBackend
 from onenote_com_mcp.enums import PageInfo
-from onenote_com_mcp.errors import NodeNotFoundError, OneNoteComError
+from onenote_com_mcp.errors import NodeNotFoundError, OneNoteComError, PageDisplayedError
 from onenote_com_mcp.xmllayer.build import (
     _cell_runs,
     make_image,
@@ -94,6 +94,31 @@ def parse_onenote_datetime(value: str | None) -> _dt.datetime | None:
         return None
 
 
+# A write whose payload holds at least this many paragraphs (every table cell has one) is "big":
+# VM ground truth 2026-10-05 — single-cell edit of a 4,134-cell table took 134-141s while the page
+# was DISPLAYED in OneNote vs 23-26s while another page was (OneNote redraws every cell). Big
+# writes to the page the user is looking at are refused unless allow_displayed.
+_BIG_WRITE_OES = 1000
+
+
+def _refuse_if_displayed(backend: OneNoteBackend, page_id: str, payload: etree._Element) -> None:
+    n = sum(1 for _ in payload.iter(qn("OE")))
+    if n < _BIG_WRITE_OES:
+        return
+    try:
+        current = backend.get_current_window_ids().page_id
+    except Exception:  # noqa: BLE001 — no window / any read hiccup: the check never blocks a write
+        return
+    if current == page_id:
+        raise PageDisplayedError(
+            f"not written: this edit rewrites a large content box ({n} paragraphs/cells) and the "
+            "page is OPEN in OneNote right now — on screen OneNote redraws every cell, which makes "
+            "the write about 5x slower (minutes on a big table; it would time out). Ask the user "
+            "to switch OneNote to any OTHER page, then call again. Only if the user wants to keep "
+            "this page open, retry with allow_displayed=True (expect it to be slow)."
+        )
+
+
 def apply_page_edit(
     backend: OneNoteBackend,
     page_id: str,
@@ -102,6 +127,7 @@ def apply_page_edit(
     strategy: PayloadStrategy | None = None,
     force: bool = False,
     return_ids: bool = False,
+    allow_displayed: bool = False,
 ) -> dict[str, Any] | None:
     """Read the page, mutate its XML tree in place, write it back in ONE guarded call.
 
@@ -113,7 +139,10 @@ def apply_page_edit(
     When ``return_ids`` is set, the page is re-read after the write and the objectIDs that appeared
     (e.g. a newly appended paragraph/table/image) are returned with the page's new
     ``last_modified_time``. It is opt-in because it costs an extra read, and the new stamp can lag
-    (OneNote's GetPageContent is refresh-lazy right after a programmatic write — VM caveat)."""
+    (OneNote's GetPageContent is refresh-lazy right after a programmatic write — VM caveat).
+
+    A BIG write (>= ``_BIG_WRITE_OES`` paragraphs in the payload) to the page currently displayed
+    in OneNote raises PageDisplayedError before anything is written, unless ``allow_displayed``."""
     strategy = strategy or DEFAULT_PAYLOAD_STRATEGY
     read_info = PageInfo.piBinaryData if strategy == "whole_page" else PageInfo.piBasic
     xml = backend.get_page_content(page_id, read_info)
@@ -129,6 +158,8 @@ def apply_page_edit(
         return None
     if strategy == "changed_objects":
         _prune_unchanged_content(tree, before)
+    if not allow_displayed:
+        _refuse_if_displayed(backend, page_id, tree)
     inline_image_binaries(backend, page_id, tree)
     etree.cleanup_namespaces(tree)  # grafted fragments carry redundant xmlns:one declarations
     payload = etree.tostring(tree, xml_declaration=True, encoding="UTF-8").decode("utf-8")
@@ -669,6 +700,7 @@ def edit_page_content(
     *,
     target_object_id: str = "",
     force: bool = False,
+    allow_displayed: bool = False,
     return_ids: bool = False,
 ) -> dict[str, Any] | None:
     """See :func:`content_mutator` for the mode/content contract."""
@@ -678,6 +710,7 @@ def edit_page_content(
         content_mutator(content, mode, target_object_id),
         force=force,
         return_ids=return_ids,
+        allow_displayed=allow_displayed,
     )
 
 
@@ -735,6 +768,7 @@ def find_and_replace(
     *,
     object_id: str = "",
     force: bool = False,
+    allow_displayed: bool = False,
 ) -> dict[str, Any]:
     """Replace text occurrences of ``find`` with ``replace`` IN PLACE, per run (each run keeps its
     style), in ONE guarded write. Scope is the whole page, or one object's subtree when
@@ -750,7 +784,7 @@ def find_and_replace(
         if stats["replacements"] == 0:
             raise _NoWrite
 
-    apply_page_edit(backend, page_id, mutate, force=force)
+    apply_page_edit(backend, page_id, mutate, force=force, allow_displayed=allow_displayed)
     return stats
 
 
@@ -763,6 +797,7 @@ def batch_update(
     operations: list[dict[str, Any]],
     *,
     force: bool = False,
+    allow_displayed: bool = False,
     return_ids: bool = False,
 ) -> dict[str, Any]:
     """Apply several content edits to a page in ONE read-mutate-write — ATOMIC (every operation is
@@ -803,7 +838,14 @@ def batch_update(
         for m in mutators:
             m(tree)
 
-    result = apply_page_edit(backend, page_id, mutate, force=force, return_ids=return_ids)
+    result = apply_page_edit(
+        backend,
+        page_id,
+        mutate,
+        force=force,
+        return_ids=return_ids,
+        allow_displayed=allow_displayed,
+    )
     out: dict[str, Any] = {"applied": len(operations), "operations": summary}
     if return_ids and result is not None:
         out["new_object_ids"] = result["new_object_ids"]
@@ -821,6 +863,7 @@ def add_table(
     col_widths: list[float] | None = None,
     target_object_id: str = "",
     force: bool = False,
+    allow_displayed: bool = False,
 ) -> None:
     """Create a NEW one:Table (wrapped in its own one:OE). No target → the page's last outline
     (created if none); an outline objectID → that outline. To change an EXISTING table's shape
@@ -849,7 +892,7 @@ def add_table(
         oe.append(make_table(rows, borders_visible, has_header_row, col_widths))
         _outline_children(outline).append(oe)
 
-    apply_page_edit(backend, page_id, mutate, force=force)
+    apply_page_edit(backend, page_id, mutate, force=force, allow_displayed=allow_displayed)
 
 
 _TABLE_OPS = (
@@ -888,6 +931,7 @@ def modify_table(
     count: int = 1,
     width: float | None = None,
     force: bool = False,
+    allow_displayed: bool = False,
 ) -> None:
     """Change an EXISTING table's shape OR content in place (its objectID + every cell's identity
     are kept).
@@ -959,7 +1003,7 @@ def modify_table(
         else:  # delete_columns
             _delete_table_columns(table, indices)
 
-    apply_page_edit(backend, page_id, mutate, force=force)
+    apply_page_edit(backend, page_id, mutate, force=force, allow_displayed=allow_displayed)
 
 
 # Inline objects delete_inline_content can remove (an inline table is the one:Table; an inline
@@ -969,7 +1013,12 @@ _INLINE_DELETABLE = frozenset({"Table", "OE", "Image", "InsertedFile", "InkDrawi
 
 
 def delete_inline_content(
-    backend: OneNoteBackend, page_id: str, object_id: str, *, force: bool = False
+    backend: OneNoteBackend,
+    page_id: str,
+    object_id: str,
+    *,
+    force: bool = False,
+    allow_displayed: bool = False,
 ) -> None:
     """Delete ONE inline object from inside an outline — a table, an inline image/attachment, or a
     paragraph — by objectID, via the edit seam (NOT DeletePageContent, which COM refuses for inline
@@ -998,7 +1047,7 @@ def delete_inline_content(
             )
         remove_content_element(target)
 
-    apply_page_edit(backend, page_id, mutate, force=force)
+    apply_page_edit(backend, page_id, mutate, force=force, allow_displayed=allow_displayed)
 
 
 _IMAGE_MODES = ("append", "insert_before", "insert_after")
@@ -1014,6 +1063,7 @@ def insert_svg_image(
     mode: str = "append",
     target_object_id: str = "",
     force: bool = False,
+    allow_displayed: bool = False,
 ) -> None:
     """Rasterize SVG markup to a PNG and place it (inline one:Data) wrapped in its own one:OE — the
     OE carries the deletable objectID (a one:Image has none). Vector-only: an SVG that embeds a
@@ -1041,7 +1091,7 @@ def insert_svg_image(
         else:  # insert_after
             _require_oe(tree, target_object_id, mode).addnext(oe)
 
-    apply_page_edit(backend, page_id, mutate, force=force)
+    apply_page_edit(backend, page_id, mutate, force=force, allow_displayed=allow_displayed)
 
 
 def insert_image_from_path(
@@ -1054,6 +1104,7 @@ def insert_image_from_path(
     mode: str = "append",
     target_object_id: str = "",
     force: bool = False,
+    allow_displayed: bool = False,
 ) -> None:
     """Insert a raster image FILE FROM DISK (PNG/JPEG/GIF). The server reads the bytes off ``path``
     (on the machine running the server), so they never pass through the model — the bottleneck that
@@ -1079,7 +1130,7 @@ def insert_image_from_path(
         else:  # insert_after
             _require_oe(tree, target_object_id, mode).addnext(oe)
 
-    apply_page_edit(backend, page_id, mutate, force=force)
+    apply_page_edit(backend, page_id, mutate, force=force, allow_displayed=allow_displayed)
 
 
 def _under_title(el: etree._Element) -> bool:
@@ -1195,6 +1246,7 @@ def apply_text_style(
     columns: list[int] | None = None,
     scope_object_id: str = "",
     force: bool = False,
+    allow_displayed: bool = False,
 ) -> dict[str, Any]:
     """Patch text styling (font / size / color / highlight / bold / italic / underline /
     strikethrough) and/or table-cell background (cell_shading) across scope, in ONE
@@ -1333,6 +1385,6 @@ def apply_text_style(
                     qd.set("italic", "true" if italic else "false")
                 summary["quick_styles_updated"] += 1
 
-    apply_page_edit(backend, page_id, mutate, force=force)
+    apply_page_edit(backend, page_id, mutate, force=force, allow_displayed=allow_displayed)
     summary["scope"] = scope_object_id or "page"
     return summary

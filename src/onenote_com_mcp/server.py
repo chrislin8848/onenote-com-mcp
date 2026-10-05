@@ -31,6 +31,7 @@ from typing import Literal
 
 from mcp.server.fastmcp import FastMCP, Image
 
+from onenote_com_mcp import __version__
 from onenote_com_mcp.backend import get_backend
 from onenote_com_mcp.errors import NoCurrentWindowError, NodeNotFoundError
 from onenote_com_mcp.logging_config import configure_logging, log_tool_call
@@ -50,8 +51,11 @@ preferred first step), get_page (the full text/style content), get_page_images (
 or get_page_files_info (attachment metadata); to find the object that CONTAINS a given string \
 (e.g. the paragraph with a typo) use find_objects. To find/delete ALL images on a page, use \
 get_page_info — it lists images nested in table cells AND page-level printout renders, which \
-get_page's nested tree can bury; do NOT eyeball get_page to hunt for images, and when sweeping \
-several pages check EACH page's inventory rather than assuming later pages match earlier ones. \
+get_page's nested tree can bury (in a BIG table, 200+ cells, only the cells' plain-text \
+paragraphs are summarized on the table entry — images/attachments in its cells are still \
+listed; for one such cell's paragraph id use find_objects); do NOT eyeball get_page to hunt \
+for images, and when sweeping several pages check EACH page's inventory rather than assuming \
+later pages match earlier ones. \
 Picking the right tool but omitting the objectID it needs is as wrong as picking the wrong tool. \
 get_page_info's `preview` is a TRUNCATED label (trailing "…" = more follows), NOT content — never \
 proofread or judge a paragraph as clean from it; read the full text with get_object / get_page, or \
@@ -123,11 +127,21 @@ the same font/size/color block on every paragraph: write the text first, then ru
 once on the WHOLE page to set the font — it rewrites the page's baseline style so every paragraph \
 (and future typing) inherits it.
 
+Reading content: DEFAULT to text_only=True on get_page, get_table and get_object whenever you \
+only need the WORDS — reviewing, summarizing, answering, proofreading, comparing, syncing to \
+another system. It returns plain text (tables as 2-D text arrays) with no runs, styles or \
+objectIDs, typically 10-100x smaller and faster to read. Switch to the full read (text_only=False) \
+only for what it adds: styles, or the objectIDs an edit needs — and then fetch just what you will \
+touch (get_object for one paragraph, get_table windowed with start_row/max_rows/columns), or take \
+ids from get_page_info / find_objects.
+
 Editing tables: pick the narrowest operation instead of rebuilding the table. To READ just one \
-table (e.g. a long Guest List) use get_table, not the whole-page get_page. To REARRANGE columns or \
-rows — move a column to the front, drop one and shift the rest — use modify_table \
-reorder_columns / reorder_rows with the complete target order (e.g. order=[2,0,1]); do NOT \
-clear and re-type cells \
+table (e.g. a long Guest List or a schedule) use get_table, not the whole-page get_page — and pass \
+text_only=True when you need the cell TEXT (the default full model carries per-cell objectIDs + \
+styles and is megabytes on a big table); window it with start_row/max_rows/columns. To \
+REARRANGE columns or rows — move a column to the front, drop one and shift the rest — use \
+modify_table reorder_columns / reorder_rows with the complete target order (e.g. \
+order=[2,0,1]); do NOT clear and re-type cells \
 with set_rows just to reorder. To rewrite ONE column's text use modify_table set_column (a flat \
 list, one value per row) rather than a full set_rows grid of mostly-unchanged cells; to add a \
 column WITH content in one step use insert_columns with values; to change a whole column's STYLE \
@@ -135,6 +149,20 @@ or COLOR (not its text) use apply_text_style(columns=[j]); to edit ONE cell's te
 update_page_content("replace") on that cell's paragraph objectID. To CLEAR a table's body while \
 keeping a header row or column, do not re-supply the kept text: set_rows treats a None cell as \
 "leave it unchanged" — e.g. [None, "", ""] keeps column 0 and clears the rest.
+
+Big tables are slow to WRITE (reads are fine): OneNote rewrites a whole content box on every edit, \
+so changing ONE cell of a table with thousands of cells re-processes the entire table and takes \
+close to a minute — and changing 50 cells costs about the same. get_table flags such a table with \
+a write_cost note. For a big table: (1) collect EVERY change first and apply them in ONE call — \
+batch_update (several find_replace / replace ops) or modify_table set_rows / set_column — never \
+one call per cell; (2) if a write call times out, it most likely still COMPLETED in OneNote — \
+re-read with get_table(text_only=True) to check before retrying, and never blindly repeat an \
+append/insert. MOST important: a big write to the page that is OPEN on the user's screen is \
+~5x slower still (OneNote redraws every cell — over two minutes on a 4,000-cell table, vs ~25s \
+when another page is shown). Before writing to a big table, check get_current_context; if the user \
+is on that page, ask them to switch OneNote to any other page first. The server enforces this: \
+such a write is refused with a "page is OPEN" error until they switch (allow_displayed=True only \
+if they insist on keeping it open).
 
 Appending content: update_page_content mode=append adds to the page's LAST outline by default. If \
 a page has several outlines and you must add to a SPECIFIC one, pass that outline's objectID as \
@@ -210,6 +238,10 @@ notebooks); (2) copy_section clones each source section into B — a perfect, me
 formatting. Verify B≡A before editing, then verify the dates."""
 
 mcp = FastMCP("onenote", instructions=_SERVER_INSTRUCTIONS)
+# serverInfo.version defaulted to the MCP SDK's own version (e.g. "1.27.2"), so a client — or the
+# user — could not tell which OneNote MCP build it was talking to (it mattered when a client kept
+# showing a stale tool list after an upgrade). FastMCP has no public parameter for it.
+mcp._mcp_server.version = __version__
 
 
 # OneNote's COM server is single-threaded (STA): it runs ONE call at a time. Concurrent calls do
@@ -250,8 +282,10 @@ def logged_tool(*args, **kwargs):
 
 
 def _json(data: object) -> str:
-    # ensure_ascii=False keeps CJK note content readable in the tool result
-    return json.dumps(data, ensure_ascii=False, indent=2)
+    # ensure_ascii=False keeps CJK note content readable in the tool result. Compact (no indent):
+    # the reader is a model, and pretty-printing a big table put every cell on its own indented
+    # line — whitespace was most of a text_only grid's size.
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
 # --- Read (Phase 2: wired to FixtureBackend on Linux) -----------------------
@@ -290,24 +324,28 @@ def search_pages(query: str, scope_id: str = "") -> str:
 
 
 @logged_tool()
-def get_page(page_id: str) -> str:
-    """Read a page's full CONTENT — rich-text runs with resolved styles, structured tables, and
-    the objectID of every content object. Includes both outline content (`outlines`) AND
-    page-level objects (`page_level_images` / `page_level_files` — printout renders and page-level
-    attachments that live outside any outline). This is the primary page read for working with
-    TEXT and the source of the objectIDs that update_page_content / create_table /
-    delete_page_content need. It returns images and attachments as lightweight references (object
-    IDs + metadata), NOT their bytes — use get_page_images for image pixels and get_page_files /
-    get_page_files_info for attachments. When you only need to know WHAT objects a page has and
-    their IDs (e.g. to find/delete every image, including page-level printout renders) — not the
-    full text — use get_page_info instead: it is a cheaper, flat, exhaustive object inventory.
-    When you only need ONE table's contents (e.g. a big table-heavy page where this full read is
-    large), use get_table — it returns just that table, compactly."""
-    return _json(read.get_page(get_backend(), page_id))
+def get_page(page_id: str, text_only: bool = False) -> str:
+    """Read a page's CONTENT. PREFER text_only=True — use it by DEFAULT whenever you only need to
+    READ the words (review, summarize, answer a question, proofread, compare, sync to another
+    system): it returns just the text — the title, each outline as a list of blocks (a paragraph is
+    its text string; a table is {"table": [[cell text, ...], ...]}; an image is {"image": its OCR
+    text}; an attachment is {"file": its name}; nested paragraphs under "children") — with NO runs,
+    styles, or objectIDs, typically 10-100x smaller than the full read.
+
+    text_only=False (default) is the FULL model — rich-text runs with resolved styles, structured
+    tables, and the objectID of every content object, incl. page-level objects (`page_level_images`
+    / `page_level_files` — printout renders and attachments outside any outline). It is LARGE; use
+    it only when you need styles or the objectIDs that update_page_content / create_table /
+    delete_page_content take (or get just the ids from get_page_info / find_objects, and one
+    object's detail from get_object). Images and attachments come as references, NOT bytes — use
+    get_page_images for pixels and get_page_files / get_page_files_info for attachments. For WHAT
+    objects a page has and their IDs (e.g. every image to delete) use get_page_info, a cheap flat
+    exhaustive inventory. For ONE table use get_table (also with text_only=True)."""
+    return _json(read.get_page(get_backend(), page_id, text_only=text_only))
 
 
 @logged_tool()
-def get_page_info(page_id: str) -> str:
+def get_page_info(page_id: str, include_cells: bool = False) -> str:
     """Lightweight INVENTORY of every object on a page — each object's id, type, which delete tool
     removes it (`delete_with`), whether it is page-level, and light type metadata (image
     width/height/OCR-flag, table rows×cols, file name/kind, a short paragraph text preview). It
@@ -324,32 +362,74 @@ def get_page_info(page_id: str) -> str:
     means more text follows) — NOT the content. NEVER judge whether a paragraph is correct/clean or
     proofread for typos from `preview`: corruption can hide past the cutoff. To check text
     correctness read the full text with get_object (one object), get_page (whole page), or locate a
-    known string with find_objects (it matches the FULL paragraph text)."""
-    return _json(read.get_page_info(get_backend(), page_id))
+    known string with find_objects (it matches the FULL paragraph text).
+
+    BIG TABLES (200+ cells): the table is ONE entry and its cells' plain-text paragraphs are NOT
+    listed (`cell_paragraphs_not_listed` gives the count) — otherwise a large schedule would bury
+    the inventory under thousands of entries. Images, attachments and nested tables inside its
+    cells ARE still listed, so "find/delete every image" stays complete. Need such a cell? Read its
+    text with get_table(text_only=True), get its paragraph objectID with find_objects, edit by
+    position with modify_table set_rows / set_column, or pass include_cells=True to list them all.
+    Smaller tables list every cell paragraph as before."""
+    return _json(read.get_page_info(get_backend(), page_id, include_cells=include_cells))
 
 
 @logged_tool()
-def get_table(page_id: str, table_object_id: str) -> str:
-    """Read ONE table's structured content — its columns, every cell (text, runs, shading color),
-    and the row/cell objectIDs — without the rest of the page. Use this instead of get_page when you
-    only care about a specific table, especially on a big table-heavy page (a long Guest List etc.)
-    where get_page returns a large payload: this is the compact, table-only read. Get the
-    table_object_id from get_page or get_page_info first (get_page_info lists each table with its id
-    + rows×cols but NOT its cell contents; get_table is what returns the contents). It finds the
-    table anywhere on the page, including one nested inside a cell. To then EDIT the table use
-    modify_table (shape/bulk content) or update_page_content ("replace" for one cell)."""
-    return _json(read.get_table(get_backend(), page_id, table_object_id))
+def get_table(
+    page_id: str,
+    table_object_id: str,
+    text_only: bool = False,
+    start_row: int = 0,
+    max_rows: int | None = None,
+    columns: list[int] | None = None,
+) -> str:
+    """Read ONE table without the rest of the page (found anywhere on it, incl. nested in a cell).
+    PREFER text_only=True — use it by DEFAULT for anything that only READS the table. Get
+    table_object_id from get_page_info (lists each table with its id + rows×cols, NOT its cell
+    contents) or get_page.
+
+    Two shapes — pick by what you need:
+      text_only=True  — each cell's plain TEXT as a 2-D array: no runs, styles, shading, or
+                        objectIDs. By far the smallest (a 100×40 table: tens of KB instead of
+                        megabytes). Use it to READ a table's data — reviewing it, syncing it to
+                        another system, finding which row/column holds a value.
+      text_only=False — (default) the FULL structured model: every cell's runs + effective style +
+                        shading + row/cell/paragraph objectIDs. On a BIG table this is nearly as
+                        large as get_page (every cell, even an empty one, carries ids and style) —
+                        it is NOT a compact read. Use it only when you need styles or objectIDs,
+                        ideally windowed to the few cells you will touch.
+    Window either shape with start_row + max_rows (0-indexed rows) and columns (0-indexed column
+    numbers, e.g. [0,1,2,3]); total_rows / total_columns report the whole table's size so you can
+    page through it. Editing a cell does NOT require its objectID from a full read: modify_table
+    set_rows (at_index=row, None for the cells to keep) / set_column edit BY POSITION, and
+    find_and_replace with object_id = this table's id changes a known value in the table. For one
+    cell's paragraph objectID, re-read just that cell: text_only=False, start_row=r, max_rows=1,
+    columns=[c]."""
+    return _json(
+        read.get_table(
+            get_backend(),
+            page_id,
+            table_object_id,
+            text_only=text_only,
+            start_row=start_row,
+            max_rows=max_rows,
+            columns=columns,
+        )
+    )
 
 
 @logged_tool()
-def get_object(page_id: str, object_id: str) -> str:
-    """Read ONE object on a page by its objectID — a paragraph's full text + runs + style, or a
-    table / image / attachment — WITHOUT the rest of the page. The targeted companion to get_page:
-    to inspect or fix a single paragraph (e.g. one find_objects pointed you at), fetch just it
-    instead of the whole-page payload (which repeats every run under both "text" and "runs" and
-    carries the page-wide style table). Get the object_id from get_page_info or find_objects. Finds
-    the object anywhere on the page (inline, nested in a table cell, or page-level)."""
-    return _json(read.get_object(get_backend(), page_id, object_id))
+def get_object(page_id: str, object_id: str, text_only: bool = False) -> str:
+    """Read ONE object on a page by its objectID — a paragraph, or a table / image / attachment —
+    WITHOUT the rest of the page. With text_only=True (PREFERRED for reading or proofreading) you
+    get just its words: a paragraph's text string, a table's {"table": [[cell text]]}, an image's
+    OCR text. text_only=False (default) adds the runs + effective style + objectIDs — use it when
+    you need the styling or the ids inside it (e.g. a table's cell objectIDs). The targeted
+    companion to get_page: to inspect or fix a single paragraph (e.g. one find_objects pointed you
+    at), fetch just it instead of the whole page. Get the object_id from get_page_info or
+    find_objects. Finds the object anywhere on the page (inline, nested in a table cell, or
+    page-level)."""
+    return _json(read.get_object(get_backend(), page_id, object_id, text_only=text_only))
 
 
 @logged_tool()
@@ -485,6 +565,7 @@ def update_page_content(
     mode: Literal["append", "insert_before", "insert_after", "replace"] = "append",
     target_object_id: str = "",
     force: bool = False,
+    allow_displayed: bool = False,
     return_ids: bool = False,
 ) -> str:
     """Edit a page's TEXT/paragraphs surgically — untouched paragraphs keep their formatting
@@ -521,7 +602,11 @@ def update_page_content(
     for "replace" the paragraph you edited, for append/insert the newly created paragraph(s) — plus
     the page's new last_modified_time, instead of a bare status; useful when a follow-up edit needs
     them. (To rewrite the SAME text in many spots, prefer find_and_replace; for several different
-    edits to one page in one atomic write, prefer batch_update.)"""
+    edits to one page in one atomic write, prefer batch_update.)
+
+    allow_displayed: a BIG write (a content box of 1,000+ paragraphs/cells) to the page currently
+    OPEN in OneNote is refused (PageDisplayedError) — ask the user to switch to another page;
+    set True only if they want to keep it open (it is ~5x slower)."""
     result = page_edit.edit_page_content(
         get_backend(),
         page_id,
@@ -529,6 +614,7 @@ def update_page_content(
         mode,
         target_object_id=target_object_id,
         force=force,
+        allow_displayed=allow_displayed,
         return_ids=return_ids,
     )
     if not return_ids:
@@ -544,7 +630,12 @@ def update_page_content(
 
 @logged_tool()
 def find_and_replace(
-    page_id: str, find: str, replace: str, object_id: str = "", force: bool = False
+    page_id: str,
+    find: str,
+    replace: str,
+    object_id: str = "",
+    force: bool = False,
+    allow_displayed: bool = False,
 ) -> str:
     """Fix or change text occurrences IN PLACE without re-supplying the paragraph — replace every
     occurrence of `find` with `replace` across the whole page — title, body, and table cells — or
@@ -558,23 +649,42 @@ def find_and_replace(
     matched text is split across differently-styled spans), they are NOT replaced and their
     objectIDs come back under "found_across_runs" — read one with get_object and rewrite it with
     update_page_content "replace". Distinct from update_page_content "replace" (rewrites a whole
-    paragraph's text) and apply_text_style (changes style, never the words). Concurrency-guarded;
-    force=True only after explicit user confirmation."""
+    paragraph's text) and apply_text_style (changes style, never the words). object_id narrows
+    WHAT is replaced, not the write cost: OneNote rewrites the whole content box the object is in,
+    so on a table with thousands of cells any edit takes about a minute — put several fixes into
+    ONE batch_update instead of one call each. Concurrency-guarded; force=True only after explicit
+    user confirmation.
+
+    allow_displayed: a BIG write (a content box of 1,000+ paragraphs/cells) to the page currently
+    OPEN in OneNote is refused (PageDisplayedError) — ask the user to switch to another page;
+    set True only if they want to keep it open (it is ~5x slower)."""
     return _json(
         page_edit.find_and_replace(
-            get_backend(), page_id, find, replace, object_id=object_id, force=force
+            get_backend(),
+            page_id,
+            find,
+            replace,
+            object_id=object_id,
+            force=force,
+            allow_displayed=allow_displayed,
         )
     )
 
 
 @logged_tool()
 def batch_update(
-    page_id: str, operations: list[dict], force: bool = False, return_ids: bool = False
+    page_id: str,
+    operations: list[dict],
+    force: bool = False,
+    allow_displayed: bool = False,
+    return_ids: bool = False,
 ) -> str:
     """Apply SEVERAL text edits to one page in a single ATOMIC write — all the operations succeed
     together or, if any is invalid, none is written (and it is one round-trip, not many). Use this
     when you have multiple edits to the same page — several typo fixes, rewriting a few paragraphs,
-    appending in more than one place — instead of a burst of update_page_content calls.
+    appending in more than one place — instead of a burst of update_page_content calls. It matters
+    most on a BIG table: every write re-processes the whole table (about a minute for thousands of
+    cells) no matter how many cells change, so N cell fixes in one batch cost one write, not N.
 
     operations: a list of dicts, each with an "op":
       "replace" / "append" / "insert_before" / "insert_after" — as in update_page_content:
@@ -584,10 +694,19 @@ def batch_update(
     operation in the same batch has no id until the write completes — split such work across two
     calls). Returns a per-operation summary; set return_ids=True to also get the objectIDs created
     and the new last_modified_time (one extra read). Concurrency-guarded; force=True only after
-    explicit user confirmation."""
+    explicit user confirmation.
+
+    allow_displayed: a BIG write (a content box of 1,000+ paragraphs/cells) to the page currently
+    OPEN in OneNote is refused (PageDisplayedError) — ask the user to switch to another page;
+    set True only if they want to keep it open (it is ~5x slower)."""
     return _json(
         page_edit.batch_update(
-            get_backend(), page_id, operations, force=force, return_ids=return_ids
+            get_backend(),
+            page_id,
+            operations,
+            force=force,
+            allow_displayed=allow_displayed,
+            return_ids=return_ids,
         )
     )
 
@@ -600,6 +719,7 @@ def create_table(
     has_header_row: bool = False,
     target_object_id: str = "",
     force: bool = False,
+    allow_displayed: bool = False,
 ) -> str:
     """Create a NEW table on a page. Use this ONLY to make a brand-new table — NOT to change a
     table that already exists. On an EXISTING table: change its shape (add/insert rows, add columns,
@@ -610,7 +730,11 @@ def create_table(
     "alignment"} (short rows are padded). target_object_id: empty → new table at the end of the
     page's last outline; an outline objectID → new table in that outline. (Passing an existing
     table's objectID is an error — use modify_table.) Concurrency-guarded; force=True only after
-    explicit user confirmation."""
+    explicit user confirmation.
+
+    allow_displayed: a BIG write (a content box of 1,000+ paragraphs/cells) to the page currently
+    OPEN in OneNote is refused (PageDisplayedError) — ask the user to switch to another page;
+    set True only if they want to keep it open (it is ~5x slower)."""
     page_edit.add_table(
         get_backend(),
         page_id,
@@ -619,6 +743,7 @@ def create_table(
         has_header_row=has_header_row,
         target_object_id=target_object_id,
         force=force,
+        allow_displayed=allow_displayed,
     )
     return f"table added to {page_id}"
 
@@ -645,6 +770,7 @@ def modify_table(
     count: int = 1,
     width: float | None = None,
     force: bool = False,
+    allow_displayed: bool = False,
 ) -> str:
     """Change an EXISTING table in place — its SHAPE (row/column count or ORDER) or its CONTENT (a
     whole row, a whole column, or every row) — keeping the table's objectID and every untouched
@@ -686,7 +812,11 @@ def modify_table(
                          cell in every row.
     Deleting every row/column is refused — remove the whole table with delete_page_content.
     Concurrency-guarded; force=True only after explicit user confirmation. DESTRUCTIVE
-    operations should be proposed and confirmed with the user first."""
+    operations should be proposed and confirmed with the user first.
+
+    allow_displayed: a BIG write (a content box of 1,000+ paragraphs/cells) to the page currently
+    OPEN in OneNote is refused (PageDisplayedError) — ask the user to switch to another page;
+    set True only if they want to keep it open (it is ~5x slower)."""
     page_edit.modify_table(
         get_backend(),
         page_id,
@@ -700,6 +830,7 @@ def modify_table(
         count=count,
         width=width,
         force=force,
+        allow_displayed=allow_displayed,
     )
     return f"table {table_object_id} modified ({operation}) on {page_id}"
 
@@ -713,6 +844,7 @@ def insert_svg_image(
     mode: Literal["append", "insert_before", "insert_after"] = "append",
     target_object_id: str = "",
     force: bool = False,
+    allow_displayed: bool = False,
 ) -> str:
     """Insert a VECTOR graphic into a page from SVG markup — the server renders the SVG to an
     image and places it on the page. It takes SVG markup you generate directly — NOT a raster
@@ -734,7 +866,11 @@ def insert_svg_image(
     renders with the wrong font. Do NOT embed a raster image inside the SVG (an <image> with a
     data: URI is rejected — that just smuggles a photo back in and is slow). width/height (points)
     override the rendered size; omit to use the SVG's own size. Concurrency-guarded; force=True
-    only after explicit user confirmation."""
+    only after explicit user confirmation.
+
+    allow_displayed: a BIG write (a content box of 1,000+ paragraphs/cells) to the page currently
+    OPEN in OneNote is refused (PageDisplayedError) — ask the user to switch to another page;
+    set True only if they want to keep it open (it is ~5x slower)."""
     page_edit.insert_svg_image(
         get_backend(),
         page_id,
@@ -744,6 +880,7 @@ def insert_svg_image(
         mode=mode,
         target_object_id=target_object_id,
         force=force,
+        allow_displayed=allow_displayed,
     )
     return f"image inserted into {page_id}"
 
@@ -757,6 +894,7 @@ def insert_image_from_path(
     mode: Literal["append", "insert_before", "insert_after"] = "append",
     target_object_id: str = "",
     force: bool = False,
+    allow_displayed: bool = False,
 ) -> str:
     """Insert a raster image (PNG/JPEG/GIF) into a page FROM A LOCAL FILE PATH. The server reads the
     file's bytes off disk, so they never pass through the model — this is how to add a real raster
@@ -771,7 +909,11 @@ def insert_image_from_path(
     an outline objectID, else the page's last outline); "insert_before" / "insert_after" relative to
     a paragraph objectID. width/height (points) override the image's size; omit to use its own. Only
     PNG/JPEG/GIF files are accepted (anything else is rejected). Concurrency-guarded; force=True
-    only after explicit user confirmation."""
+    only after explicit user confirmation.
+
+    allow_displayed: a BIG write (a content box of 1,000+ paragraphs/cells) to the page currently
+    OPEN in OneNote is refused (PageDisplayedError) — ask the user to switch to another page;
+    set True only if they want to keep it open (it is ~5x slower)."""
     page_edit.insert_image_from_path(
         get_backend(),
         page_id,
@@ -781,6 +923,7 @@ def insert_image_from_path(
         mode=mode,
         target_object_id=target_object_id,
         force=force,
+        allow_displayed=allow_displayed,
     )
     return f"image inserted into {page_id} from {path}"
 
@@ -800,6 +943,7 @@ def apply_text_style(
     columns: list[int] | None = None,
     scope_object_id: str = "",
     force: bool = False,
+    allow_displayed: bool = False,
 ) -> str:
     """Batch-change text styling — FONT, SIZE, COLOR, HIGHLIGHT, BOLD, ITALIC, UNDERLINE,
     STRIKETHROUGH — and/or TABLE-CELL background (cell_shading) across a page (or one part of it) in
@@ -827,7 +971,11 @@ def apply_text_style(
     pass columns=[j,...] (0-indexed) — both the text restyle and cell_shading then apply only to
     those columns of every row in scope (give a table objectID as scope). A single cell = its cell
     objectID; the whole table = the table objectID. Whole-page also updates the page's style
-    baseline so future typing matches. Concurrency-guarded; force=True only after user confirms."""
+    baseline so future typing matches. Concurrency-guarded; force=True only after user confirms.
+
+    allow_displayed: a BIG write (a content box of 1,000+ paragraphs/cells) to the page currently
+    OPEN in OneNote is refused (PageDisplayedError) — ask the user to switch to another page;
+    set True only if they want to keep it open (it is ~5x slower)."""
     summary = page_edit.apply_text_style(
         get_backend(),
         page_id,
@@ -843,6 +991,7 @@ def apply_text_style(
         columns=columns or None,
         scope_object_id=scope_object_id,
         force=force,
+        allow_displayed=allow_displayed,
     )
     return _json(summary)
 
@@ -1106,7 +1255,9 @@ def delete_page_content(page_id: str, object_id: str, force: bool = False) -> st
 
 
 @logged_tool()
-def delete_inline_content(page_id: str, object_id: str, force: bool = False) -> str:
+def delete_inline_content(
+    page_id: str, object_id: str, force: bool = False, allow_displayed: bool = False
+) -> str:
     """DESTRUCTIVE. Delete ONE object from INSIDE an outline — a table, a single paragraph, or an
     inline image/attachment — by its objectID from get_page_info (or get_page). A whole table or a
     paragraph is ALWAYS inside an outline, so removing one ALWAYS uses THIS tool, never
@@ -1124,8 +1275,14 @@ def delete_inline_content(page_id: str, object_id: str, force: bool = False) -> 
     SOME of a table's rows/columns use modify_table (delete_rows / delete_columns) instead of this;
     to delete a whole page or section use delete_node.
     Concurrency-guarded; force=True only after explicit user confirmation. Confirm with the user
-    before applying."""
-    page_edit.delete_inline_content(get_backend(), page_id, object_id, force=force)
+    before applying.
+
+    allow_displayed: a BIG write (a content box of 1,000+ paragraphs/cells) to the page currently
+    OPEN in OneNote is refused (PageDisplayedError) — ask the user to switch to another page;
+    set True only if they want to keep it open (it is ~5x slower)."""
+    page_edit.delete_inline_content(
+        get_backend(), page_id, object_id, force=force, allow_displayed=allow_displayed
+    )
     return f"deleted inline object {object_id} from {page_id}"
 
 

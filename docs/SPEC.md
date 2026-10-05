@@ -146,9 +146,9 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 | `list_sections` | 列某本的節(**含節群組巢狀結構**) | `GetHierarchy(notebookId, hsSections)`(回傳含 `one:SectionGroup` 巢狀,解析須保留,不另開工具) |
 | `list_pages` | 列某節的頁(**範圍化,含 `pageLevel` 子頁階層**) | `GetHierarchy(sectionId, hsPages)` |
 | `search_pages` | 跨/範圍文字搜尋 | `FindPages` |
-| `get_page` | 取單頁內容(**保真富文字** + 結構化表格) | `GetPageContent(pageId)` |
-| `get_table` | 取**單一表格**結構化內容(欄/列/每格文字+樣式+底色 + row/cell objectID),不含整頁其餘——大表頁(長 Guest List 等)的精簡讀法,避免 `get_page` 巨大 payload 被客戶端轉存成檔案 | `GetPageContent` → 依 objectID 找該 `one:Table`(含巢狀)投影 |
-| `get_object` | 取**單一物件**(段落完整文字+runs+樣式,或表格/圖片/附件)by objectID,不含整頁其餘——比 `get_page` 精簡(不含整頁重複 runs 與全頁樣式表),找得到頁面任何位置(行內/巢狀於 cell/頁層) | `GetPageContent` → 依 objectID 定位並投影該物件 |
+| `get_page` | 取單頁內容(**保真富文字** + 結構化表格);**`text_only=True`(鼓勵預設使用)** 只回文字(段落=字串、表格=二維文字陣列、圖=OCR 文字、附件=檔名),無 runs/樣式/objectID,小 10–100 倍 | `GetPageContent(pageId)` |
+| `get_table` | 取**單一表格**,不含整頁其餘。**`text_only=True`(鼓勵預設使用)** = 每格文字二維陣列(106×39 實表 2.9M→21.9K 字元);預設完整模型(每格文字+樣式+底色 + row/cell/段落 objectID)在大表**並不精簡**(≈ `get_page`)。兩種都可用 `start_row`/`max_rows`/`columns` 分段讀;≥1,000 格附 `write_cost` 提示(該頁顯示中時另註明) | `GetPageContent` → 依 objectID 找該 `one:Table`(含巢狀)投影 |
+| `get_object` | 取**單一物件**(段落完整文字+runs+樣式,或表格/圖片/附件)by objectID,不含整頁其餘——比 `get_page` 精簡(不含整頁重複 runs 與全頁樣式表),找得到頁面任何位置(行內/巢狀於 cell/頁層);`text_only=True`(鼓勵)只回文字 | `GetPageContent` → 依 objectID 定位並投影該物件 |
 | `find_objects` | 取頁面上**文字含某子字串**的物件 objectID(**頁內**定位,對應 `search_pages` 的「找整頁」)——比對**完整文字**(非 `get_page_info` 的 40 字截斷預覽),用來精準定位要改的段(如錯字所在) | `GetPageContent` → 走訪段落比對全文 |
 | `get_page_images` | 取頁面圖片(二進位) | `GetPageContent` → `GetBinaryPageContent(callbackId)` |
 | `get_page_files_info` | 列頁面**附件/嵌入物件**(如 Excel 試算表)中繼資料:名稱/大小/型別/objectID,**不解析內容** | `GetPageContent` 解析 `one:InsertedFile` + 讀 `pathCache` 檔案屬性 |
@@ -179,6 +179,8 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 **範圍化原則:** 永遠用 notebook/section 範圍的 `GetHierarchy` 與 `FindPages`,**不要**對全部頁面逐頁掃描——這是先前 Graph 全域搜尋撞牆的同一個坑,逐頁打 COM 又慢又容易踩 RPC 忙碌錯誤。
 
 **工具與 COM 方法是多對一(勿重寫):** `update_page_content`(含 append/insert/replace)、`create_table`、`insert_svg_image`/`insert_image_from_path`、`find_and_replace`、`batch_update` 最後全都走同一個 `UpdatePageContent`——它是 OneNote 唯一的「寫內容進頁面」通用原語。實作上必須**共用單一「套用頁面內容變更」核心**(集中處理 `GetPageContent → 改 XML → UpdatePageContent` 的並發保護 `dateExpectedLastModified` 與手術式格式保真),這些 MCP 工具只是它的薄 facade(各自負責把自己的輸入轉成內容 XML)。**不要各自重寫一套 round-trip 邏輯**,否則程式會分歧、難維護。分開命名是為了 LLM 好用,不是要分開實作。
+
+**大內容框寫入(v1.4.0,VM 實測 2026-10-05):** `UpdatePageContent` 對一個 `one:Outline` 是**整框取代**(框內無 objectID 合併——少送的段落/列會被刪、只送一格的列被拒),故改一格 = 重送整個內容框;成本按物件數(約每格 10ms)計、與 payload 大小無關。**該頁正顯示於 OneNote 時慢 5–6 倍**(4,134 格:134–141s vs 23–26s)。對策:寫入核心在 payload ≥1,000 個 OE 且該頁為 `CurrentWindow.CurrentPageId` 時拒寫(`PageDisplayedError`,請使用者切到別頁;`allow_displayed=True` 可覆寫,9 個內容寫入工具皆有此參數);指引要求大表的所有修改合併成**一次** `batch_update`/`set_rows`/`set_column`,逾時的寫入多半已完成、先 `get_table(text_only)` 確認再重試。讀取側:`get_page`/`get_table`/`get_object` 的 `text_only=True` 為鼓勵預設;`get_page_info` 對 ≥200 格的表格只列一筆摘要(`cell_paragraphs_not_listed`),格內圖片/附件/巢狀表格照列,`include_cells=True` 全展開(實表 637K→640 字元)。
 
 ### 工具描述強化(獨立交付物,跨全套工具一次做,非逐工具帶過)
 

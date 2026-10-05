@@ -40,6 +40,19 @@ def is_concurrency_hresult(hresult: int | None) -> bool:
     return hresult is not None and hresult in _CONCURRENCY_HRESULTS
 
 
+# hrAppInModalUI — OneNote is showing a modal dialog (VM 2026-10-05: an "accept the license
+# agreement" prompt after an Office update). Reads still work; EVERY write fails until it's closed.
+HR_APP_IN_MODAL_UI = 0x80042030  # -2147213264 signed
+
+
+def is_modal_ui_hresult(hresult: int | None) -> bool:
+    """True if a COM HRESULT means 'OneNote has a dialog open — the user must close it'."""
+    return hresult is not None and hresult in (
+        HR_APP_IN_MODAL_UI,
+        HR_APP_IN_MODAL_UI - 0x1_0000_0000,
+    )
+
+
 class OneNoteError(Exception):
     """Base class for all OneNote MCP errors."""
 
@@ -61,6 +74,15 @@ class ConcurrencyError(OneNoteError):
 
     Raised instead of clobbering the user's edits. Resolve by re-reading and retrying,
     or (explicit opt-in only) forcing the write.
+    """
+
+
+class PageDisplayedError(OneNoteError):
+    """A big write was refused because the page is open (displayed) in OneNote right now.
+
+    VM ground truth 2026-10-05: rewriting a large content box while its page is on screen is
+    ~5-6x slower (OneNote redraws every cell) — long enough to blow the client's timeout. Resolve
+    by asking the user to switch OneNote to another page, or retry with allow_displayed=True.
     """
 
 

@@ -136,6 +136,14 @@ def test_get_table_reads_one_table_live(backend, pages_by_name):
     assert out["table"]["object_id"] == table_id
     assert len(out["table"]["rows"]) >= 2
     assert all(isinstance(row, list) for row in out["table"]["rows"])
+    # text_only: a plain string grid matching the full model's cell texts; windowing slices it
+    grid = [[c["text"] for c in row] for row in out["table"]["rows"]]
+    text = read.get_table(backend, pid, table_id, text_only=True)["table"]
+    assert text["rows"] == grid
+    one = read.get_table(
+        backend, pid, table_id, text_only=True, start_row=1, max_rows=1, columns=[0]
+    )
+    assert one["table"]["rows"] == [[grid[1][0]]]
 
 
 def test_get_page_images_returns_binary_live(backend, pages_by_name):
@@ -206,3 +214,16 @@ def test_find_objects_locates_paragraph_by_text_live(backend, pages_by_name):
     needle = (target["text"] or "")[:6]  # a real leading slice — full-text match, not a preview
     out = read.find_objects(backend, pid, needle)
     assert any(m["object_id"] == target["object_id"] for m in out["matches"])
+
+
+def test_get_page_text_only_live(backend, pages_by_name):
+    pid = pages_by_name.get("表格頁")
+    if pid is None:
+        pytest.skip("表格頁 not present")
+    full = read.get_page(backend, pid)
+    text = read.get_page(backend, pid, text_only=True)
+    blocks = [b for o in text["outlines"] for b in o]
+    grids = [b["table"] for b in blocks if isinstance(b, dict) and "table" in b]
+    full_tables = [b for o in full["outlines"] for b in o["blocks"] if b["type"] == "table"]
+    assert grids == [[[c["text"] for c in row] for row in t["rows"]] for t in full_tables]
+    assert "object_id" not in str(text)

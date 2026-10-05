@@ -39,7 +39,10 @@ _PARSER = etree.XMLParser(strip_cdata=False)
 _STRIP_ATTRS = ("objectID", "lastModifiedTime", "creationTime", "selected", "isCurrentlyViewed")
 
 # Printout bookkeeping on render images — dangling once their one:XPSFile carrier is stripped
-# (see _rewrite_inserted_files); the render survives as a plain inlined image.
+# (see _rewrite_inserted_files); the render survives as a plain inlined image. Stripped from EVERY
+# image, carrier or not: OneNote can dissolve a printout's link on its own (VM 2026-10-05 — after an
+# Office update the PDF lost its Printout child and the XPSFile vanished, leaving an ORPHAN render
+# still marked isPrintOut), and a copy never carries a printout structure.
 _PRINTOUT_IMAGE_ATTRS = ("xpsFileIndex", "isPrintOut", "originalPageNumber")
 
 
@@ -134,13 +137,11 @@ def _rewrite_inserted_files(
     notes: list[str] = []
     missing_files = 0
     missing_objects = 0
-    xps_files = tree.findall(qn("XPSFile"))
-    if xps_files:
-        for xps in xps_files:
-            tree.remove(xps)
-        for img in tree.iter(qn("Image")):
-            for attr in _PRINTOUT_IMAGE_ATTRS:
-                img.attrib.pop(attr, None)
+    for xps in tree.findall(qn("XPSFile")):
+        tree.remove(xps)
+    for img in tree.iter(qn("Image")):
+        for attr in _PRINTOUT_IMAGE_ATTRS:
+            img.attrib.pop(attr, None)
     for f in list(tree.iter(qn("InsertedFile"))):
         name = f.get("preferredName") or "attachment"
         is_embedded = f.find(qn("Previews")) is not None  # embedded object vs plain file icon

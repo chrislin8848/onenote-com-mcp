@@ -114,16 +114,22 @@ def _image_dict(img: Image) -> dict[str, Any]:
     }
 
 
-def _table_dict(table: Table) -> dict[str, Any]:
+def _table_dict(
+    table: Table, row_idx: list[int] | None = None, col_idx: list[int] | None = None
+) -> dict[str, Any]:
+    """The full structured table model. ``row_idx`` / ``col_idx`` (get_table's window) restrict it
+    to those rows / columns; omitted = every row / column (get_page and get_object always pass
+    none)."""
+    rows = range(len(table.rows)) if row_idx is None else row_idx
     return {
         "type": "table",
         "object_id": table.object_id,
         "borders_visible": table.borders_visible,
         "has_header_row": table.has_header_row,
-        "columns": table.columns,
+        "columns": table.columns if col_idx is None else [table.columns[j] for j in col_idx],
         # parallel to ``rows`` by index — pass one as apply_text_style scope_object_id to restyle a
         # whole row (a column has no objectID; use apply_text_style's ``columns`` index instead).
-        "row_object_ids": table.row_object_ids,
+        "row_object_ids": [table.row_object_ids[i] for i in rows],
         "rows": [
             [
                 {
@@ -132,11 +138,16 @@ def _table_dict(table: Table) -> dict[str, Any]:
                     "text": cell.text,
                     "paragraphs": [_paragraph_dict(p) for p in cell.paragraphs],
                 }
-                for cell in row
+                for cell in _pick(table.rows[i], col_idx)
             ]
-            for row in table.rows
+            for i in rows
         ],
     }
+
+
+def _pick(row: list[Any], col_idx: list[int] | None) -> list[Any]:
+    """The cells of ``row`` at ``col_idx`` (all when None; a ragged row's missing cell skipped)."""
+    return row if col_idx is None else [row[j] for j in col_idx if j < len(row)]
 
 
 def _paragraph_dict(para: Paragraph) -> dict[str, Any]:
@@ -167,9 +178,50 @@ def _paragraph_dict(para: Paragraph) -> dict[str, Any]:
     return block
 
 
-def get_page(backend: OneNoteBackend, page_id: str) -> dict[str, Any]:
-    """Read a page as a lossless runs+style model with structured tables and object IDs."""
+def _text_grid(table: Table) -> list[list[str]]:
+    return [[c.text for c in row] for row in table.rows]
+
+
+def _text_block(para: Paragraph) -> Any:
+    """``text_only`` projection of one ``one:OE`` — the words, nothing else (no runs, styles or
+    objectIDs): a plain paragraph is just its text string; a table is ``{"table": [[cell text]]}``;
+    an image is ``{"image": its OCR text or ""}``; an attachment is ``{"file": its name}``; nested
+    paragraphs ride under ``"children"``."""
+    if para.table is not None:
+        block: dict[str, Any] = {"table": _text_grid(para.table)}
+    elif para.image is not None:
+        block = {"image": para.image.ocr_text or ""}
+    elif para.inserted_file is not None:
+        block = {"file": para.inserted_file.preferred_name}
+    elif not para.children:
+        return para.text
+    else:
+        block = {"text": para.text}
+    if para.children:
+        block["children"] = [_text_block(c) for c in para.children]
+    return block
+
+
+def get_page(backend: OneNoteBackend, page_id: str, *, text_only: bool = False) -> dict[str, Any]:
+    """Read a page as a lossless runs+style model with structured tables and object IDs — or, with
+    ``text_only``, as just its words: each outline a list of blocks (see ``_text_block``), the title
+    a string, page-level printout images as their OCR text and page-level attachments as names.
+    Typically 10-100x smaller; the right read for reviewing / summarizing / syncing content."""
     page = parse_page(backend.get_page_content(page_id, PageInfo.piBasic))
+    if text_only:
+        out: dict[str, Any] = {
+            "id": page.id,
+            "name": page.name,
+            "page_level": page.page_level,
+            "last_modified_time": page.last_modified_time,
+            "title": page.title.text if page.title is not None else None,
+            "outlines": [[_text_block(p) for p in o.paragraphs] for o in page.outlines],
+        }
+        if page.page_images:
+            out["page_level_images"] = [img.ocr_text or "" for img in page.page_images]
+        if page.page_files:
+            out["page_level_files"] = [f.preferred_name for f in page.page_files]
+        return out
     return {
         "id": page.id,
         "name": page.name,
@@ -208,15 +260,47 @@ def get_page(backend: OneNoteBackend, page_id: str) -> dict[str, Any]:
     }
 
 
-def get_table(backend: OneNoteBackend, page_id: str, table_object_id: str) -> dict[str, Any]:
-    """Read ONE table's structured content — its columns, every cell (text + runs + shading), and
-    the row/cell objectIDs — WITHOUT the rest of the page.
+def _is_displayed(backend: OneNoteBackend, page_id: str) -> bool:
+    """Is this page the one on screen in OneNote? Never raises (no window → False)."""
+    try:
+        return backend.get_current_window_ids().page_id == page_id
+    except Exception:  # noqa: BLE001
+        return False
 
-    The compact companion to get_page for table-heavy pages: a Guest-List page's full get_page can
-    be huge (every outline, run, and the style table), which a client may spill to a file; this
-    returns just the one table the caller named, found anywhere on the page (including nested in a
-    cell). Get the table_object_id from get_page / get_page_info first. Raises if no such table is
-    on the page."""
+
+# From ~this size a single-cell edit visibly stalls: OneNote re-processes every cell of the content
+# box (VM 2026-10-05, 4,134 cells: ~25s per write, 134-141s if the page is on screen).
+_BIG_TABLE_CELLS = 1000
+
+
+def get_table(
+    backend: OneNoteBackend,
+    page_id: str,
+    table_object_id: str,
+    *,
+    text_only: bool = False,
+    start_row: int = 0,
+    max_rows: int | None = None,
+    columns: list[int] | None = None,
+) -> dict[str, Any]:
+    """Read ONE table WITHOUT the rest of the page, found anywhere on it (incl. nested in a cell).
+
+    Two shapes. ``text_only`` → each cell's plain text as a 2-D string array — no runs, styles,
+    shading or objectIDs: the compact read for a table's DATA. A real 106×39 班表 is megabytes in
+    the full model (every cell, even an empty one, carries cell + paragraph objectIDs and a resolved
+    style per run) but tens of KB as text. Default → the full structured model get_page emits for a
+    table (runs + effective style + shading + row/cell/paragraph objectIDs).
+
+    Either shape can be windowed: ``start_row`` + ``max_rows`` (0-indexed rows) and ``columns``
+    (0-indexed column numbers, in the order given). ``total_rows`` / ``total_columns`` always report
+    the whole table's size and ``start_row`` / ``returned_rows`` / ``column_indices`` say which
+    slice came back, so a
+    caller can page through a big table. Raises if no such table is on the page or the window is
+    invalid."""
+    if start_row < 0:
+        raise ValueError(f"start_row must be >= 0, got {start_row}")
+    if max_rows is not None and max_rows < 1:
+        raise ValueError(f"max_rows must be >= 1, got {max_rows}")
     page = parse_page(backend.get_page_content(page_id, PageInfo.piBasic))
     table = next((t for t in page.tables if t.object_id == table_object_id), None)
     if table is None:
@@ -224,48 +308,99 @@ def get_table(backend: OneNoteBackend, page_id: str, table_object_id: str) -> di
             f"no table with objectID {table_object_id!r} on this page — table object IDs come "
             "from get_page / get_page_info"
         )
-    return {
-        "page_id": page.id,
-        "last_modified_time": page.last_modified_time,
-        "table": _table_dict(table),
+    n_rows, n_cols = len(table.rows), len(table.columns)
+    if columns is not None:
+        bad = [j for j in columns if not 0 <= j < n_cols]
+        if bad:
+            raise ValueError(f"column index(es) {bad} out of range — the table has {n_cols}")
+    end = n_rows if max_rows is None else min(n_rows, start_row + max_rows)
+    row_idx = list(range(min(start_row, n_rows), end))
+    col_idx = list(range(n_cols)) if columns is None else list(columns)
+    window = {
+        "total_rows": n_rows,
+        "total_columns": n_cols,
+        "start_row": row_idx[0] if row_idx else start_row,
+        "returned_rows": len(row_idx),
+        "column_indices": col_idx,
     }
+    if text_only:
+        body: dict[str, Any] = {
+            "type": "table",
+            "object_id": table.object_id,
+            "has_header_row": table.has_header_row,
+            **window,
+            "rows": [[c.text for c in _pick(table.rows[i], col_idx)] for i in row_idx],
+        }
+    else:
+        body = {**_table_dict(table, row_idx, col_idx), **window}
+    if n_rows * n_cols >= _BIG_TABLE_CELLS:
+        body["write_cost"] = (
+            f"large table ({n_rows * n_cols} cells): OneNote rewrites the WHOLE table on every "
+            "edit, so each write takes ~25s or more regardless of how many cells change — batch "
+            "all cell changes into ONE batch_update / modify_table set_rows call; if a write times "
+            "out it most likely still completed, so re-read (text_only) before retrying"
+        )
+        if _is_displayed(backend, page.id):
+            body["write_cost"] += (
+                ". This page is OPEN in OneNote right now, which makes writes ~5x slower (minutes) "
+                "— before editing, ask the user to switch OneNote to another page"
+            )
+    return {"page_id": page.id, "last_modified_time": page.last_modified_time, "table": body}
 
 
-def get_object(backend: OneNoteBackend, page_id: str, object_id: str) -> dict[str, Any]:
+def get_object(
+    backend: OneNoteBackend, page_id: str, object_id: str, *, text_only: bool = False
+) -> dict[str, Any]:
     """Read ONE object's full content — a paragraph's text + runs + style, a table, an image, or
     an attachment — by its objectID, WITHOUT the rest of the page.
 
     The targeted companion to get_page: to inspect or fix one paragraph you need only this, not the
     whole-page payload (which duplicates each run under both ``text`` and ``runs`` and carries the
     page-wide style table). Get the object_id from get_page_info or find_objects. Finds the object
-    anywhere on the page (inline, nested in a table cell, or page-level). Raises if no object on the
-    page has that id."""
+    anywhere on the page (inline, nested in a table cell, or page-level). ``text_only`` returns
+    just its words (same projection as get_page's text_only). Raises if no object on the page has
+    that id."""
     if not object_id:
         raise ValueError("object_id is empty")
     page = parse_page(backend.get_page_content(page_id, PageInfo.piBasic))
-    obj = _locate_object(page, object_id)
-    if obj is None:
+    found = _locate_object(page, object_id)
+    if found is None:
         raise NodeNotFoundError(
             f"no object with objectID {object_id!r} on this page — object IDs come from "
             "get_page / get_page_info / find_objects"
         )
+    kind, model = found
+    if text_only:
+        obj: Any = {
+            "table": lambda: {"table": _text_grid(model)},
+            "image": lambda: {"image": model.ocr_text or ""},
+            "file": lambda: {"file": model.preferred_name},
+            "paragraph": lambda: _text_block(model),
+        }[kind]()
+    else:
+        obj = {
+            "table": _table_dict,
+            "image": _image_dict,
+            "file": _pagelevel_file_dict,
+            "paragraph": _paragraph_dict,
+        }[kind](model)
     return {"page_id": page.id, "last_modified_time": page.last_modified_time, "object": obj}
 
 
-def _locate_object(page: Any, object_id: str) -> dict[str, Any] | None:
-    """Find an object by id and project it to the same shape get_page uses for that kind."""
+def _locate_object(page: Any, object_id: str) -> tuple[str, Any] | None:
+    """Find an object by id → (kind, model); the caller projects it (full or text_only)."""
     for table in page.tables:  # incl. tables nested in a cell
         if table.object_id == object_id:
-            return _table_dict(table)
+            return "table", table
     for img in page.images:  # inline AND page-level (printout renders)
         if _oe_object_id(img) == object_id:
-            return _image_dict(img)
+            return "image", img
     for f in page.page_files:  # page-level attachments / printout carriers
         if f.object_id == object_id:
-            return _pagelevel_file_dict(f)
+            return "file", f
     for p in page.paragraphs:  # text paragraphs + inline attachments (recursive: incl. cells)
         if p.object_id == object_id:
-            return _paragraph_dict(p)
+            return "paragraph", p
     return None
 
 
@@ -323,26 +458,74 @@ def _inventory_item(obj_type: str, object_id: str | None, page_level: bool, **me
     }
 
 
-def _page_object_inventory(page: Any) -> list[dict[str, Any]]:
+# A table with at least this many cells is listed in get_page_info as ONE summary entry: its plain
+# text cell paragraphs are NOT enumerated (a 106×39 班表 made the inventory ~637K chars, 4,134
+# near-useless entries). Images / attachments / nested tables inside its cells still are.
+_COLLAPSE_TABLE_CELLS = 200
+
+
+def _collapsed_cell_paragraph_ids(page: Any, include_cells: bool) -> dict[str, set[str]]:
+    """table objectID → objectIDs of the plain-text paragraphs inside its cells (incl. nested
+    tables' cells), for every table big enough to collapse. Empty when include_cells."""
+    if include_cells:
+        return {}
+    out: dict[str, set[str]] = {}
+    for table in page.tables:
+        if len(table.rows) * len(table.columns) < _COLLAPSE_TABLE_CELLS:
+            continue
+        out[table.object_id] = set(_plain_cell_paragraph_ids(table))
+    return out
+
+
+def _plain_cell_paragraph_ids(table: Table):
+    """objectIDs of the plain-text paragraphs in a table's cells — recursing into nested
+    paragraphs and nested tables' cells (their images/attachments/tables are NOT yielded)."""
+
+    def walk(paras):
+        for p in paras:
+            if p.table is not None:
+                yield from _plain_cell_paragraph_ids(p.table)
+            elif p.image is None and p.inserted_file is None and p.object_id:
+                yield p.object_id
+            yield from walk(p.children)
+
+    for row in table.rows:
+        for cell in row:
+            yield from walk(cell.paragraphs)
+
+
+def _page_object_inventory(page: Any, include_cells: bool = False) -> list[dict[str, Any]]:
     """A FLAT, document-order list of every object on the page — the lightweight half of the
     two-step objectID rule. Walks outlines recursively (into nested children AND table cells)
     so nothing is buried, then appends the page-level objects (printout renders, page-level
     attachments) that get_page's structured view used to hide. Each entry carries the object's
     targetable object_id, which delete tool removes it, and light type metadata — NO full text
     runs, NO style table, NO pixels. A table appears as one entry (rows×cols); its cells'
-    contents follow as their own entries (they are distinct, separately-editable objects)."""
+    contents follow as their own entries (they are distinct, separately-editable objects) — EXCEPT
+    in a big table (>= _COLLAPSE_TABLE_CELLS cells, unless include_cells): its plain-text cell
+    paragraphs are summarized on the table entry (``cell_paragraphs_not_listed``) instead of
+    listed; images / attachments / nested tables in its cells are still listed."""
+    collapsed = _collapsed_cell_paragraph_ids(page, include_cells)
+    hidden = set().union(*collapsed.values()) if collapsed else set()
     items: list[dict[str, Any]] = []
     for p in page.paragraphs:  # recursive: outline paragraphs, children, and table-cell paragraphs
         if p.table is not None:
-            items.append(
-                _inventory_item(
-                    "table",
-                    p.table.object_id,
-                    False,
-                    rows=len(p.table.rows),
-                    columns=len(p.table.columns),
-                )
+            entry = _inventory_item(
+                "table",
+                p.table.object_id,
+                False,
+                rows=len(p.table.rows),
+                columns=len(p.table.columns),
             )
+            if p.table.object_id in collapsed:
+                entry["cell_paragraphs_not_listed"] = len(collapsed[p.table.object_id])
+                entry["cells_note"] = (
+                    "big table: its cell paragraphs are not listed here (images/attachments in "
+                    "cells still are). Read cell text with get_table(text_only=True); find one "
+                    "cell's paragraph objectID with find_objects, or call get_page_info with "
+                    "include_cells=True"
+                )
+            items.append(entry)
         elif p.image is not None:
             img = p.image
             items.append(
@@ -366,7 +549,7 @@ def _page_object_inventory(page: Any) -> list[dict[str, Any]]:
                     preferred_name=p.inserted_file.preferred_name,
                 )
             )
-        else:
+        elif p.object_id not in hidden:
             items.append(_inventory_item("paragraph", p.object_id, False, preview=_preview(p.text)))
     for img in page.page_images:  # page-level printout renders — own objectID, delete_page_content
         items.append(
@@ -387,20 +570,24 @@ def _page_object_inventory(page: Any) -> list[dict[str, Any]]:
     return items
 
 
-def get_page_info(backend: OneNoteBackend, page_id: str) -> dict[str, Any]:
+def get_page_info(
+    backend: OneNoteBackend, page_id: str, *, include_cells: bool = False
+) -> dict[str, Any]:
     """A lightweight inventory of every object on a page (IDs + metadata, NOT full content).
 
     The cheap companion to get_page: same parse, but projects only the flat object list — so
     "what's on this page / what is its objectID / what can I delete" costs no full-text/style
-    payload. Crucially EXHAUSTIVE: nested (table-cell) and page-level (printout) objects are all
-    listed, which is exactly what get_page's structured view could bury."""
+    payload. Crucially EXHAUSTIVE for images / attachments / tables: nested (table-cell) and
+    page-level (printout) objects are all listed, which is exactly what get_page's structured
+    view could bury. A big table's plain-text cell paragraphs are summarized, not listed, unless
+    ``include_cells``."""
     page = parse_page(backend.get_page_content(page_id, PageInfo.piBasic))
     return {
         "id": page.id,
         "name": page.name,
         "page_level": page.page_level,
         "last_modified_time": page.last_modified_time,
-        "objects": _page_object_inventory(page),
+        "objects": _page_object_inventory(page, include_cells),
     }
 
 

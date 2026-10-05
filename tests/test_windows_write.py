@@ -24,6 +24,7 @@ import base64
 import datetime as dt
 import json
 import os
+import time
 import uuid
 
 import pytest
@@ -31,7 +32,7 @@ from lxml import etree
 
 from onenote_com_mcp import server
 from onenote_com_mcp.enums import PageInfo
-from onenote_com_mcp.errors import ConcurrencyError
+from onenote_com_mcp.errors import ConcurrencyError, PageDisplayedError
 from onenote_com_mcp.service import create, hierarchy_edit, page_edit, read
 from onenote_com_mcp.xmllayer.namespaces import qn
 
@@ -903,3 +904,34 @@ def test_insert_image_from_path_roundtrip(backend, temp_section):
     finally:
         if os.path.exists(img_path):
             os.remove(img_path)
+
+
+def _navigate(backend, page_id):
+    backend._call("NavigateTo", lambda: backend.app.NavigateTo(page_id, "", False))
+    time.sleep(3)  # let the window settle so CurrentPageId reflects it
+
+
+def test_big_write_refused_while_page_is_displayed_live(backend, temp_section):
+    # VM 2026-10-05: a big write to the page on screen is ~5x slower (OneNote redraws every cell),
+    # so apply_page_edit refuses it until the user switches pages. Live proof the window's
+    # CurrentPageId matches our page ID and the guard trips / clears accordingly.
+    rows = [[f"r{r}c{c}" for c in range(25)] for r in range(40)]  # 1,000 cells = the threshold
+    page_id = create.create_page(backend, temp_section, "顯示中大表頁")
+    page_edit.add_table(backend, page_id, rows)
+    other = create.create_page(backend, temp_section, "別頁", "x")
+    info = read.get_page_info(backend, page_id)
+    table_id = next(o["object_id"] for o in info["objects"] if o["type"] == "table")
+    # big table: the inventory summarizes its 1,000 cell paragraphs instead of listing them
+    entry = next(o for o in info["objects"] if o["object_id"] == table_id)
+    assert entry["cell_paragraphs_not_listed"] == 1000
+    assert len(info["objects"]) < 10
+
+    _navigate(backend, page_id)
+    assert backend.get_current_window_ids().page_id == page_id
+    with pytest.raises(PageDisplayedError):
+        page_edit.find_and_replace(backend, page_id, "r3c4", "r3c4-X", object_id=table_id)
+
+    _navigate(backend, other)
+    page_edit.find_and_replace(backend, page_id, "r3c4", "r3c4-X", object_id=table_id)
+    grid = read.get_table(backend, page_id, table_id, text_only=True)["table"]["rows"]
+    assert grid[3][4] == "r3c4-X" and grid[3][5] == "r3c5"
