@@ -152,8 +152,10 @@ copies of it (`scripts/probe_bigtable.py`, untracked) — see docs/com-api-refer
   names / params / IDs (the server `_SERVER_INSTRUCTIONS` "keep narration BRIEF" nudge suffices;
   that paragraph STAYS). The page now also says: fully quit + restart the client, and start a NEW
   conversation after an upgrade (per-conversation tool cache). BOM + CRLF kept.
-- Version 1.3.1→1.4.0 (pyproject + __init__ + .iss + uv.lock). REMAINING: commit + push (Chris's
-  call) and real-Claude-Desktop acceptance on the 班表 page.
+- Version 1.3.1→1.4.0 (pyproject + __init__ + .iss + uv.lock). **PUSHED 2026-10-05 as commit
+  49cdd8d on origin/main** (pre-push Tier-1 393 green). **Real-Claude-Desktop acceptance PASSED
+  2026-10-05 (Chris):** text_only used by default on the 班表 page; the displayed-page guard asks
+  to switch pages before a big write. v1.4.0 COMPLETE.
 
 ## Status (2026-06-24, later)
 
