@@ -155,7 +155,10 @@ copies of it (`scripts/probe_bigtable.py`, untracked) — see docs/com-api-refer
 - Version 1.3.1→1.4.0 (pyproject + __init__ + .iss + uv.lock). **PUSHED 2026-10-05 as commit
   49cdd8d on origin/main** (pre-push Tier-1 393 green). **Real-Claude-Desktop acceptance PASSED
   2026-10-05 (Chris):** text_only used by default on the 班表 page; the displayed-page guard asks
-  to switch pages before a big write. v1.4.0 COMPLETE.
+  to switch pages before a big write. v1.4.0 COMPLETE. **GitHub Release `v1.4.0` published
+  2026-10-06** (tag → 2de3503, Latest; asset OneNoteMCP-Setup_1.4.0.exe, download sha256
+  re-verified = 6ba212c4…; English notes in the v1.3.1 format, incl. "start a NEW conversation
+  after upgrading").
 
 ## Status (2026-06-24, later)
 
