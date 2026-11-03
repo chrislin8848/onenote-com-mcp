@@ -133,7 +133,10 @@ another system. It returns plain text (tables as 2-D text arrays) with no runs, 
 objectIDs, typically 10-100x smaller and faster to read. Switch to the full read (text_only=False) \
 only for what it adds: styles, or the objectIDs an edit needs — and then fetch just what you will \
 touch (get_object for one paragraph, get_table windowed with start_row/max_rows/columns), or take \
-ids from get_page_info / find_objects.
+ids from get_page_info / find_objects. For a BIG table that is mostly blank (a schedule or roster \
+where most cells hold only spaces), read it with get_table(sparse=True) instead: only the \
+non-blank cells, each keyed by its column's header name — smaller still, and you never have to \
+count columns to know which column (e.g. which person) a value belongs to.
 
 Editing tables: pick the narrowest operation instead of rebuilding the table. To READ just one \
 table (e.g. a long Guest List or a schedule) use get_table, not the whole-page get_page — and pass \

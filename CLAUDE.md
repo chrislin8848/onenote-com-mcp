@@ -89,6 +89,19 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 - **Tier 2 (VM, checkpoint):** `@pytest.mark.windows`, real COM round-trips. Auto-skipped off
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
+## Status (2026-11-04)
+
+**v1.4.2 — instruction-only: point big-table READS at `sparse=True` (catalog 35 unchanged; Tier-1
+399 green; no COM/logic change → no Tier-2).** Chris asked whether the MCP descriptions taught
+the sparse read; they did (get_table description + the "Editing tables" paragraph), but the
+general "Reading content: DEFAULT to text_only" rule — the one a model applies first — did not,
+nor did the notes a model sees on the way to a big table. Added the pointer in three places:
+the "Reading content" paragraph (mostly-blank big table → get_table(sparse=True)), get_page_info's
+collapsed-table `cells_note`, and get_table's `write_cost` note (only when the read was NOT already
+sparse). Version 1.4.1→1.4.2. Installer OneNoteMCP-Setup_1.4.2.exe sha256
+26501b8d1b89385432d006af0b18dbdc6276ec16dbb9ee1e14aec3fceadf6cf7, 24,689,281 B; frozen --selftest OK; exe over stdio: serverInfo 1.4.2,
+35 tools, instructions contain get_table(sparse=True).
+
 ## Status (2026-11-03)
 
 **v1.4.1 — `get_table(sparse=True)`: non-blank cells only, keyed by header name (catalog 35

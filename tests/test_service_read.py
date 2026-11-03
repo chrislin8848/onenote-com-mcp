@@ -193,6 +193,9 @@ def test_get_table_flags_write_cost_only_on_a_big_table(fixtures_dir, monkeypatc
     monkeypatch.setattr(read, "_BIG_TABLE_CELLS", 20)
     big = read.get_table(_be(fixtures_dir), TABLE_PAGE_ID, tid, text_only=True)["table"]
     assert "batch" in big["write_cost"] and "20 cells" in big["write_cost"]
+    assert "sparse=True" in big["write_cost"]  # a text_only read is pointed at the sparse read
+    sparse = read.get_table(_be(fixtures_dir), TABLE_PAGE_ID, tid, sparse=True)["table"]
+    assert "sparse=True" not in sparse["write_cost"]  # ...but not when it already is one
     assert "OPEN in OneNote" not in big["write_cost"]  # the fixture's current page is another one
 
 
@@ -558,6 +561,7 @@ def test_get_page_info_big_table_summarizes_its_cells(fixtures_dir, monkeypatch)
     entry = next(o for o in objs if o["object_id"] == tid)
     assert entry["cell_paragraphs_not_listed"] == len(cell_ids)
     assert "find_objects" in entry["cells_note"] and "include_cells" in entry["cells_note"]
+    assert "sparse=True" in entry["cells_note"]
 
     expanded = read.get_page_info(_be(fixtures_dir), TABLE_PAGE_ID, include_cells=True)["objects"]
     assert cell_ids <= {o["object_id"] for o in expanded}

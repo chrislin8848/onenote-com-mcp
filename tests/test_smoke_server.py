@@ -229,6 +229,8 @@ def test_server_instructions_present():
     assert "Big tables are slow to WRITE" in mcp.instructions
     assert "DEFAULT to text_only=True" in mcp.instructions
     assert "sparse=True" in mcp.instructions
+    reading = next(p for p in mcp.instructions.split("\n\n") if p.startswith("Reading content"))
+    assert "get_table(sparse=True)" in reading  # the general read rule points big tables at sparse
     assert "OPEN on the user's screen" in mcp.instructions
     assert "still COMPLETED" in mcp.instructions
     # pacing: heavy copy/write calls go in small batches (the server also serializes them via a

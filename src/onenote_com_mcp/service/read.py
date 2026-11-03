@@ -405,6 +405,11 @@ def get_table(
             "all cell changes into ONE batch_update / modify_table set_rows call; if a write times "
             "out it most likely still completed, so re-read (text_only) before retrying"
         )
+        if not sparse:
+            body["write_cost"] += (
+                ". To READ it, get_table(sparse=True) lists only the non-blank cells, keyed by "
+                "header name"
+            )
         if _is_displayed(backend, page.id):
             body["write_cost"] += (
                 ". This page is OPEN in OneNote right now, which makes writes ~5x slower (minutes) "
@@ -586,7 +591,9 @@ def _page_object_inventory(page: Any, include_cells: bool = False) -> list[dict[
                 entry["cell_paragraphs_not_listed"] = len(collapsed[p.table.object_id])
                 entry["cells_note"] = (
                     "big table: its cell paragraphs are not listed here (images/attachments in "
-                    "cells still are). Read cell text with get_table(text_only=True); find one "
+                    "cells still are). Read cell text with get_table(sparse=True) — non-blank "
+                    "cells keyed by header name, best for a mostly-blank table — or "
+                    "get_table(text_only=True); find one "
                     "cell's paragraph objectID with find_objects, or call get_page_info with "
                     "include_cells=True"
                 )
