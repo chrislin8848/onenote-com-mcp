@@ -100,7 +100,8 @@ the "Reading content" paragraph (mostly-blank big table → get_table(sparse=Tru
 collapsed-table `cells_note`, and get_table's `write_cost` note (only when the read was NOT already
 sparse). Version 1.4.1→1.4.2. Installer OneNoteMCP-Setup_1.4.2.exe sha256
 26501b8d1b89385432d006af0b18dbdc6276ec16dbb9ee1e14aec3fceadf6cf7, 24,689,281 B; frozen --selftest OK; exe over stdio: serverInfo 1.4.2,
-35 tools, instructions contain get_table(sparse=True).
+35 tools, instructions contain get_table(sparse=True). PUSHED 2026-11-04 as ce549dc; GitHub
+Release `v1.4.2` published (Latest, asset sha re-verified).
 
 ## Status (2026-11-03)
 
