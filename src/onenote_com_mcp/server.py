@@ -138,7 +138,9 @@ ids from get_page_info / find_objects.
 Editing tables: pick the narrowest operation instead of rebuilding the table. To READ just one \
 table (e.g. a long Guest List or a schedule) use get_table, not the whole-page get_page — and pass \
 text_only=True when you need the cell TEXT (the default full model carries per-cell objectIDs + \
-styles and is megabytes on a big table); window it with start_row/max_rows/columns. To \
+styles and is megabytes on a big table) — or sparse=True for a big, mostly-blank table (only the \
+non-blank cells, keyed by header name, so you never count columns); window it with \
+start_row/max_rows/columns. To \
 REARRANGE columns or rows — move a column to the front, drop one and shift the rest — use \
 modify_table reorder_columns / reorder_rows with the complete target order (e.g. \
 order=[2,0,1]); do NOT clear and re-type cells \
@@ -379,6 +381,8 @@ def get_table(
     page_id: str,
     table_object_id: str,
     text_only: bool = False,
+    sparse: bool = False,
+    header_row: int | None = 0,
     start_row: int = 0,
     max_rows: int | None = None,
     columns: list[int] | None = None,
@@ -398,7 +402,18 @@ def get_table(
                         large as get_page (every cell, even an empty one, carries ids and style) —
                         it is NOT a compact read. Use it only when you need styles or objectIDs,
                         ideally windowed to the few cells you will touch.
-    Window either shape with start_row + max_rows (0-indexed rows) and columns (0-indexed column
+      sparse=True     — text-only AND only the NON-BLANK cells (a cell holding just spaces, a
+                        full-width space 「　」 or a tab counts as blank), row by row, each keyed by
+                        its column's HEADER NAME: {"r": 12, "cells": {"團號": "…", "領隊A": "5"}}.
+                        Use it for a big, mostly-blank table (a schedule / roster): smaller still,
+                        and you read WHICH column a value is in by name instead of counting
+                        columns. `header` lists every column's key in column order (its position =
+                        the column number for modify_table set_column / set_rows); `r` is the row's
+                        index in the whole table (= set_rows at_index). Duplicate header names get
+                        "#<column>", a blank header cell becomes its column number. header_row
+                        picks the header row (default 0, even when the table is not flagged as
+                        having one); pass null to key by column number instead.
+    Window any shape with start_row + max_rows (0-indexed rows) and columns (0-indexed column
     numbers, e.g. [0,1,2,3]); total_rows / total_columns report the whole table's size so you can
     page through it. Editing a cell does NOT require its objectID from a full read: modify_table
     set_rows (at_index=row, None for the cells to keep) / set_column edit BY POSITION, and
@@ -411,6 +426,8 @@ def get_table(
             page_id,
             table_object_id,
             text_only=text_only,
+            sparse=sparse,
+            header_row=header_row,
             start_row=start_row,
             max_rows=max_rows,
             columns=columns,

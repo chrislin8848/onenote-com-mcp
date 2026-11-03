@@ -147,7 +147,7 @@ Repo: <https://github.com/mhzarem/onenote-mcp>。**clone 它當參考,但不是�
 | `list_pages` | 列某節的頁(**範圍化,含 `pageLevel` 子頁階層**) | `GetHierarchy(sectionId, hsPages)` |
 | `search_pages` | 跨/範圍文字搜尋 | `FindPages` |
 | `get_page` | 取單頁內容(**保真富文字** + 結構化表格);**`text_only=True`(鼓勵預設使用)** 只回文字(段落=字串、表格=二維文字陣列、圖=OCR 文字、附件=檔名),無 runs/樣式/objectID,小 10–100 倍 | `GetPageContent(pageId)` |
-| `get_table` | 取**單一表格**,不含整頁其餘。**`text_only=True`(鼓勵預設使用)** = 每格文字二維陣列(106×39 實表 2.9M→21.9K 字元);預設完整模型(每格文字+樣式+底色 + row/cell/段落 objectID)在大表**並不精簡**(≈ `get_page`)。兩種都可用 `start_row`/`max_rows`/`columns` 分段讀;≥1,000 格附 `write_cost` 提示(該頁顯示中時另註明) | `GetPageContent` → 依 objectID 找該 `one:Table`(含巢狀)投影 |
+| `get_table` | 取**單一表格**,不含整頁其餘。**`text_only=True`(鼓勵預設使用)** = 每格文字二維陣列(106×39 實表 2.9M→21.9K 字元);預設完整模型(每格文字+樣式+底色 + row/cell/段落 objectID)在大表**並不精簡**(≈ `get_page`)。**`sparse=True`**(v1.4.1)= text-only 且只回非空白格(全形空白「　」/NBSP/Tab/零寬字元皆視為空白),逐列以表頭名稱為鍵:`{"r": 列號, "cells": {表頭: 值}}`,`header` 依欄序列出每欄鍵(重複名加 `#欄號`、空白表頭用欄號),`header_row` 預設第 0 列(null = 用欄號);大而多空白的班表/名單用,免數欄位。各模式都可用 `start_row`/`max_rows`/`columns` 分段讀;≥1,000 格附 `write_cost` 提示(該頁顯示中時另註明) | `GetPageContent` → 依 objectID 找該 `one:Table`(含巢狀)投影 |
 | `get_object` | 取**單一物件**(段落完整文字+runs+樣式,或表格/圖片/附件)by objectID,不含整頁其餘——比 `get_page` 精簡(不含整頁重複 runs 與全頁樣式表),找得到頁面任何位置(行內/巢狀於 cell/頁層);`text_only=True`(鼓勵)只回文字 | `GetPageContent` → 依 objectID 定位並投影該物件 |
 | `find_objects` | 取頁面上**文字含某子字串**的物件 objectID(**頁內**定位,對應 `search_pages` 的「找整頁」)——比對**完整文字**(非 `get_page_info` 的 40 字截斷預覽),用來精準定位要改的段(如錯字所在) | `GetPageContent` → 走訪段落比對全文 |
 | `get_page_images` | 取頁面圖片(二進位) | `GetPageContent` → `GetBinaryPageContent(callbackId)` |

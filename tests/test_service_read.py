@@ -597,3 +597,105 @@ def test_get_page_info_big_table_still_lists_images_in_its_cells(tmp_path, monke
     assert [o["type"] for o in objs] == ["table", "image"]
     assert objs[0]["cell_paragraphs_not_listed"] == 3
     assert objs[1]["object_id"] == "{IMG-OE}"
+
+
+# --- get_table(sparse=True): non-blank cells only, keyed by header name ---------------------
+
+
+def _synthetic_table_page(tmp_path, rows, has_header_row=True):
+    """A one-table page from a 2-D list of cell texts (synthetic — no real data)."""
+    from xml.sax.saxutils import escape
+
+    from onenote_com_mcp.backend.fixture import _sanitize
+
+    pid, n = "{SP}{1}{B0}", [0]
+
+    def oid():
+        n[0] += 1
+        return f"{{X{n[0]}}}"
+
+    def cell(text):
+        return (
+            f'<one:Cell objectID="{oid()}"><one:OEChildren><one:OE objectID="{oid()}">'
+            f"<one:T><![CDATA[{escape(text)}]]></one:T></one:OE></one:OEChildren></one:Cell>"
+        )
+
+    n_cols = max(len(r) for r in rows)
+    cols = "".join(f'<one:Column index="{j}" width="40"/>' for j in range(n_cols))
+    body = "".join(
+        f'<one:Row objectID="{oid()}">' + "".join(cell(t) for t in r) + "</one:Row>" for r in rows
+    )
+    xml = (
+        '<?xml version="1.0"?><one:Page '
+        'xmlns:one="http://schemas.microsoft.com/office/onenote/2013/onenote" '
+        f'ID="{pid}" lastModifiedTime="2026-11-03T00:00:00.000Z"><one:Outline objectID="{{O}}">'
+        f'<one:OEChildren><one:OE objectID="{{TOE}}"><one:Table objectID="{{TBL}}" '
+        f'hasHeaderRow="{"true" if has_header_row else "false"}"><one:Columns>{cols}'
+        f"</one:Columns>{body}</one:Table></one:OE></one:OEChildren></one:Outline></one:Page>"
+    )
+    (tmp_path / f"page_{_sanitize(pid)}.xml").write_text(xml, encoding="utf-8")
+    return FixtureBackend(tmp_path), pid, "{TBL}"
+
+
+_GRID = [
+    ["活動", "日期", "領隊A", "領隊B", "領隊A", "　"],
+    ["春季團", "04/01", "　", "5", "", "x"],
+    ["　", " ", "​", " \t", "　　", ""],  # every cell blank
+    ["夏季團", "  07/15 ", "3", "　", "2", "　"],
+]
+
+
+def test_sparse_lists_only_non_blank_cells_keyed_by_header(tmp_path):
+    be, pid, tid = _synthetic_table_page(tmp_path, _GRID)
+    t = read.get_table(be, pid, tid, sparse=True)["table"]
+    # duplicate names get #column on EVERY occurrence; a blank header cell becomes its column number
+    assert t["header"] == ["活動", "日期", "領隊A#2", "領隊B", "領隊A#4", "5"]
+    assert t["header_row"] == 0
+    assert t["total_rows"] == 4 and t["total_columns"] == 6
+    # header row not repeated; the all-blank row 2 is omitted but r keeps the table's row numbers
+    assert t["rows"] == [
+        {"r": 1, "cells": {"活動": "春季團", "日期": "04/01", "領隊B": "5", "5": "x"}},
+        {"r": 3, "cells": {"活動": "夏季團", "日期": "07/15", "領隊A#2": "3", "領隊A#4": "2"}},
+    ]
+
+
+def test_sparse_is_smaller_than_text_only_on_a_mostly_blank_table(tmp_path):
+    grid = [["欄" + str(j) for j in range(30)]] + [
+        ["　"] * 30 if i % 3 else ["團" + str(i)] + ["　"] * 29 for i in range(1, 60)
+    ]
+    be, pid, tid = _synthetic_table_page(tmp_path, grid)
+    dense = json.dumps(read.get_table(be, pid, tid, text_only=True), ensure_ascii=False)
+    sparse = json.dumps(read.get_table(be, pid, tid, sparse=True), ensure_ascii=False)
+    assert len(sparse) < len(dense) / 3
+
+
+def test_sparse_header_row_none_keys_by_column_number(tmp_path):
+    be, pid, tid = _synthetic_table_page(tmp_path, _GRID, has_header_row=False)
+    t = read.get_table(be, pid, tid, sparse=True, header_row=None)["table"]
+    assert t["header"] == ["0", "1", "2", "3", "4", "5"] and t["header_row"] is None
+    assert t["rows"][0] == {
+        "r": 0,
+        "cells": {"0": "活動", "1": "日期", "2": "領隊A", "3": "領隊B", "4": "領隊A"},
+    }
+
+
+def test_sparse_defaults_to_row_0_header_even_when_not_flagged(tmp_path):
+    # many OneNote tables have a header row without the hasHeaderRow flag — row 0 is still used
+    be, pid, tid = _synthetic_table_page(tmp_path, _GRID, has_header_row=False)
+    t = read.get_table(be, pid, tid, sparse=True)["table"]
+    assert t["header"][0] == "活動" and t["rows"][0]["r"] == 1
+
+
+def test_sparse_respects_the_window_and_keeps_header_names(tmp_path):
+    be, pid, tid = _synthetic_table_page(tmp_path, _GRID)
+    t = read.get_table(be, pid, tid, sparse=True, start_row=3, max_rows=1, columns=[0, 4])["table"]
+    assert t["header"][4] == "領隊A#4"  # header still read from row 0 though the window starts at 3
+    assert t["rows"] == [{"r": 3, "cells": {"活動": "夏季團", "領隊A#4": "2"}}]
+
+
+def test_sparse_rejects_bad_header_row(tmp_path):
+    be, pid, tid = _synthetic_table_page(tmp_path, _GRID)
+    with pytest.raises(ValueError, match="header_row"):
+        read.get_table(be, pid, tid, sparse=True, header_row=9)
+    with pytest.raises(ValueError, match="header_row"):
+        read.get_table(be, pid, tid, sparse=True, header_row=-1)

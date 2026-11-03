@@ -89,6 +89,38 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 - **Tier 2 (VM, checkpoint):** `@pytest.mark.windows`, real COM round-trips. Auto-skipped off
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
+## Status (2026-11-03)
+
+**v1.4.1 — `get_table(sparse=True)`: non-blank cells only, keyed by header name (catalog 35
+unchanged; Tier-1 399 green; Tier-2 VM-VALIDATED 74 passed / 8 skip / 0 fail incl. the new live
+sparse test; installer OneNoteMCP-Setup_1.4.1.exe sha256
+b4c413d400f36d87283a0a23248c9bd734182caf8095d7e645102a422aacf2d2, 24,685,653 B; frozen --selftest
+OK; exe over stdio: serverInfo 1.4.1, 35 tools, get_table has sparse + header_row).** From a Claude-authored proposal Chris
+relayed: syncing the big 班表 with `text_only` still meant a 106×39 grid where ~3,600 of 4,134 cells
+hold only a FULL-WIDTH space 「　」 and the model had to COUNT columns to tell which person a value
+belongs to — slow and error-prone. Evaluated + adjusted with Chris before building:
+- **`sparse=True`** (implies text-only): `header` = every column's key in column order (position =
+  column number, for positional set_column / set_rows edits), `rows` = only rows with ≥1 non-blank
+  cell as `{"r": <whole-table row index = set_rows at_index>, "cells": {key: trimmed text}}`; the
+  header row is not repeated; all-blank rows are omitted (r keeps true numbering). Blank = empty
+  after trimming `\s` (covers half/full-width space U+3000, NBSP, tab, newline) + U+200B/U+FEFF.
+- **Keys:** header row's trimmed text; blank header cell → its column number; a name shared by
+  several columns → `name#<col>` on EVERY occurrence (no collision, every key maps to one column).
+- **`header_row` (default 0, null → column numbers)** — CHANGED from the proposal's "use row 0
+  only if has_header_row": many OneNote tables have a header row WITHOUT the hasHeaderRow flag, so
+  gating on it would silently fall back to numbers. Window params apply; the header is still read
+  from `header_row` when start_row skips past it.
+- Proposal items dropped: merged cells (OneNote tables have no cell merging); the "~1/8 size"
+  estimate (text_only was already ~21.9K; header keys repeat per cell — the real win is
+  ACCURACY: no column counting).
+- **Real page (VM, read-only probe 2026-11-03):** text_only 22,209 → sparse 12,308 chars (~55%);
+  has_header_row=True, 39 header keys (0 dup, 0 blank), 105/106 rows listed, 486 non-blank cells.
+- Tests use SYNTHETIC data only (the proposal quoted real tour names / codes / colleague names —
+  none of it enters the public repo). Version 1.4.0→1.4.1.
+- **Found, NOT fixed (pre-existing, flagged to Chris):** a June fixture's image OCR text
+  (`tests/fixtures/page_…E186755685473036950911912026369089049789941*.xml`) still carries a real
+  colleague first name + tour-name fragments — missed by the 2026-06-17 PII scrub; already public.
+
 ## Status (2026-10-05)
 
 **v1.4.0 — big-table READ + WRITE performance (catalog 35 unchanged; Tier-1 393 green; Tier-2

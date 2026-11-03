@@ -935,3 +935,25 @@ def test_big_write_refused_while_page_is_displayed_live(backend, temp_section):
     page_edit.find_and_replace(backend, page_id, "r3c4", "r3c4-X", object_id=table_id)
     grid = read.get_table(backend, page_id, table_id, text_only=True)["table"]["rows"]
     assert grid[3][4] == "r3c4-X" and grid[3][5] == "r3c5"
+
+
+def test_get_table_sparse_live(backend, temp_section):
+    # a schedule-like table padded with FULL-WIDTH spaces (what real OneNote rosters hold):
+    # sparse returns only the non-blank cells, keyed by the header row, with true row numbers
+    rows = [
+        ["活動", "日期", "領隊A", "領隊B"],
+        ["春季團", "04/01", "　", "5"],
+        ["　", "　", "　", "　"],
+        ["夏季團", "07/15", "3", "　"],
+    ]
+    page_id = create.create_page(backend, temp_section, "稀疏讀取頁")
+    page_edit.add_table(backend, page_id, rows, has_header_row=True)
+    info = read.get_page_info(backend, page_id)
+    table_id = next(o["object_id"] for o in info["objects"] if o["type"] == "table")
+
+    t = read.get_table(backend, page_id, table_id, sparse=True)["table"]
+    assert t["header"] == ["活動", "日期", "領隊A", "領隊B"]
+    assert t["rows"] == [
+        {"r": 1, "cells": {"活動": "春季團", "日期": "04/01", "領隊B": "5"}},
+        {"r": 3, "cells": {"活動": "夏季團", "日期": "07/15", "領隊A": "3"}},
+    ]

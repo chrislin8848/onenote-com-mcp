@@ -127,7 +127,8 @@ def test_contrastive_borders_present(tools):
         assert "text_only" in tools[name].inputSchema["properties"]
         assert "PREFER" in tools[name].description or "PREFERRED" in tools[name].description
     params = tools["get_table"].inputSchema["properties"]
-    assert {"text_only", "start_row", "max_rows", "columns"} <= set(params)
+    assert {"text_only", "sparse", "header_row", "start_row", "max_rows", "columns"} <= set(params)
+    assert "sparse=True" in tools["get_table"].description
     # file discovery (get_page_info) vs file-extraction precheck (get_page_files_info): the
     # precheck points back to the inventory for plain discovery
     assert "get_page_info" in tools["get_page_files_info"].description
@@ -227,6 +228,7 @@ def test_server_instructions_present():
     # big-table writes: batch them, and a timed-out write probably completed (verify, don't retry)
     assert "Big tables are slow to WRITE" in mcp.instructions
     assert "DEFAULT to text_only=True" in mcp.instructions
+    assert "sparse=True" in mcp.instructions
     assert "OPEN on the user's screen" in mcp.instructions
     assert "still COMPLETED" in mcp.instructions
     # pacing: heavy copy/write calls go in small batches (the server also serializes them via a

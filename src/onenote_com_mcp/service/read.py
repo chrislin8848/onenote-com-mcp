@@ -14,6 +14,7 @@ structured tables (never flattened to one string), and every content object's ``
 from __future__ import annotations
 
 import base64
+import re
 from typing import Any
 
 from onenote_com_mcp.backend.base import OneNoteBackend
@@ -273,17 +274,70 @@ def _is_displayed(backend: OneNoteBackend, page_id: str) -> bool:
 _BIG_TABLE_CELLS = 1000
 
 
+# "Blank" for sparse reads: nothing left after trimming whitespace — Python's \s already covers the
+# half-width space, the FULL-WIDTH space U+3000 (what OneNote schedules are padded with), NBSP
+# U+00A0, newlines and tabs; zero-width space / BOM are added explicitly (not \s).
+_TRIM_RE = re.compile(r"^[\s\u200b\ufeff]+|[\s\u200b\ufeff]+$")
+
+
+def _clean(text: str | None) -> str:
+    return _TRIM_RE.sub("", text or "")
+
+
+def _header_keys(table: Table, header_row: int | None) -> list[str]:
+    """One key per column (index = column number): the header row's trimmed text, the column
+    number when that header cell is blank (or header_row is None), and ``name#j`` for EVERY column
+    whose name is shared — so no two keys collide and a key always maps back to one column."""
+    n_cols = len(table.columns)
+    if header_row is None:
+        return [str(j) for j in range(n_cols)]
+    names = [_clean(c.text) for c in table.rows[header_row]]
+    names += [""] * (n_cols - len(names))
+    names = [name or str(j) for j, name in enumerate(names[:n_cols])]
+    counts: dict[str, int] = {}
+    for name in names:
+        counts[name] = counts.get(name, 0) + 1
+    return [f"{name}#{j}" if counts[name] > 1 else name for j, name in enumerate(names)]
+
+
+def _sparse_table(
+    table: Table, row_idx: list[int], col_idx: list[int], header_row: int | None
+) -> dict[str, Any]:
+    """The sparse projection: ``header`` = every column's key (position = column number, for
+    positional edits with modify_table set_rows / set_column); ``rows`` = only rows of the window
+    with at least one non-blank cell (the header row itself is not repeated), each as
+    ``{"r": <table row index>, "cells": {key: trimmed text}}`` holding only its non-blank cells.
+    ``r`` is the 0-based row index in the WHOLE table — the same index set_rows' at_index takes."""
+    keys = _header_keys(table, header_row)
+    rows: list[dict[str, Any]] = []
+    for i in row_idx:
+        if i == header_row:
+            continue
+        row = table.rows[i]
+        cells = {keys[j]: text for j in col_idx if j < len(row) and (text := _clean(row[j].text))}
+        if cells:
+            rows.append({"r": i, "cells": cells})
+    return {"header_row": header_row, "header": keys, "rows": rows}
+
+
 def get_table(
     backend: OneNoteBackend,
     page_id: str,
     table_object_id: str,
     *,
     text_only: bool = False,
+    sparse: bool = False,
+    header_row: int | None = 0,
     start_row: int = 0,
     max_rows: int | None = None,
     columns: list[int] | None = None,
 ) -> dict[str, Any]:
     """Read ONE table WITHOUT the rest of the page, found anywhere on it (incl. nested in a cell).
+
+    ``sparse`` (implies text-only) → only the NON-BLANK cells, row by row, each keyed by its
+    column's header name — see :func:`_sparse_table`. For a big, mostly-blank table (a schedule
+    where most cells hold a full-width space) it is both smaller and unambiguous: the model reads
+    ``{"r": 7, "cells": {"團號": "…", "領隊A": "5"}}`` instead of counting 39 columns.
 
     Two shapes. ``text_only`` → each cell's plain text as a 2-D string array — no runs, styles,
     shading or objectIDs: the compact read for a table's DATA. A real 106×39 班表 is megabytes in
@@ -294,11 +348,12 @@ def get_table(
     Either shape can be windowed: ``start_row`` + ``max_rows`` (0-indexed rows) and ``columns``
     (0-indexed column numbers, in the order given). ``total_rows`` / ``total_columns`` always report
     the whole table's size and ``start_row`` / ``returned_rows`` / ``column_indices`` say which
-    slice came back, so a
-    caller can page through a big table. Raises if no such table is on the page or the window is
-    invalid."""
+    slice came back, so a caller can page through a big table. Raises if no such table is on the
+    page or the window is invalid."""
     if start_row < 0:
         raise ValueError(f"start_row must be >= 0, got {start_row}")
+    if header_row is not None and header_row < 0:
+        raise ValueError(f"header_row must be >= 0 (or null for column numbers), got {header_row}")
     if max_rows is not None and max_rows < 1:
         raise ValueError(f"max_rows must be >= 1, got {max_rows}")
     page = parse_page(backend.get_page_content(page_id, PageInfo.piBasic))
@@ -323,8 +378,18 @@ def get_table(
         "returned_rows": len(row_idx),
         "column_indices": col_idx,
     }
-    if text_only:
+    if sparse:
+        if header_row is not None and header_row >= n_rows:
+            raise ValueError(f"header_row {header_row} out of range — the table has {n_rows} rows")
         body: dict[str, Any] = {
+            "type": "table",
+            "object_id": table.object_id,
+            "has_header_row": table.has_header_row,
+            **window,
+            **_sparse_table(table, row_idx, col_idx, header_row),
+        }
+    elif text_only:
+        body = {
             "type": "table",
             "object_id": table.object_id,
             "has_header_row": table.has_header_row,
