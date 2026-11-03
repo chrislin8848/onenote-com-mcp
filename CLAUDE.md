@@ -95,7 +95,8 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 unchanged; Tier-1 399 green; Tier-2 VM-VALIDATED 74 passed / 8 skip / 0 fail incl. the new live
 sparse test; installer OneNoteMCP-Setup_1.4.1.exe sha256
 b4c413d400f36d87283a0a23248c9bd734182caf8095d7e645102a422aacf2d2, 24,685,653 B; frozen --selftest
-OK; exe over stdio: serverInfo 1.4.1, 35 tools, get_table has sparse + header_row).** From a Claude-authored proposal Chris
+OK; exe over stdio: serverInfo 1.4.1, 35 tools, get_table has sparse + header_row). PUSHED
+2026-11-03 as aa0b7da; GitHub Release `v1.4.1` published (Latest, asset sha re-verified).** From a Claude-authored proposal Chris
 relayed: syncing the big 班表 with `text_only` still meant a 106×39 grid where ~3,600 of 4,134 cells
 hold only a FULL-WIDTH space 「　」 and the model had to COUNT columns to tell which person a value
 belongs to — slow and error-prone. Evaluated + adjusted with Chris before building:
