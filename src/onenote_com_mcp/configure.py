@@ -9,9 +9,18 @@ is identical across clients: a single ``mcpServers`` object whose ``onenote`` ke
   claude_desktop_config.json``; detected by the install itself — the program dir
   ``%LOCALAPPDATA%\\Programs\\Claude`` or an Uninstall registry key (NOT by the config file, which
   doesn't exist before first launch).
-- **Claude Desktop, Microsoft Store (MSIX):** config at ``%LOCALAPPDATA%\\Packages\\<Claude
-  package>\\LocalCache\\Roaming\\Claude\\claude_desktop_config.json`` — the package family name is
-  DETECTED by globbing (its exact value varies), never hardcoded; the package dir IS the install.
+- **Claude Desktop, MSIX (claude.ai/download installer + Microsoft Store):** the package dir
+  ``%LOCALAPPDATA%\\Packages\\<Claude package>`` IS the install (family name DETECTED by globbing,
+  never hardcoded). WHICH config file an MSIX Claude reads is INCONSISTENT (field-confirmed,
+  anthropics/claude-code#26073): a fresh install reads the virtualized
+  ``Packages\\<pkg>\\LocalCache\\Roaming\\Claude\\claude_desktop_config.json``, but a machine that
+  already had ``%APPDATA%\\Claude`` (an earlier non-MSIX Claude) keeps reading the REAL
+  ``%APPDATA%\\Claude\\claude_desktop_config.json``. We cannot tell which from outside, so for an
+  MSIX install we write BOTH (2026-11-19: a Win10 PC's Claude never listed onenote after
+  re-running --configure — that turned out to be the NEWER move below, Claude-Data).
+- **Claude Desktop, new user-data location:** ``%LOCALAPPDATA%\\Claude-Data\\claude_<id>\\
+  claude_desktop_config.json`` — newer Claude moves its user data here and reads ONLY this file
+  once moved; each ``claude*`` profile dir found is written.
 - **Antigravity (CLI + IDE share ONE config):** config at ``%USERPROFILE%\\.gemini\\config\\
   mcp_config.json`` — writing this single file covers both the CLI and the IDE. Detected by the
   install — CONFIRMED on a real machine 2026-06-16: the program dir
@@ -35,6 +44,7 @@ Pure path/JSON logic — host-testable by pointing APPDATA/LOCALAPPDATA/USERPROF
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -195,7 +205,13 @@ def _claude_regular_config_path(env: dict[str, str]) -> Path | None:
         # macOS convenience, so a not-installed Windows profile yields None).
         localappdata = env.get("LOCALAPPDATA")
         installed = (
-            bool(localappdata and (Path(localappdata) / "Programs" / "Claude").is_dir())
+            bool(
+                localappdata
+                and any(
+                    (Path(localappdata) / sub).is_dir()
+                    for sub in ("Programs/Claude", "AnthropicClaude")  # AnthropicClaude = Squirrel
+                )
+            )
             or _claude_regular_installed_via_registry()
         )
         return Path(appdata) / "Claude" / _CLAUDE_CONFIG_FILENAME if installed else None
@@ -221,6 +237,7 @@ def claude_config_paths(environ: dict[str, str] | None = None) -> list[Path]:
         paths.append(regular)
 
     localappdata = env.get("LOCALAPPDATA")
+    appdata = env.get("APPDATA")
     if localappdata:
         packages = Path(localappdata) / "Packages"
         if packages.is_dir():
@@ -229,6 +246,22 @@ def claude_config_paths(environ: dict[str, str] | None = None) -> list[Path]:
                     paths.append(
                         pkg / "LocalCache" / "Roaming" / "Claude" / _CLAUDE_CONFIG_FILENAME
                     )
+                    # An MSIX Claude may instead read the REAL %APPDATA% file (machine that had
+                    # %APPDATA%\Claude before) — write it too; see the module docstring.
+                    if appdata:
+                        paths.append(Path(appdata) / "Claude" / _CLAUDE_CONFIG_FILENAME)
+
+    # NEW Claude Desktop (field-confirmed 2026-11-04 on Chris's PC + 2026-11-19 on a colleague's
+    # Win10, log line "[user-data-move] already_moved { place: 'outside' }"): user data MOVES to
+    # %LOCALAPPDATA%\Claude-Data\claude_<id>\ and the config there is the ONLY one read — the
+    # %APPDATA% / LocalCache copies go stale. Without this, the install "succeeds" but Claude never
+    # lists onenote (the hmt-portal mcp-client setup hit the same wall, its commit 40fd782).
+    if localappdata:
+        data_root = Path(localappdata) / "Claude-Data"
+        if data_root.is_dir():
+            for profile in sorted(data_root.iterdir()):
+                if profile.is_dir() and _looks_like_claude(profile.name):
+                    paths.append(profile / _CLAUDE_CONFIG_FILENAME)
 
     # de-dupe, preserve order
     seen: set[Path] = set()
@@ -295,10 +328,18 @@ def merge_server_entry(config: dict, entry: dict, name: str = SERVER_NAME) -> di
 
 
 def _load(path: Path) -> dict:
+    """Read an existing client config. ``utf-8-sig`` so a BOM (Win10 Notepad's "UTF-8" save)
+    doesn't make a valid file look corrupt. A file that exists but can't be parsed is BACKED UP
+    (``<name>.onenote-backup``) before we overwrite it — never silently drop the user's other
+    settings/servers."""
+    if not path.exists():
+        return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
+        with contextlib.suppress(OSError):
+            shutil.copy2(path, path.with_name(path.name + ".onenote-backup"))
         return {}
 
 

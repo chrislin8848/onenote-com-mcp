@@ -89,6 +89,29 @@ every push so a red CI is caught locally; `git push --no-verify` bypasses it for
 - **Tier 2 (VM, checkpoint):** `@pytest.mark.windows`, real COM round-trips. Auto-skipped off
   Windows. Driven by `scripts/remote_test.sh` once the VM exists.
 
+## Status (2026-11-19)
+
+**v1.4.3 — `--configure` writes the NEW Claude Desktop config location (catalog 35 unchanged;
+Tier-1 404 green; no COM change → no Tier-2).** Field case: a colleague's Win10 Claude Desktop
+(MSIX 5.11492) listed hillmont-* but NOT onenote / google-map-mcp in Settings → Developer, even
+after re-running --configure. ROOT CAUSE (diagnosed live with the user): newer Claude MOVES its user
+data to `%LOCALAPPDATA%\Claude-Data\claude_<id>\` (main.log `[user-data-move] already_moved`) and
+then reads ONLY that `claude_desktop_config.json` — the %APPDATA% and Packages\…\LocalCache\Roaming
+copies go stale. hmt-portal's mcp-client setup already knew this (its commit 40fd782, 2026-11-04),
+which is why hillmont showed. Ruled out by experiment on that PC: install under `Programs`, missing
+`env`, org allowlist (log: disabled), the exe itself (--selftest OK). Win11 PCs that worked were
+likely just not migrated yet — NOT a Win10 issue. Claude's logs now live at
+`Packages\Claude_*\LocalCache\Local\Claude\logs\` (mcp.log / main.log / mcp-server-*.log).
+- configure.py: every `Claude-Data\claude*` profile is written; an MSIX install ALSO writes the real
+  %APPDATA% copy (anthropics/claude-code#26073 split); `%LOCALAPPDATA%\AnthropicClaude` (Squirrel)
+  detects the regular variant; config read as utf-8-sig (Win10 Notepad BOM); an unparseable config
+  is backed up to `.onenote-backup` before being overwritten. SPEC §8 updated.
+- Installer OneNoteMCP-Setup_1.4.3.exe sha256
+  1a6268b8f3ca1da99adb8e15d85965eb5ab2b7e53758680c79d31defae769658, 24,683,577 B; frozen exe
+  `--configure` on the VM wrote a fake `Claude-Data\claude_vmtest` profile correctly. Copied to
+  `H:\_SOFTWARE\Hillmont-MCP` (= /mnt/hillmont/_SOFTWARE/Hillmont-MCP; old versions → 舊版\).
+- Sibling google-map-mcp bridge got the same fix as 1.0.1 (GoogleMapMCPBridge-Setup_1.0.1.exe).
+
 ## Status (2026-11-04)
 
 **v1.4.2 — instruction-only: point big-table READS at `sparse=True` (catalog 35 unchanged; Tier-1

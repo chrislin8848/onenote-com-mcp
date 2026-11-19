@@ -211,3 +211,64 @@ def test_configure_merges_into_existing_antigravity_file(fake_env):
     servers = json.loads(target.read_text(encoding="utf-8"))["mcpServers"]
     assert servers["keep"] == {"command": "k"}  # other connector preserved
     assert servers["onenote"] == {"command": "onenote.exe"}
+
+
+# --- MSIX two-file split + robust load (2026-11-19 Win10 field report) -------------------
+
+
+def test_msix_only_install_writes_both_localcache_and_real_appdata(fake_env):
+    # An MSIX Claude reads EITHER the virtualized LocalCache file (fresh install) OR the real
+    # %APPDATA% file (machine that had %APPDATA%\Claude before) — anthropics/claude-code#26073.
+    _install_claude_store(fake_env, family="Claude_pzs8sxrjxfjjc")
+    written = configure.configure_mcp_clients(fake_env, entry={"command": "onenote.exe"})
+    real = configure.Path(fake_env["APPDATA"]) / "Claude" / "claude_desktop_config.json"
+    assert real in written
+    assert any("LocalCache" in str(p) for p in written)
+    for path in written:
+        assert json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["onenote"]
+
+
+def test_squirrel_anthropicclaude_dir_detects_regular(fake_env):
+    (configure.Path(fake_env["LOCALAPPDATA"]) / "AnthropicClaude").mkdir(parents=True)
+    paths = configure.claude_config_paths(fake_env)
+    assert configure.Path(fake_env["APPDATA"]) / "Claude" / "claude_desktop_config.json" in paths
+
+
+def test_configure_merges_into_bom_prefixed_config(fake_env):
+    # Win10 Notepad saves "UTF-8" WITH a BOM — must still merge, not treat it as corrupt.
+    _install_claude_regular(fake_env)
+    target = configure.Path(fake_env["APPDATA"]) / "Claude" / "claude_desktop_config.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps({"mcpServers": {"keep": {"command": "k"}}}), encoding="utf-8-sig")
+
+    configure.configure_mcp_clients(fake_env, entry={"command": "onenote.exe"})
+
+    servers = json.loads(target.read_text(encoding="utf-8"))["mcpServers"]
+    assert servers["keep"] == {"command": "k"}
+    assert servers["onenote"] == {"command": "onenote.exe"}
+
+
+def test_configure_backs_up_unparseable_config_before_overwrite(fake_env):
+    _install_claude_regular(fake_env)
+    target = configure.Path(fake_env["APPDATA"]) / "Claude" / "claude_desktop_config.json"
+    target.parent.mkdir(parents=True)
+    target.write_text('{"mcpServers": {"keep": {"command": "k"},}}', encoding="utf-8")  # bad JSON
+
+    configure.configure_mcp_clients(fake_env, entry={"command": "onenote.exe"})
+
+    backup = target.with_name(target.name + ".onenote-backup")
+    assert backup.read_text(encoding="utf-8").startswith('{"mcpServers"')
+    assert json.loads(target.read_text(encoding="utf-8"))["mcpServers"]["onenote"]
+
+
+def test_new_claude_data_profile_is_written(fake_env):
+    # Newer Claude Desktop moves user data to %LOCALAPPDATA%\Claude-Data\claude_<id>\ and reads ONLY
+    # that config (2026-11-19 Win10 field report: onenote invisible until written here).
+    data = configure.Path(fake_env["LOCALAPPDATA"]) / "Claude-Data"
+    (data / "claude_pzs8sxrjxfjjc").mkdir(parents=True)
+    (data / "not-a-profile.tmp").mkdir()
+    written = configure.configure_mcp_clients(fake_env, entry={"command": "onenote.exe"})
+    target = data / "claude_pzs8sxrjxfjjc" / "claude_desktop_config.json"
+    assert target in written
+    assert not any("not-a-profile" in str(p) for p in written)
+    assert json.loads(target.read_text(encoding="utf-8"))["mcpServers"]["onenote"]
